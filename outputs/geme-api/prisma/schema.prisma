@@ -1,0 +1,692 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  ADMIN
+  CONTENT_EDITOR
+
+  @@map("admin_role")
+}
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("customer_status")
+}
+
+enum ProductKind {
+  JEWELRY
+  GEMSTONE
+
+  @@map("product_kind")
+}
+
+enum CategoryUsage {
+  PRODUCT_CATEGORY
+  GEMSTONE_TYPE
+
+  @@map("category_usage")
+}
+
+enum CategoryPricingMode {
+  FIXED
+  QUALITY
+  QUALITY_AND_BEAD_SIZE
+
+  @@map("category_pricing_mode")
+}
+
+enum CategoryStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("category_status")
+}
+
+enum MaterialOptionScope {
+  JEWELRY
+  GEMSTONE
+
+  @@map("material_option_scope")
+}
+
+enum MaterialOptionKind {
+  MATERIAL
+  STONE
+
+  @@map("material_option_kind")
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  HIDDEN
+  ARCHIVED
+
+  @@map("product_status")
+}
+
+enum OrderStatus {
+  PENDING_CONFIRMATION
+  PROCESSING
+  SHIPPING
+  DELIVERED
+  CANCELLED
+
+  @@map("order_status")
+}
+
+enum PaymentMethod {
+  COD
+  BANK_TRANSFER
+  MOMO
+  CREDIT_CARD
+  OTHER
+
+  @@map("payment_method")
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+
+  @@map("payment_status")
+}
+
+enum PromotionType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  FREE_SHIPPING
+  GIFT
+  POINTS
+
+  @@map("promotion_type")
+}
+
+enum PromotionStatus {
+  DRAFT
+  SCHEDULED
+  ACTIVE
+  PAUSED
+  ENDED
+
+  @@map("promotion_status")
+}
+
+enum BlogStatus {
+  DRAFT
+  PUBLISHED
+  SCHEDULED
+  ARCHIVED
+
+  @@map("blog_status")
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("review_status")
+}
+
+model AdminUser {
+  id           String     @id @default(uuid()) @db.Uuid
+  email        String     @unique @db.VarChar(320)
+  passwordHash String     @map("password_hash") @db.VarChar(255)
+  displayName  String     @map("display_name") @db.VarChar(120)
+  role         AdminRole  @default(ADMIN)
+  isActive     Boolean    @default(true) @map("is_active")
+  lastLoginAt  DateTime?  @map("last_login_at") @db.Timestamptz(3)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  blogPosts    BlogPost[]
+  auditLogs    AuditLog[]
+
+  @@map("admin_users")
+}
+
+model Customer {
+  id             String           @id @default(uuid()) @db.Uuid
+  code           String?          @unique @db.VarChar(32)
+  authSubjectId  String?          @unique @map("auth_subject_id") @db.Uuid
+  name           String           @db.VarChar(160)
+  email          String?          @unique @db.VarChar(320)
+  phone          String?          @unique @db.VarChar(32)
+  defaultAddress String?          @map("default_address") @db.Text
+  status         CustomerStatus   @default(ACTIVE)
+  segment        String?          @db.VarChar(40)
+  avatarUrl      String?          @map("avatar_url") @db.Text
+  note           String?          @db.Text
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  orders         Order[]
+  reviews        ProductReview[]
+  promotions     PromotionUsage[]
+
+  @@index([status, createdAt])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([name])
+  @@map("customers")
+}
+
+model Category {
+  id               String              @id @default(uuid()) @db.Uuid
+  name             String              @db.VarChar(120)
+  slug             String              @unique @db.VarChar(160)
+  kind             ProductKind
+  usage            CategoryUsage       @default(PRODUCT_CATEGORY)
+  level            Int                 @default(1)
+  pricingMode      CategoryPricingMode @default(FIXED) @map("pricing_mode")
+  parentId         String?             @map("parent_id") @db.Uuid
+  description      String?             @db.Text
+  status           CategoryStatus      @default(ACTIVE)
+  sortOrder        Int                 @default(0) @map("sort_order")
+  imageUrl         String?             @map("image_url") @db.Text
+  bannerUrl        String?             @map("banner_url") @db.Text
+  seoTitle         String?             @map("seo_title") @db.VarChar(180)
+  seoDescription   String?             @map("seo_description") @db.VarChar(320)
+  isHot            Boolean             @default(false) @map("is_hot")
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  parent           Category?           @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children         Category[]          @relation("CategoryTree")
+  products         Product[]           @relation("ProductCategory")
+  gemstoneProducts Product[]           @relation("GemstoneType")
+  promotionTargets PromotionTarget[]
+
+  @@index([parentId, level, status, sortOrder])
+  @@index([kind, usage, status])
+  @@map("categories")
+}
+
+model MaterialOption {
+  id        String              @id @default(uuid()) @db.Uuid
+  name      String              @db.VarChar(120)
+  slug      String              @db.VarChar(160)
+  scope     MaterialOptionScope
+  kind      MaterialOptionKind  @default(STONE)
+  active    Boolean             @default(true)
+  imageUrl  String?             @map("image_url") @db.Text
+  sortOrder Int                 @default(0) @map("sort_order")
+  createdAt DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  products  Product[]
+
+  @@unique([scope, slug])
+  @@index([scope, kind, active, sortOrder])
+  @@map("material_options")
+}
+
+model Product {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  sku                   String                 @unique @db.VarChar(64)
+  name                  String                 @db.VarChar(180)
+  slug                  String                 @unique @db.VarChar(220)
+  kind                  ProductKind
+  categoryId            String?                @map("category_id") @db.Uuid
+  gemstoneTypeId        String?                @map("gemstone_type_id") @db.Uuid
+  materialOptionId      String?                @map("material_option_id") @db.Uuid
+  description           String?                @db.Text
+  fullDescription       String?                @map("full_description") @db.Text
+  technicalImageUrl     String?                @map("technical_image_url") @db.Text
+  weightGrams           Decimal?               @map("weight_grams") @db.Decimal(8, 2)
+  lengthCm              Decimal?               @map("length_cm") @db.Decimal(8, 2)
+  widthCm               Decimal?               @map("width_cm") @db.Decimal(8, 2)
+  heightCm              Decimal?               @map("height_cm") @db.Decimal(8, 2)
+  status                ProductStatus          @default(DRAFT)
+  isNew                 Boolean                @default(false) @map("is_new")
+  isFeatured            Boolean                @default(false) @map("is_featured")
+  price                 Decimal?               @db.Decimal(14, 0)
+  originalPrice         Decimal?               @map("original_price") @db.Decimal(14, 0)
+  stock                 Int                    @default(0)
+  minimumStock          Int                    @default(5) @map("minimum_stock")
+    soldOutAt             DateTime?               @map("sold_out_at") @db.Timestamptz(3)
+  pos365PriceSyncStatus String?                 @map("pos365_price_sync_status") @db.VarChar(20)
+  pos365PriceSyncAttempts Int                   @default(0) @map("pos365_price_sync_attempts")
+  pos365PriceSyncLastAttemptAt DateTime?        @map("pos365_price_sync_last_attempt_at") @db.Timestamptz(3)
+  pos365PriceSyncNextAttemptAt DateTime?        @map("pos365_price_sync_next_attempt_at") @db.Timestamptz(3)
+  pos365PriceSyncedAt    DateTime?              @map("pos365_price_synced_at") @db.Timestamptz(3)
+  pos365PriceSyncError   String?                 @map("pos365_price_sync_error") @db.Text
+  pos365StockSyncStatus String?                  @map("pos365_stock_sync_status") @db.VarChar(20)
+  pos365StockSyncAttempts Int                    @default(0) @map("pos365_stock_sync_attempts")
+  pos365StockSyncLastAttemptAt DateTime?          @map("pos365_stock_sync_last_attempt_at") @db.Timestamptz(3)
+  pos365StockSyncNextAttemptAt DateTime?          @map("pos365_stock_sync_next_attempt_at") @db.Timestamptz(3)
+  pos365StockSyncedAt DateTime?                   @map("pos365_stock_synced_at") @db.Timestamptz(3)
+  pos365StockSyncError String?                    @map("pos365_stock_sync_error") @db.Text
+  seoTitle              String?                @map("seo_title") @db.VarChar(180)
+  seoDescription        String?                @map("seo_description") @db.VarChar(320)
+  kiotVietProductId     String?                @unique @map("kiot_viet_product_id") @db.VarChar(80)
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  category              Category?              @relation("ProductCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+  gemstoneType          Category?              @relation("GemstoneType", fields: [gemstoneTypeId], references: [id], onDelete: SetNull)
+  materialOption        MaterialOption?        @relation(fields: [materialOptionId], references: [id], onDelete: SetNull)
+  images                ProductImage[]
+  variants              ProductPriceVariant[]
+  reviews               ProductReview[]
+  orderItems            OrderItem[]
+  promotionTargets      PromotionTarget[]
+  inventoryMovements    InventoryMovement[]
+  inventoryReceiptItems InventoryReceiptItem[]
+  inventoryIssueItems   InventoryIssueItem[]
+
+  @@index([kind, status, createdAt(sort: Desc)])
+  @@index([status, isNew, createdAt(sort: Desc)])
+  @@index([categoryId, status, createdAt(sort: Desc)])
+  @@index([gemstoneTypeId, status, createdAt(sort: Desc)])
+  @@index([materialOptionId, status, createdAt(sort: Desc)])
+  @@index([status, isFeatured, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([pos365PriceSyncStatus, pos365PriceSyncNextAttemptAt])
+  @@index([pos365StockSyncStatus, pos365StockSyncNextAttemptAt])
+  @@map("products")
+}
+
+model ProductImage {
+  id        String   @id @default(uuid()) @db.Uuid
+  productId String   @map("product_id") @db.Uuid
+  url       String   @db.Text
+  alt       String?  @db.VarChar(240)
+  sortOrder Int      @default(0) @map("sort_order")
+  isPrimary Boolean  @default(false) @map("is_primary")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, sortOrder])
+  @@map("product_images")
+}
+
+model ProductPriceVariant {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  productId             String                 @map("product_id") @db.Uuid
+  optionKey             String                 @map("option_key") @db.VarChar(100)
+  quality               String                 @db.VarChar(40)
+  beadSize              String?                @map("bead_size") @db.VarChar(24)
+  sku                   String?                @unique @db.VarChar(64)
+  imageUrls             String[]               @default([]) @map("image_urls")
+  videoUrl              String?                @map("video_url") @db.Text
+  price                 Decimal                @db.Decimal(14, 0)
+  originalPrice         Decimal?               @map("original_price") @db.Decimal(14, 0)
+  stock                 Int                    @default(0)
+  sortOrder             Int                    @default(0) @map("sort_order")
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  product               Product                @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems            OrderItem[]
+  inventoryMovements    InventoryMovement[]
+  inventoryReceiptItems InventoryReceiptItem[]
+  inventoryIssueItems   InventoryIssueItem[]
+
+  @@unique([productId, optionKey])
+  @@index([productId, sortOrder])
+  @@index([productId, quality, beadSize])
+  @@map("product_price_variants")
+}
+
+model ProductReview {
+  id         String       @id @default(uuid()) @db.Uuid
+  productId  String       @map("product_id") @db.Uuid
+  customerId String?      @map("customer_id") @db.Uuid
+  rating     Int
+  title      String?      @db.VarChar(160)
+  content    String?      @db.Text
+  status     ReviewStatus @default(PENDING)
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  product    Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  customer   Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([productId, status, createdAt(sort: Desc)])
+  @@index([customerId, createdAt(sort: Desc)])
+  @@map("product_reviews")
+}
+
+model Order {
+  id              String          @id @default(uuid()) @db.Uuid
+  code            String          @unique @db.VarChar(40)
+  customerId      String?         @map("customer_id") @db.Uuid
+  status          OrderStatus     @default(PENDING_CONFIRMATION)
+  customerName    String          @map("customer_name") @db.VarChar(160)
+  customerEmail   String?         @map("customer_email") @db.VarChar(320)
+  customerPhone   String?         @map("customer_phone") @db.VarChar(32)
+  shippingAddress String          @map("shipping_address") @db.Text
+  shippingMethod  String?         @map("shipping_method") @db.VarChar(120)
+  trackingCode    String?         @map("tracking_code") @db.VarChar(120)
+  subtotal        Decimal         @db.Decimal(14, 0)
+  discountAmount  Decimal         @default(0) @map("discount_amount") @db.Decimal(14, 0)
+  shippingFee     Decimal         @default(0) @map("shipping_fee") @db.Decimal(14, 0)
+  totalAmount     Decimal         @map("total_amount") @db.Decimal(14, 0)
+  note            String?         @db.Text
+  kiotVietOrderId String?         @unique @map("kiot_viet_order_id") @db.VarChar(80)
+  pos365OrderId   String?         @unique @map("pos365_order_id") @db.VarChar(80)
+  pos365SyncStatus String?        @map("pos365_sync_status") @db.VarChar(20)
+  pos365SyncAttempts Int          @default(0) @map("pos365_sync_attempts")
+  pos365SyncLastAttemptAt DateTime? @map("pos365_sync_last_attempt_at") @db.Timestamptz(3)
+  pos365SyncNextAttemptAt DateTime? @map("pos365_sync_next_attempt_at") @db.Timestamptz(3)
+  pos365SyncedAt   DateTime?      @map("pos365_synced_at") @db.Timestamptz(3)
+  pos365SyncError  String?        @map("pos365_sync_error") @db.Text
+  placedAt        DateTime        @default(now()) @map("placed_at") @db.Timestamptz(3)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  customer        Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items           OrderItem[]
+  payments        Payment[]
+  promotionUsage  PromotionUsage?
+
+  @@index([status, placedAt(sort: Desc)])
+  @@index([customerId, placedAt(sort: Desc)])
+  @@index([placedAt(sort: Desc)])
+  @@index([placedAt(sort: Desc), status])
+  @@index([pos365SyncStatus, pos365SyncNextAttemptAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String               @id @default(uuid()) @db.Uuid
+  orderId     String               @map("order_id") @db.Uuid
+  productId   String?              @map("product_id") @db.Uuid
+  variantId   String?              @map("variant_id") @db.Uuid
+  productName String               @map("product_name") @db.VarChar(180)
+  productSku  String               @map("product_sku") @db.VarChar(64)
+  quality     String?              @db.VarChar(40)
+  beadSize    String?              @map("bead_size") @db.VarChar(24)
+  quantity    Int
+  unitPrice   Decimal              @map("unit_price") @db.Decimal(14, 0)
+  lineTotal   Decimal              @map("line_total") @db.Decimal(14, 0)
+  order       Order                @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant     ProductPriceVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([variantId])
+  @@map("order_items")
+}
+
+model Payment {
+  id          String        @id @default(uuid()) @db.Uuid
+  orderId     String        @map("order_id") @db.Uuid
+  method      PaymentMethod
+  status      PaymentStatus @default(PENDING)
+  amount      Decimal       @db.Decimal(14, 0)
+  providerRef String?       @map("provider_ref") @db.VarChar(160)
+  paidAt      DateTime?     @map("paid_at") @db.Timestamptz(3)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, status])
+  @@index([status, paidAt(sort: Desc)])
+  @@map("payments")
+}
+
+model Promotion {
+  id             String            @id @default(uuid()) @db.Uuid
+  name           String            @db.VarChar(160)
+  description    String?           @db.Text
+  type           PromotionType
+  code           String?           @unique @db.VarChar(48)
+  value          Decimal?          @db.Decimal(14, 0)
+  startsAt       DateTime          @map("starts_at") @db.Timestamptz(3)
+  endsAt         DateTime          @map("ends_at") @db.Timestamptz(3)
+  status         PromotionStatus   @default(DRAFT)
+  usageLimit     Int?              @map("usage_limit")
+  autoEndAtLimit Boolean           @default(false) @map("auto_end_at_limit")
+  minimumOrder   Decimal?          @map("minimum_order") @db.Decimal(14, 0)
+  conditions     Json?
+  visible        Boolean           @default(true)
+  imageUrl       String?           @map("image_url") @db.Text
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  targets        PromotionTarget[]
+  usages         PromotionUsage[]
+
+  @@index([status, startsAt, endsAt])
+  @@map("promotions")
+}
+
+model PromotionTarget {
+  id          String    @id @default(uuid()) @db.Uuid
+  promotionId String    @map("promotion_id") @db.Uuid
+  categoryId  String?   @map("category_id") @db.Uuid
+  productId   String?   @map("product_id") @db.Uuid
+  excluded    Boolean   @default(false)
+  promotion   Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  category    Category? @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  product     Product?  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([promotionId, excluded])
+  @@index([categoryId])
+  @@index([productId])
+  @@map("promotion_targets")
+}
+
+model PromotionUsage {
+  id             String    @id @default(uuid()) @db.Uuid
+  promotionId    String    @map("promotion_id") @db.Uuid
+  orderId        String    @unique @map("order_id") @db.Uuid
+  customerId     String?   @map("customer_id") @db.Uuid
+  discountAmount Decimal   @map("discount_amount") @db.Decimal(14, 0)
+  usedAt         DateTime  @default(now()) @map("used_at") @db.Timestamptz(3)
+  promotion      Promotion @relation(fields: [promotionId], references: [id], onDelete: Restrict)
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([promotionId, usedAt])
+  @@index([customerId, usedAt])
+  @@map("promotion_usages")
+}
+
+model BlogPost {
+  id             String          @id @default(uuid()) @db.Uuid
+  slug           String          @unique @db.VarChar(220)
+  title          String          @db.VarChar(180)
+  summary        String?         @db.VarChar(500)
+  category       String?         @db.VarChar(120)
+  tags           String[]        @default([])
+  content        String          @db.Text
+  coverImageUrl  String?         @map("cover_image_url") @db.Text
+  status         BlogStatus      @default(DRAFT)
+  views          Int             @default(0)
+  seoTitle       String?         @map("seo_title") @db.VarChar(180)
+  seoDescription String?         @map("seo_description") @db.VarChar(320)
+  authorId       String?         @map("author_id") @db.Uuid
+  publishedAt    DateTime?       @map("published_at") @db.Timestamptz(3)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  author         AdminUser?      @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  images         BlogPostImage[]
+
+  @@index([status, publishedAt(sort: Desc)])
+  @@index([authorId, createdAt(sort: Desc)])
+  @@map("blog_posts")
+}
+
+model BlogPostImage {
+  id        String   @id @default(uuid()) @db.Uuid
+  postId    String   @map("post_id") @db.Uuid
+  url       String   @db.Text
+  alt       String?  @db.VarChar(240)
+  sortOrder Int      @default(0) @map("sort_order")
+  post      BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId, sortOrder])
+  @@map("blog_post_images")
+}
+
+model SiteSetting {
+  key       String   @id @db.VarChar(120)
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("site_settings")
+}
+
+model InventoryMovement {
+  id           String               @id @default(uuid()) @db.Uuid
+  productId    String?              @map("product_id") @db.Uuid
+  variantId    String?              @map("variant_id") @db.Uuid
+  productName  String               @map("product_name") @db.VarChar(180)
+  productSku   String               @map("product_sku") @db.VarChar(64)
+  variantLabel String?              @map("variant_label") @db.VarChar(120)
+  type         String               @db.VarChar(20)
+  quantity     Int
+  stockBefore  Int                  @map("stock_before")
+  stockAfter   Int                  @map("stock_after")
+  reference    String?              @db.VarChar(120)
+  note         String?              @db.Text
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  product      Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant      ProductPriceVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([productId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@map("inventory_movements")
+}
+
+model InventoryReceipt {
+  id              String                 @id @default(uuid()) @db.Uuid
+  receiptNo       String                 @unique @map("receipt_no") @db.VarChar(64)
+  receivedAt      DateTime               @map("received_at") @db.Timestamptz(3)
+  supplierName    String?                @map("supplier_name") @db.VarChar(180)
+  receiver        String?                @db.VarChar(120)
+  warehouseName   String                 @default("Kho chính") @map("warehouse_name") @db.VarChar(120)
+  paymentMethod   String?                @map("payment_method") @db.VarChar(40)
+  status          String                 @default("COMPLETED") @db.VarChar(24)
+  pos365SyncStatus String?               @map("pos365_sync_status") @db.VarChar(20)
+  pos365SyncAttempts Int                  @default(0) @map("pos365_sync_attempts")
+  pos365SyncLastAttemptAt DateTime?       @map("pos365_sync_last_attempt_at") @db.Timestamptz(3)
+  pos365SyncNextAttemptAt DateTime?       @map("pos365_sync_next_attempt_at") @db.Timestamptz(3)
+  pos365SyncedAt    DateTime?             @map("pos365_synced_at") @db.Timestamptz(3)
+  pos365SyncCode    String?               @map("pos365_sync_code") @db.VarChar(64)
+  pos365SyncError   String?               @map("pos365_sync_error") @db.Text
+  note            String?                @db.Text
+  additionalNote  String?                @map("additional_note") @db.Text
+  documentUrls    String[]               @default([]) @map("document_urls")
+  totalQuantity   Int                    @default(0) @map("total_quantity")
+  subtotalAmount  Decimal                @default(0) @map("subtotal_amount") @db.Decimal(14, 0)
+  discountPercent Decimal                @default(0) @map("discount_percent") @db.Decimal(5, 2)
+  discountAmount  Decimal                @default(0) @map("discount_amount") @db.Decimal(14, 0)
+  vatPercent      Decimal                @default(0) @map("vat_percent") @db.Decimal(5, 2)
+  vatAmount       Decimal                @default(0) @map("vat_amount") @db.Decimal(14, 0)
+  totalAmount     Decimal                @default(0) @map("total_amount") @db.Decimal(14, 0)
+  createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  items           InventoryReceiptItem[]
+
+  @@index([receivedAt(sort: Desc)])
+  @@index([pos365SyncStatus, pos365SyncNextAttemptAt])
+  @@index([supplierName, receivedAt(sort: Desc)])
+  @@map("inventory_receipts")
+}
+
+model InventoryReceiptItem {
+  id           String               @id @default(uuid()) @db.Uuid
+  receiptId    String               @map("receipt_id") @db.Uuid
+  productId    String?              @map("product_id") @db.Uuid
+  variantId    String?              @map("variant_id") @db.Uuid
+  productName  String               @map("product_name") @db.VarChar(180)
+  productSku   String               @map("product_sku") @db.VarChar(64)
+  categoryName String?              @map("category_name") @db.VarChar(120)
+  stoneName    String?              @map("stone_name") @db.VarChar(120)
+  kind         String               @db.VarChar(24)
+  quantity     Int
+  unitCost     Decimal              @map("unit_cost") @db.Decimal(14, 0)
+  lineTotal    Decimal              @map("line_total") @db.Decimal(14, 0)
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  receipt      InventoryReceipt     @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  product      Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant      ProductPriceVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([receiptId])
+  @@index([productId, createdAt(sort: Desc)])
+  @@map("inventory_receipt_items")
+}
+
+model InventoryIssue {
+  id            String               @id @default(uuid()) @db.Uuid
+  issueNo       String               @unique @map("issue_no") @db.VarChar(64)
+  issuedAt      DateTime             @map("issued_at") @db.Timestamptz(3)
+  reason        String               @db.VarChar(24)
+  recipient     String?              @db.VarChar(180)
+  warehouseName String               @default("Kho chính") @map("warehouse_name") @db.VarChar(120)
+  status        String               @default("COMPLETED") @db.VarChar(24)
+  note          String?              @db.Text
+  totalQuantity Int                  @default(0) @map("total_quantity")
+  totalAmount   Decimal              @default(0) @map("total_amount") @db.Decimal(14, 0)
+  createdAt     DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  items         InventoryIssueItem[]
+
+  @@index([issuedAt(sort: Desc)])
+  @@index([reason, issuedAt(sort: Desc)])
+  @@map("inventory_issues")
+}
+
+model InventoryIssueItem {
+  id           String               @id @default(uuid()) @db.Uuid
+  issueId      String               @map("issue_id") @db.Uuid
+  productId    String?              @map("product_id") @db.Uuid
+  variantId    String?              @map("variant_id") @db.Uuid
+  productName  String               @map("product_name") @db.VarChar(180)
+  productSku   String               @map("product_sku") @db.VarChar(64)
+  variantLabel String?              @map("variant_label") @db.VarChar(120)
+  categoryName String?              @map("category_name") @db.VarChar(120)
+  stoneName    String?              @map("stone_name") @db.VarChar(120)
+  kind         String               @db.VarChar(24)
+  quantity     Int
+  unitPrice    Decimal              @map("unit_price") @db.Decimal(14, 0)
+  lineTotal    Decimal              @map("line_total") @db.Decimal(14, 0)
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  issue        InventoryIssue       @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  product      Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant      ProductPriceVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([issueId])
+  @@index([productId, createdAt(sort: Desc)])
+  @@map("inventory_issue_items")
+}
+
+model MediaAsset {
+  id        String   @id @default(uuid()) @db.Uuid
+  filename  String   @db.VarChar(240)
+  sourceKey String?  @unique @map("source_key") @db.VarChar(500)
+  mimeType  String   @map("mime_type") @db.VarChar(100)
+  data      Bytes    @db.ByteA
+  size      Int
+  alt       String?  @db.VarChar(240)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([createdAt(sort: Desc)])
+  @@map("media_assets")
+}
+
+model AuditLog {
+  id         String     @id @default(uuid()) @db.Uuid
+  adminId    String?    @map("admin_id") @db.Uuid
+  action     String     @db.VarChar(80)
+  entityType String     @map("entity_type") @db.VarChar(80)
+  entityId   String?    @map("entity_id") @db.VarChar(80)
+  before     Json?
+  after      Json?
+  ipAddress  String?    @map("ip_address") @db.Inet
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  admin      AdminUser? @relation(fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt(sort: Desc)])
+  @@index([adminId, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
