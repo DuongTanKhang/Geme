@@ -84,7 +84,7 @@ services:
 
   aegis:
     build:
-      context: ${AEGIS_SOURCE_PATH:-C:/Users/USER/Source/Repos/Aegis}
+      context: ./outputs/aegis
       dockerfile: Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: Development
@@ -101,6 +101,7 @@ services:
       Email__FromName: ${AEGIS_EMAIL_FROM_NAME:-GEME}
       Email__PublicBaseUrl: ${AEGIS_EMAIL_PUBLIC_BASE_URL:-http://localhost:5130}
       Otp__HashingKey: ${AEGIS_OTP_HASHING_KEY:?Set AEGIS_OTP_HASHING_KEY in .env.docker}
+      PasswordHashing__WorkFactor: ${AEGIS_BCRYPT_WORK_FACTOR:-10}
       Jwt__Issuer: Aegis
       Jwt__Audience: AegisClient
     ports:

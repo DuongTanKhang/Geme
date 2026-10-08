@@ -1,0 +1,10 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="Aegis.Domain/Aegis.Domain.csproj" />
+  <Project Path="Aegis.Application/Aegis.Application.csproj" />
+  <Project Path="Aegis.Infrastructure/Aegis.Infrastructure.csproj" />
+  <Project Path="Aegis.API/Aegis.API.csproj" />
+</Solution>

@@ -1271,6 +1271,18 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   customers(query: Record<string, string>) {
+    if (query.phone) {
+      let phone = String(query.phone).replace(/\D/g, "");
+      if (phone.startsWith("84") && phone.length >= 10) phone = `0${phone.slice(2)}`;
+      return this.prisma.customer.findUnique({
+        where: { phone },
+        select: {
+          id: true, name: true, email: true, phone: true, authSubjectId: true,
+          defaultAddress: true, status: true, segment: true, avatarUrl: true, note: true,
+        },
+      }).then((customer) => customer ? [customer] : []);
+    }
+
     const where: Input = {};
     if (query.status === "ACTIVE" || query.status === "INACTIVE") where.status = query.status;
     if (query.search) where.OR = [{ name: { contains: query.search, mode: "insensitive" } }, { email: { contains: query.search, mode: "insensitive" } }, { phone: { contains: query.search, mode: "insensitive" } }];

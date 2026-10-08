@@ -1,0 +1,11 @@
+**/bin
+**/obj
+.git
+.vs
+.idea
+TestResults
+logs
+*.user
+*.suo
+appsettings.*.json
+!appsettings.json

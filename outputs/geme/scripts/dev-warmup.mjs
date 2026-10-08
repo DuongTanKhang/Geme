@@ -30,6 +30,8 @@ async function warmBlogRoute() {
     return;
   }
 
+  await warmAuthRoutes();
+
   try {
     const response = await fetch(`${apiBase}/blog?view=storefront-list&limit=1`, { signal: AbortSignal.timeout(5000) });
     const value = response.ok ? await response.json() : [];
@@ -44,6 +46,28 @@ async function warmBlogRoute() {
     else console.warn(`[blog-warmup] Article route warmup returned ${articleResponse.status}.`);
   } catch (error) {
     console.warn(`[blog-warmup] Could not prewarm the article route: ${error instanceof Error ? error.message : "unknown error"}`);
+  }
+}
+
+async function warmAuthRoutes() {
+  const warmups = [
+    ["register", { email: "", password: "", phone: "" }],
+    ["login", { email: "", password: "" }],
+  ];
+
+  for (const [route, body] of warmups) {
+    try {
+      const response = await fetch(`${origin}/api/auth/${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (response.status === 400) console.info(`[auth-warmup] /api/auth/${route} ready.`);
+      else console.warn(`[auth-warmup] /api/auth/${route} returned ${response.status}.`);
+    } catch (error) {
+      console.warn(`[auth-warmup] Could not prewarm /api/auth/${route}: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
   }
 }
 

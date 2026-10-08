@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { callAegis, callGemePublicApi, upstreamError } from "../../../lib/customer-session";
 
 type CustomerRecord = {
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Vui lòng nhập số điện thoại hợp lệ, email và mật khẩu." }, { status: 400 });
     }
 
-    const customersResponse = await callGemePublicApi(`/customers?search=${encodeURIComponent(phone.slice(-9))}`);
+    const customersResponse = await callGemePublicApi(`/customers?phone=${encodeURIComponent(phone)}`);
     if (!customersResponse.ok) {
       return NextResponse.json({ message: "Không kiểm tra được hồ sơ khách hàng. Vui lòng thử lại." }, { status: 503 });
     }
@@ -109,18 +109,18 @@ export async function POST(request: NextRequest) {
     };
 
     if (!linkedStoreCustomer) {
-      const saved = await callGemePublicApi("/customers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: accountName, email, phone, status: "ACTIVE", segment: "Khách mới" }),
+      // Account creation and OTP dispatch are the critical path. The API already
+      // repairs a missing customer profile on first login, so sync this profile
+      // after returning instead of making registration wait on a third service.
+      after(async () => {
+        try {
+          await callGemePublicApi("/customers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: accountName, email, phone, status: "ACTIVE", segment: "Khách mới" }),
+          });
+        } catch { /* First-login profile sync is the recovery path. */ }
       });
-      if (!saved.ok) {
-        return NextResponse.json({
-          registered: true,
-          ...verificationSettings,
-          message: "Tài khoản đã được tạo. Nhập mã xác nhận trong email để hoàn tất đăng ký; thông tin khách hàng sẽ được đồng bộ sau khi đăng nhập lần đầu.",
-        }, { status: 201 });
-      }
     }
 
     return NextResponse.json({
