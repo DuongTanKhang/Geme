@@ -9,7 +9,16 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     if (!connectionString) {
       throw new Error("Thiếu DATABASE_URL. Hãy tạo file .env từ .env.example và cấu hình PostgreSQL.");
     }
-    super({ adapter: new PrismaPg({ connectionString }) });
+    const configuredPoolMax = Number(process.env.DB_POOL_MAX);
+    const poolMax = Number.isInteger(configuredPoolMax) && configuredPoolMax >= 5 && configuredPoolMax <= 80
+      ? configuredPoolMax
+      : 20;
+    super({ adapter: new PrismaPg({
+      connectionString,
+      max: poolMax,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+    }) });
   }
 
   async onModuleInit() {

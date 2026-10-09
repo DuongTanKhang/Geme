@@ -3,9 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AdminCategory } from "./categories-workspace";
 import type { MaterialOption } from "./materials-workspace";
-import { compressProductImage, MAX_PRODUCT_IMAGES, MAX_VARIANT_MEDIA_ITEMS, parsePriceInput } from "./product-images";
+import { uploadProductImage, uploadProductVideo, MAX_PRODUCT_IMAGES, MAX_VARIANT_MEDIA_ITEMS, parsePriceInput } from "./product-images";
 import { TechnicalImagePicker } from "./technical-image-picker";
-import { apiBaseUrl } from "../lib/api";
 
 export type AdminProduct = {
   id: string;
@@ -31,7 +30,9 @@ export type AdminProduct = {
   fullDescription?: string;
   image?: string;
   gallery?: string[];
+  coverVideoUrl?: string;
   technicalImage?: string;
+  technicalVideo?: string;
   weightGrams?: number;
   lengthCm?: number;
   widthCm?: number;
@@ -123,7 +124,9 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   const [statusFilter, setStatusFilter] = useState("");
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [uploadingImages, setUploadingImages] = useState(false);
+  const [uploadingCoverVideo, setUploadingCoverVideo] = useState(false);
   const [uploadingTechnicalImage, setUploadingTechnicalImage] = useState(false);
+  const [uploadingTechnicalVideo, setUploadingTechnicalVideo] = useState(false);
   const [uploadingVariantMedia, setUploadingVariantMedia] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
   const [busyActionId, setBusyActionId] = useState("");
@@ -146,8 +149,10 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   const usesQualityPricing = qualityPricing(pricingMode);
   const productRoot = categoryRecords.find((item) => !item.parentId && item.kind === product?.productType);
   const productCategories = categoryRecords.filter((item) => item.kind === product?.productType && item.parentId && item.status === "Hoạt động" && item.usage !== "stone" && (item.level ?? 2) > 1);
-  const stoneOptions = materials.filter((item) => item.scope === "Đá quý" && item.active && item.kind === "STONE");
-  const materialOptions = materials.filter((item) => item.scope === "Trang sức" && item.active);
+  const materialCategoryId = product?.categoryId || selectedCategory?.id;
+  const isApplicableMaterial = (item: MaterialOption) => item.id === product?.materialOptionId || !Array.isArray(item.appliedCategoryIds) || !materialCategoryId || item.appliedCategoryIds.includes(materialCategoryId);
+  const stoneOptions = materials.filter((item) => item.scope === "Đá quý" && item.active && item.kind === "STONE" && isApplicableMaterial(item));
+  const materialOptions = materials.filter((item) => item.scope === "Trang sức" && item.active && isApplicableMaterial(item));
   const categories = useMemo(() => [...new Set(products.filter((item) => !productTypeFilter || item.productType === productTypeFilter).map((item) => item.category).filter(Boolean))] as string[], [products, productTypeFilter]);
   const types = useMemo(() => [...new Set(products.filter((item) => (!productTypeFilter || item.productType === productTypeFilter) && (!categoryFilter || item.category === categoryFilter)).map((item) => item.subcategory).filter(Boolean))] as string[], [products, productTypeFilter, categoryFilter]);
   const rows = useMemo(() => products.filter((item) => {
@@ -180,6 +185,8 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     const mode = record?.pricingMode ?? (product?.productType === "Đá quý" ? "QUALITY" : "FIXED");
     update("categoryId", record?.id ?? "");
     update("category", record?.name ?? "");
+    update("materialOptionId", "");
+    update("subcategory", "");
     update("categoryPricingMode", mode);
     update("qualityGrades", qualityPricing(mode) ? (product?.qualityGrades?.length ? product.qualityGrades : ["A", "AA", "AAA"]) : []);
     update("beadSizes", mode === "QUALITY_AND_BEAD_SIZE" ? (product?.beadSizes?.length ? product.beadSizes : ["6mm", "8mm", "10mm"]) : []);
@@ -211,9 +218,9 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     setUploadingVariantMedia((current) => ({ ...current, [key]: true }));
     try {
       const added: string[] = [];
-      for (const file of files) added.push(await compressProductImage(file));
+      for (let index = 0; index < files.length; index += 1) added.push(await uploadProductImage(files[index], `variant-${product.id}-${key}-${existing.length + index + 1}.webp`, `${product.name} · ${variant.quality}`));
       updateVariantMedia(variant, { imageUrls: [...existing, ...added].slice(0, 8) });
-      onNotify(`Đã thêm ${added.length} ảnh cho SKU ${variant.sku || "biến thể"}. Lưu thay đổi để hoàn tất.`);
+      onNotify(`Đã tải ${added.length} ảnh cho SKU ${variant.sku || "biến thể"} lên.`);
     } catch (error) { onNotify(error instanceof Error ? error.message : "Không xử lý được ảnh biến thể."); }
     finally { setUploadingVariantMedia((current) => ({ ...current, [key]: false })); }
   };
@@ -221,33 +228,18 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     if (!file || !product) return;
     if (!variant.videoUrl && (variant.imageUrls?.length || 0) >= MAX_VARIANT_MEDIA_ITEMS) { onNotify(`Mỗi biến thể tối đa ${MAX_VARIANT_MEDIA_ITEMS} tệp, tính cả video.`); return; }
     const extension = file.name.split(".").pop()?.toLowerCase();
-    const mimeType = file.type.toLowerCase().split(";", 1)[0] || (extension === "webm" ? "video/webm" : extension === "mp4" ? "video/mp4" : "");
-    if (mimeType !== "video/mp4" && mimeType !== "video/webm") { onNotify("Chỉ nhận video MP4 hoặc WebM."); return; }
-    if (!file.size || file.size > 8 * 1024 * 1024) { onNotify("Video biến thể tối đa 8 MB."); return; }
+    if (extension !== "mp4" && extension !== "webm") { onNotify("Chỉ nhận video MP4 hoặc WebM."); return; }
     const key = variant.sku || `${variant.quality}-${variant.beadSize || ""}`;
     setUploadingVariantMedia((current) => ({ ...current, [key]: true }));
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Không đọc được video."));
-        reader.onerror = () => reject(new Error("Không đọc được video."));
-        reader.readAsDataURL(file);
-      });
-      const response = await fetch(`${apiBaseUrl}/media`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filename: file.name, mimeType, base64: dataUrl.slice(dataUrl.indexOf(",") + 1), alt: `${product.name} · ${variant.quality}` }) });
-      if (!response.ok) {
-        let message = "Không thể lưu video biến thể.";
-        try { const body = await response.json(); message = Array.isArray(body.message) ? body.message.join(" ") : body.message || message; } catch { /* keep default */ }
-        throw new Error(message);
-      }
-      const asset = await response.json() as { url?: string };
-      if (!asset.url) throw new Error("API chưa trả đường dẫn video đã lưu.");
-      updateVariantMedia(variant, { videoUrl: asset.url });
+      const url = await uploadProductVideo(file, `variant-${product.id}-${key}.${extension}`, `${product.name} · ${variant.quality}`);
+      updateVariantMedia(variant, { videoUrl: url });
       onNotify(`Đã tải video cho SKU ${variant.sku || "biến thể"}. Lưu thay đổi để hoàn tất.`);
     } catch (error) { onNotify(error instanceof Error ? error.message : "Không thể lưu video biến thể."); }
     finally { setUploadingVariantMedia((current) => ({ ...current, [key]: false })); }
   };
   const save = async () => {
-    if (!product || saving || uploadingImages || uploadingTechnicalImage || Object.values(uploadingVariantMedia).some(Boolean)) return;
+    if (!product || saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)) return;
     if (combinationRows(product).some((variant) => (variant.imageUrls?.length || 0) + (variant.videoUrl ? 1 : 0) > MAX_VARIANT_MEDIA_ITEMS)) {
       onNotify(`Mỗi biến thể chỉ lưu tối đa ${MAX_VARIANT_MEDIA_ITEMS} ảnh/video cộng lại.`);
       setActiveTab("variants");
@@ -337,7 +329,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     let failure = "";
     try {
       for (const file of files) {
-        try { added.push(await compressProductImage(file)); }
+        try { added.push(await uploadProductImage(file, `product-${product.id}-${currentGallery.length + added.length + 1}.webp`, product.name)); }
         catch (error) { failure = error instanceof Error ? error.message : "Không thể xử lý ảnh."; }
       }
       if (added.length) {
@@ -345,7 +337,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
         update("gallery", next);
         update("image", next[0] ?? "");
         setImageIndex(0);
-        onNotify(`Đã thêm ${added.length} ảnh. Ảnh đầu tiên là ảnh bìa; lưu thay đổi để đồng bộ.`);
+        onNotify(`Đã tải ${added.length} ảnh lên. Ảnh đầu tiên là ảnh bìa; bấm Lưu thay đổi để hoàn tất.`);
       }
       if (files.length < fileList.length) onNotify(`Mỗi sản phẩm tối đa ${MAX_PRODUCT_IMAGES} ảnh; các ảnh vượt giới hạn chưa được thêm.`);
       else if (failure) onNotify(failure);
@@ -353,17 +345,45 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       setUploadingImages(false);
     }
   };
+  const uploadCoverVideo = async (file?: File) => {
+    if (!product || !file) return;
+    const extension = file.name.split(".").pop()?.toLowerCase();
+    if (extension !== "mp4" && extension !== "webm") { onNotify("Chỉ nhận video MP4 hoặc WebM."); return; }
+    setUploadingCoverVideo(true);
+    try {
+      const url = await uploadProductVideo(file, `product-${product.id}-cover.${extension}`, `${product.name} · video bìa`);
+      update("coverVideoUrl", url);
+      onNotify("Đã tải video bìa lên. Video sẽ tự chạy, tắt tiếng và lặp trên website.");
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : "Không thể tải video bìa.");
+    } finally {
+      setUploadingCoverVideo(false);
+    }
+  };
   const uploadTechnicalImage = async (file: File) => {
     if (!product) return;
     setUploadingTechnicalImage(true);
     try {
-      update("technicalImage", await compressProductImage(file));
-      onNotify("Đã thêm ảnh kỹ thuật. Lưu thay đổi để ghi vào database.");
+      update("technicalImage", await uploadProductImage(file, `product-${product.id}-technical.webp`, `${product.name} · ảnh kỹ thuật`));
+      update("technicalVideo", "");
+      onNotify("Đã tải ảnh kỹ thuật lên. Bấm Lưu thay đổi để hoàn tất.");
     } catch (error) {
       onNotify(error instanceof Error ? error.message : "Không thể xử lý ảnh kỹ thuật.");
     } finally {
       setUploadingTechnicalImage(false);
     }
+  };
+  const uploadTechnicalVideo = async (file: File) => {
+    if (!product) return;
+    const extension = file.name.split(".").pop()?.toLowerCase();
+    if (extension !== "mp4" && extension !== "webm") { onNotify("Chỉ nhận video MP4 hoặc WebM."); return; }
+    setUploadingTechnicalVideo(true);
+    try {
+      update("technicalVideo", await uploadProductVideo(file, `product-${product.id}-technical.${extension}`, `${product.name} · video kỹ thuật`));
+      update("technicalImage", "");
+      onNotify("Đã tải video kỹ thuật lên. Bấm Lưu thay đổi để hoàn tất.");
+    } catch (error) { onNotify(error instanceof Error ? error.message : "Không thể tải video kỹ thuật."); }
+    finally { setUploadingTechnicalVideo(false); }
   };
   const removeProductImage = (index: number) => {
     const next = gallery.filter((_, imageIndex) => imageIndex !== index);
@@ -432,7 +452,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     {product && <aside className="product-detail-panel">
       <div className="product-detail-title"><h2>Chi tiết sản phẩm</h2><button className="product-close" aria-label="Đóng chi tiết" onClick={() => setSelectedId("")}><Icon name="close"/></button></div>
       <div className="product-overview">
-        <div className="product-gallery-preview">{gallery.length ? <img className="product-large-image" src={gallery[imageIndex % gallery.length]} alt={product.name || "Ảnh sản phẩm"}/> : <div className="product-image-placeholder product-large-image">Chưa có ảnh sản phẩm</div>}<div className="product-gallery-thumbs">{gallery.slice(0, 4).map((src, index) => <button key={`${src}-${index}`} className={index === imageIndex ? "active" : ""} onClick={() => setImageIndex(index)} aria-label={`Xem ảnh ${index + 1}`}><img src={src} alt=""/></button>)}</div></div>
+        <div className="product-gallery-preview">{product.coverVideoUrl ? <video className="product-large-image" src={product.coverVideoUrl} muted autoPlay loop playsInline preload="metadata" aria-label={`${product.name} · video bìa`}/> : gallery.length ? <img className="product-large-image" src={gallery[imageIndex % gallery.length]} alt={product.name || "Ảnh sản phẩm"}/> : <div className="product-image-placeholder product-large-image">Chưa có ảnh sản phẩm</div>}<div className="product-gallery-thumbs">{gallery.slice(0, 4).map((src, index) => <button key={`${src}-${index}`} className={!product.coverVideoUrl && index === imageIndex ? "active" : ""} onClick={() => setImageIndex(index)} aria-label={`Xem ảnh ${index + 1}`}><img src={src} alt=""/></button>)}</div></div>
         <div className="product-overview-copy"><h3>{product.name}</h3><small>SKU: {product.id}</small><div className="product-overview-price"><strong>{money(product.price)}</strong><Status>{product.status}</Status>{product.isNew && <span className="new-product-badge">Mới</span>}</div><p className="product-crumb">{product.productType ?? "Trang sức"}{product.category ? `　›　${product.category}` : "　›　Chưa chọn danh mục"}{product.subcategory ? `　›　${product.subcategory}` : ""}</p><div className="product-meta-line"><span>Tồn kho · quản lý riêng</span><strong>{product.stock}</strong></div><div className="product-meta-line"><span>Đã bán</span><strong>{product.sold}</strong></div><div className="product-rating"><span>Đánh giá</span><b>{product.reviews ? `${product.rating ?? ""} (${product.reviews})` : "Chưa có đánh giá"}</b></div></div>
       </div>
 
@@ -458,13 +478,13 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
         </div> : <div className="jewelry-variant-note"><strong>{usesQualityPricing ? "Chưa có biến thể trong kho." : "Sản phẩm đang dùng một giá chung."}</strong><span>{usesQualityPricing ? "Tạo các phân loại và số lượng trong phiếu nhập kho trước. Sau đó nhập giá bán tại đây." : "Số lượng tồn kho được quản lý riêng trong mục Quản lý tồn kho."}</span></div>}
       </section>}
 
-      {activeTab === "images" && <section className="product-tab-content"><div className="product-tab-title"><div><h3>Thư viện hình ảnh</h3><p>Ảnh đầu tiên là ảnh bìa. Có thể chọn nhiều ảnh, tối đa {MAX_PRODUCT_IMAGES} ảnh.</p></div><span>{gallery.length}/{MAX_PRODUCT_IMAGES}</span></div><div className="product-image-grid">{gallery.map((src, index) => <div className="product-image-item" key={`${src}-${index}`}><button type="button" className={index === imageIndex ? "active" : ""} onClick={() => setImageIndex(index)}><img src={src} alt={`Ảnh sản phẩm ${index + 1}`}/><small>{index === 0 ? "Ảnh bìa" : `Ảnh ${index + 1}`}</small></button><button type="button" className="product-image-remove" aria-label={`Xóa ảnh ${index + 1}`} onClick={() => removeProductImage(index)}>×</button></div>)}</div><label className="image-dropzone"><input className="product-image-file-input" type="file" accept="image/*" multiple disabled={uploadingImages || gallery.length >= MAX_PRODUCT_IMAGES} onChange={(event) => { void uploadProductImages(event.target.files ?? undefined); event.currentTarget.value = ""; }}/><Icon name="image"/><strong>{uploadingImages ? "Đang nén ảnh…" : "Chọn một hoặc nhiều ảnh"}</strong><span>{uploadingImages ? "Chờ xử lý ảnh trước khi lưu" : "Ảnh sẽ tự tối ưu; lưu thay đổi để ghi vào database."}</span></label><TechnicalImagePicker image={product.technicalImage} uploading={uploadingTechnicalImage} onSelect={(file) => void uploadTechnicalImage(file)} onRemove={() => update("technicalImage", "")}/></section>}
+      {activeTab === "images" && <section className="product-tab-content"><div className="product-tab-title"><div><h3>Ảnh &amp; video bìa</h3><p>Video tự chạy khi khách nhìn thấy sản phẩm, tắt tiếng và lặp liên tục.</p></div><span>{gallery.length}/{MAX_PRODUCT_IMAGES} ảnh</span></div><div className="product-cover-video-field"><div><strong>Video bìa (không bắt buộc)</strong><small>MP4 hoặc WebM, tối đa 8 MB. Nếu có video, website ưu tiên hiển thị video thay ảnh bìa.</small></div>{product.coverVideoUrl && <video className="product-cover-video-preview" src={product.coverVideoUrl} muted autoPlay loop playsInline preload="metadata" aria-label={`${product.name} · video bìa`}/>}<label className="product-cover-video-picker"><input type="file" accept="video/mp4,video/webm,.mp4,.webm" disabled={uploadingCoverVideo} onChange={(event) => { void uploadCoverVideo(event.target.files?.[0]); event.currentTarget.value = ""; }}/><span>{uploadingCoverVideo ? "Đang tải video…" : product.coverVideoUrl ? "Đổi video bìa" : "Chọn video bìa"}</span></label>{product.coverVideoUrl && <button type="button" className="product-cover-video-remove" onClick={() => update("coverVideoUrl", "")}>Gỡ video</button>}<label className="product-cover-video-url"><span>Hoặc dán đường dẫn video</span><input type="url" value={product.coverVideoUrl || ""} onChange={(event) => update("coverVideoUrl", event.target.value)} placeholder="https://… hoặc /media/…"/></label></div><div className="product-tab-title product-gallery-heading"><div><h3>Thư viện ảnh</h3><p>Ảnh đầu tiên làm ảnh bìa nếu chưa chọn video. Ảnh tải lên ngay sau khi chọn.</p></div></div><div className="product-image-grid">{gallery.map((src, index) => <div className="product-image-item" key={`${src}-${index}`}><button type="button" className={index === imageIndex ? "active" : ""} onClick={() => setImageIndex(index)}><img src={src} alt={`Ảnh sản phẩm ${index + 1}`}/><small>{index === 0 && !product.coverVideoUrl ? "Ảnh bìa dự phòng" : `Ảnh ${index + 1}`}</small></button><button type="button" className="product-image-remove" aria-label={`Xóa ảnh ${index + 1}`} onClick={() => removeProductImage(index)}>×</button></div>)}</div><label className="image-dropzone"><input className="product-image-file-input" type="file" accept="image/*" multiple disabled={uploadingImages || gallery.length >= MAX_PRODUCT_IMAGES} onChange={(event) => { void uploadProductImages(event.target.files ?? undefined); event.currentTarget.value = ""; }}/><Icon name="image"/><strong>{uploadingImages ? "Đang tải ảnh lên…" : "Chọn một hoặc nhiều ảnh"}</strong><span>{uploadingImages ? "Đang tối ưu và lưu ảnh; không cần chờ đến lúc bấm lưu sản phẩm." : "Ảnh được tối ưu và tải lên ngay khi chọn. Bấm Lưu thay đổi để cập nhật thông tin sản phẩm."}</span></label><TechnicalImagePicker image={product.technicalImage} video={product.technicalVideo} uploading={uploadingTechnicalImage} uploadingVideo={uploadingTechnicalVideo} onSelect={(file) => void uploadTechnicalImage(file)} onSelectVideo={(file) => void uploadTechnicalVideo(file)} onRemove={() => update("technicalImage", "")} onRemoveVideo={() => update("technicalVideo", "")}/></section>}
 
       {activeTab === "seo" && <section className="product-tab-content"><div className="product-tab-title"><div><h3>Tối ưu tìm kiếm</h3><p>Xem trước cách sản phẩm xuất hiện trên công cụ tìm kiếm.</p></div></div><label className="product-field"><span>Tiêu đề SEO</span><input value={product.seoTitle ?? product.name} onChange={(event) => update("seoTitle", event.target.value)}/><small className="field-counter">{(product.seoTitle ?? product.name).length}/70</small></label><label className="product-field"><span>Mô tả SEO</span><textarea rows={4} maxLength={160} value={product.seoDescription ?? product.description ?? ""} onChange={(event) => update("seoDescription", event.target.value)}/><small className="field-counter">{(product.seoDescription ?? product.description ?? "").length}/160</small></label><div className="seo-preview"><small>geme.vn › san-pham › {product.id.toLowerCase()}</small><strong>{product.seoTitle ?? product.name}</strong><span>{product.seoDescription ?? product.description ?? "Khám phá trang sức đá quý thiên nhiên tinh tế tại GEME."}</span></div></section>}
 
       {activeTab === "history" && <section className="product-tab-content"><div className="product-tab-title"><div><h3>Lịch sử cập nhật</h3><p>Các hoạt động gần đây của sản phẩm này.</p></div></div><div className="product-history product-history-empty">Chưa có lịch sử cập nhật.</div></section>}
 
-      <div className="product-editor-actions"><button className="button button-quiet" disabled={saving || uploadingImages || uploadingTechnicalImage || Object.values(uploadingVariantMedia).some(Boolean)} onClick={cancelChanges}>Hủy</button><button className="button button-primary" disabled={saving || uploadingImages || uploadingTechnicalImage || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save()}>{saving ? "Đang lưu…" : "Lưu thay đổi"}</button></div>
+      <div className="product-editor-actions"><button className="button button-quiet" disabled={saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={cancelChanges}>Hủy</button><button className="button button-primary" disabled={saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save()}>{saving ? "Đang lưu…" : uploadingImages || uploadingCoverVideo || uploadingTechnicalVideo ? "Đang tải media…" : "Lưu thay đổi"}</button></div>
     </aside>}
   </div>;
 }

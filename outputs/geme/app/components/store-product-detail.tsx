@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { StoreCategory, StoreProduct, StorePromotion } from "../lib/store-api";
 import { formatStorePrice } from "../lib/store-format";
 import { formatStorePromotionPeriod, getStoreProductPromotion } from "../lib/store-promotion";
+import { useWishlist } from "./wishlist-provider";
 
 type DetailTab = "description" | "reviews";
 
@@ -57,8 +58,16 @@ export function StoreProductDetail({
     return first ? `${first.quality}::${first.beadSize ?? ""}` : "";
   });
   const [quantity, setQuantity] = useState(1);
-  const [isSaved, setIsSaved] = useState(false);
+  const { favoriteIds, toggleFavorite } = useWishlist();
+  const isSaved = favoriteIds.has(product.id);
+  const [wishlistNotice, setWishlistNotice] = useState("");
   const [cartNotice, setCartNotice] = useState("");
+
+  const handleFavorite = async () => {
+    setWishlistNotice("");
+    try { await toggleFavorite(product); }
+    catch (error) { setWishlistNotice(error instanceof Error ? error.message : "Không cập nhật được danh sách yêu thích."); }
+  };
 
   const selectedVariant = availableVariants.find(
     (variant) => `${variant.quality}::${variant.beadSize ?? ""}` === selectedVariantKey,
@@ -81,7 +90,7 @@ export function StoreProductDetail({
   const displayImages = (variantImages.length ? variantImages : images).slice(0, 10);
   const galleryMedia = [
     ...displayImages.map((image) => ({ kind: "image" as const, image })),
-    ...(selectedVariant?.videoUrl ? [{ kind: "video" as const, url: selectedVariant.videoUrl }] : []),
+    ...(selectedVariant?.videoUrl ? [{ kind: "variant-video" as const, url: selectedVariant.videoUrl }] : []),
   ];
   const activeImageIndex = Math.min(activeImage, Math.max(galleryMedia.length - 1, 0));
   const activeMedia = galleryMedia[activeImageIndex];
@@ -91,6 +100,8 @@ export function StoreProductDetail({
     : null;
   const detailDescription = product.fullDescription || product.description;
   const technicalImage = product.technicalImageUrl || images[1]?.url;
+  const technicalVideo = product.technicalVideoUrl;
+  const hasTechnicalMedia = Boolean(technicalVideo || technicalImage);
   const beadSizes = [...new Set(productVariants.map((variant) => variant.beadSize).filter((size): size is string => Boolean(size)))];
   const qualityNames = [...new Set(productVariants.map((variant) => variant.quality))];
   const normalizedCategoryPath = [...categoryTrail.map((category) => category.name), product.category?.name || ""].join(" ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi");
@@ -173,15 +184,15 @@ export function StoreProductDetail({
       <section className="detail-top">
         <div className={"detail-gallery" + (galleryMedia.length > 1 ? " has-thumbnails" : "")}>
           {galleryMedia.length > 1 && <div className="detail-thumbnails" aria-label="Ảnh và video sản phẩm">
-            {galleryMedia.map((media, index) => <button type="button" key={media.kind + index} className={activeImageIndex === index ? "is-active" : ""} onClick={() => setActiveImage(index)} aria-label={media.kind === "video" ? "Xem video biến thể" : "Xem ảnh " + (index + 1)}>
+            {galleryMedia.map((media, index) => <button type="button" key={media.kind + index} className={activeImageIndex === index ? "is-active" : ""} onClick={() => setActiveImage(index)} aria-label={media.kind === "variant-video" ? "Xem video biến thể" : "Xem ảnh " + (index + 1)}>
               {media.kind === "image" ? <ProductPhoto url={media.image.url} alt={media.image.alt || product.name} loading="lazy" /> : <span className="detail-video-thumbnail" aria-hidden="true">▶</span>}
             </button>)}
           </div>}
           <div className="detail-main-image">
-            {activeMedia?.kind === "video"
+            {activeMedia?.kind === "variant-video"
               ? <video className="detail-variant-video" src={activeMedia.url} controls playsInline preload="metadata" aria-label={"Video " + (selectedVariant?.sku || product.name)} />
               : <ProductPhoto url={activeMedia?.kind === "image" ? activeMedia.image.url : undefined} alt={activeMedia?.kind === "image" ? activeMedia.image.alt || product.name : product.name} loading="eager" />}
-            <button className={`detail-image-heart${isSaved ? " is-saved" : ""}`} type="button" aria-label={isSaved ? "Bỏ khỏi danh sách yêu thích" : "Thêm vào danh sách yêu thích"} aria-pressed={isSaved} onClick={() => setIsSaved((saved) => !saved)}><HeartIcon /></button>
+            <button className={`detail-image-heart${isSaved ? " is-saved" : ""}`} type="button" aria-label={isSaved ? "Bỏ khỏi danh sách yêu thích" : "Thêm vào danh sách yêu thích"} aria-pressed={isSaved} onClick={() => void handleFavorite()}><HeartIcon /></button>
             {galleryMedia.length > 1 && <>
               <button className="detail-image-arrow is-prev" type="button" onClick={() => setActiveImage((activeImageIndex + galleryMedia.length - 1) % galleryMedia.length)} aria-label="Ảnh trước">‹</button>
               <button className="detail-image-arrow is-next" type="button" onClick={() => setActiveImage((activeImageIndex + 1) % galleryMedia.length)} aria-label="Ảnh tiếp theo">›</button>
@@ -234,7 +245,8 @@ export function StoreProductDetail({
             <button className="detail-add-cart" type="button" onClick={addToCart} disabled={stock === 0}>{stock > 0 ? "BỎ VÀO GIỎ HÀNG" : "TẠM HẾT HÀNG"}</button>
           </div>
           {cartNotice && <p className="detail-cart-notice" role="status">{cartNotice}</p>}
-          <button className={`detail-wishlist${isSaved ? " is-saved" : ""}`} type="button" aria-pressed={isSaved} onClick={() => setIsSaved((saved) => !saved)}><HeartIcon />{isSaved ? "Đã thêm vào danh sách yêu thích" : "Thêm vào danh sách yêu thích"}</button>
+          <button className={`detail-wishlist${isSaved ? " is-saved" : ""}`} type="button" aria-label={isSaved ? "Bỏ khỏi danh sách yêu thích" : "Thêm vào danh sách yêu thích"} aria-pressed={isSaved} onClick={() => void handleFavorite()}><HeartIcon />{isSaved ? "Đã lưu yêu thích" : "Thêm vào danh sách yêu thích"}</button>
+          {wishlistNotice && <p className="detail-cart-notice" role="status">{wishlistNotice}</p>}
           <div className="detail-share"><span>Chia sẻ:</span><button type="button" onClick={() => window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(window.location.href)}`, "_blank", "noopener,noreferrer")} aria-label="Chia sẻ Facebook">f</button><button type="button" onClick={() => navigator.clipboard?.writeText(window.location.href)} aria-label="Sao chép liên kết">↗</button></div>
         </div>
       </section>
@@ -252,12 +264,12 @@ export function StoreProductDetail({
           <button type="button" role="tab" aria-selected={activeTab === "reviews"} className={activeTab === "reviews" ? "is-active" : ""} onClick={() => setActiveTab("reviews")}>ĐÁNH GIÁ ({reviewCount})</button>
         </div>
 
-        {activeTab === "description" && <div className={`detail-description-grid${technicalImage ? "" : " detail-description-grid--no-image"}`} role="tabpanel">
+        {activeTab === "description" && <div className={`detail-description-grid${hasTechnicalMedia ? "" : " detail-description-grid--no-image"}`} role="tabpanel">
           <div className="detail-description-copy">
             <h2>{product.name}</h2>
             {detailDescription ? <p className="detail-full-description">{detailDescription}</p> : <p>Chưa có mô tả chi tiết cho sản phẩm này.</p>}
           </div>
-          {technicalImage && <ProductPhoto className="detail-story-image" url={technicalImage} alt={`${product.name} — ảnh kỹ thuật`} />}
+          {technicalVideo ? <video className="detail-story-image detail-story-video" src={technicalVideo} controls playsInline preload="metadata" aria-label={`${product.name} — video kỹ thuật`} /> : technicalImage && <ProductPhoto className="detail-story-image" url={technicalImage} alt={`${product.name} — ảnh kỹ thuật`} />}
           <div className="detail-specs">
             <h3>THÔNG SỐ KỸ THUẬT</h3>
             <table><tbody>

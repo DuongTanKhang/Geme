@@ -12,21 +12,42 @@ export function CatalogLiveSync() {
 
   useEffect(() => {
     const events = new EventSource(`${API_BASE}/products/events`);
+    let disconnected = false;
+    let categoriesChanged = false;
+    const scheduleRefresh = (minDelayMs: number, maxDelayMs: number) => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      refreshTimer.current = setTimeout(() => {
+        refreshTimer.current = null;
+        if (document.hidden) return;
+        if (categoriesChanged) {
+          window.dispatchEvent(new Event("geme:categories-changed"));
+          categoriesChanged = false;
+        }
+        router.refresh();
+      }, minDelayMs + Math.floor(Math.random() * (maxDelayMs - minDelayMs + 1)));
+    };
 
     events.onopen = () => {
-      // Also recover pages rendered while the API was temporarily unavailable.
-      // EventSource reconnects automatically after network failures.
-      router.refresh();
-      window.dispatchEvent(new Event("geme:categories-changed"));
+      // The initial HTML already contains the server-rendered catalogue.
+      // Refresh only after a real disconnect so connecting 500 new visitors
+      // does not immediately double the page's API traffic.
+      if (disconnected) {
+        categoriesChanged = true;
+        // Spread recovery traffic across clients after a proxy/API interruption.
+        scheduleRefresh(300, 2_000);
+        disconnected = false;
+      }
     };
+
+    events.onerror = () => { disconnected = true; };
 
     events.onmessage = (event) => {
       try {
         const change = JSON.parse(event.data) as { entity?: string };
-        if (change.entity === "category") window.dispatchEvent(new Event("geme:categories-changed"));
+        if (change.entity === "ping") return;
+        if (change.entity === "category") categoriesChanged = true;
       } catch { /* Ignore malformed events and still refresh the catalog. */ }
-      if (refreshTimer.current) clearTimeout(refreshTimer.current);
-      refreshTimer.current = setTimeout(() => router.refresh(), 120);
+      scheduleRefresh(100, 700);
     };
 
     return () => {

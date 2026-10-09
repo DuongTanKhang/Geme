@@ -7,7 +7,9 @@ type MediaResponse = { setHeader(name: string, value: string): void; end(data?: 
 export class CommerceController {
   constructor(private readonly commerce: CommerceService) {}
 
-  @Get("categories") categories() { return this.commerce.categories(); }
+  @Get("categories")
+  @Header("Cache-Control", "no-store")
+  categories() { return this.commerce.categories(); }
   @Post("categories") createCategory(@Body() body: Record<string, any>) { return this.commerce.createCategory(body); }
   @Patch("categories/:id") updateCategory(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.updateCategory(id, body); }
   @Delete("categories/:id") deleteCategory(@Param("id") id: string) { return this.commerce.deleteCategory(id); }
@@ -18,7 +20,7 @@ export class CommerceController {
   @Sse("products/events") productEvents() { return this.commerce.catalogEvents(); }
   @Post("products") createProduct(@Body() body: Record<string, any>) { return this.commerce.saveProduct(body); }
   @Patch("products/:id") updateProduct(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.saveProduct(body, id); }
-  @Delete("products/:id") deleteProduct(@Param("id") id: string) { return this.commerce.deleteProduct(id); }
+  @Delete("products/:id") deleteProduct(@Param("id") id: string, @Body() body?: Record<string, any>) { return this.commerce.deleteProduct(id, body); }
   @Patch("products/:id/unpublish") unpublishProduct(@Param("id") id: string) { return this.commerce.unpublishProduct(id); }
   @Get("inventory") inventory() { return this.commerce.inventory(); }
   @Get("inventory/movements") inventoryMovements(@Query("limit") limit?: string) { return this.commerce.inventoryMovements(limit); }
@@ -31,6 +33,8 @@ export class CommerceController {
   @Post("inventory/receipts") createInventoryReceipt(@Body() body: Record<string, any>) { return this.commerce.createInventoryReceipt(body); }
   @Get("inventory/issues") inventoryIssues(@Query() query: Record<string, string>) { return this.commerce.inventoryIssues(query); }
   @Post("inventory/issues") createInventoryIssue(@Body() body: Record<string, any>) { return this.commerce.createInventoryIssue(body); }
+  @Post("inventory/reset/preview") inventoryResetPreview(@Body() body: Record<string, any>) { return this.commerce.inventoryResetPreview(body); }
+  @Post("inventory/reset") resetInventory(@Body() body: Record<string, any>) { return this.commerce.resetInventory(body); }
   @Patch("inventory/products/:id/minimum-stock") minimumStock(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.updateMinimumStock(id, body.minimumStock); }
   @Post("inventory/movements") createInventoryMovement(@Body() body: Record<string, any>) { return this.commerce.createInventoryMovement(body); }
 
@@ -68,7 +72,7 @@ export class CommerceController {
   }
 
   @Get("media/:id")
-  @Header("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400")
+  @Header("Cache-Control", "public, max-age=31536000, immutable")
   async media(@Param("id") id: string, @Res() response: MediaResponse) {
     const asset = await this.commerce.mediaAsset(id);
     response.setHeader("Content-Type", asset.mimeType);

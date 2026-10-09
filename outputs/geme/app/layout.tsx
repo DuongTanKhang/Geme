@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { CatalogLiveSync } from "./components/catalog-live-sync";
+import { WishlistProvider } from "./components/wishlist-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,7 +13,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="vi">
       <body>
         <CatalogLiveSync />
-        {children}
+        <WishlistProvider>{children}</WishlistProvider>
       </body>
     </html>
   );

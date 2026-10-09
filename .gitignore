@@ -13,6 +13,8 @@ coverage/
 .turbo/
 .cache/
 *.tsbuildinfo
+**/bin/
+**/obj/
 
 # Local logs and operating-system files
 *.log

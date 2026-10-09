@@ -30,6 +30,18 @@ function parseAvatarDataUrl(value: unknown) {
 export class AccountService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private async attachVerifiedEmailOrders(customerId: string, verifiedEmail: string) {
+    const email = verifiedEmail.trim().toLowerCase();
+    if (!email) return;
+    // Previous storefront checkouts could create guest orders even while the
+    // customer was signed in. Claim only unowned orders matching the verified
+    // account email so they appear in this customer's history.
+    await this.prisma.order.updateMany({
+      where: { customerId: null, customerEmail: { equals: email, mode: "insensitive" } },
+      data: { customerId },
+    });
+  }
+
   async customerId(identity: AegisCustomerIdentity) {
     const customer = await this.ensureCustomer(identity);
     return customer.id;
@@ -37,9 +49,11 @@ export class AccountService {
 
   async profile(identity: AegisCustomerIdentity) {
     const customer = await this.ensureCustomer(identity);
-    const [orderCount, reviewCount] = await Promise.all([
+    await this.attachVerifiedEmailOrders(customer.id, identity.email);
+    const [orderCount, reviewCount, favoriteCount] = await Promise.all([
       this.prisma.order.count({ where: { customerId: customer.id } }),
       this.prisma.productReview.count({ where: { customerId: customer.id } }),
+      this.prisma.customerFavorite.count({ where: { customerId: customer.id, product: { status: "ACTIVE" } } }),
     ]);
     return {
       id: customer.id,
@@ -51,6 +65,7 @@ export class AccountService {
       createdAt: customer.createdAt,
       orderCount,
       reviewCount,
+      favoriteCount,
     };
   }
 
@@ -113,8 +128,17 @@ export class AccountService {
 
   async orders(identity: AegisCustomerIdentity) {
     const customer = await this.ensureCustomer(identity);
+    await this.attachVerifiedEmailOrders(customer.id, identity.email);
     const orders = await this.prisma.order.findMany({
-      where: { customerId: customer.id },
+      // A guest checkout from an older storefront build may not have a
+      // customerId yet. Include only those unowned orders with this verified
+      // email as a read fallback while the claim above links them permanently.
+      where: {
+        OR: [
+          { customerId: customer.id },
+          { customerId: null, customerEmail: { equals: identity.email.trim().toLowerCase(), mode: "insensitive" } },
+        ],
+      },
       include: {
         items: {
           include: {
@@ -136,6 +160,44 @@ export class AccountService {
       image: order.items[0]?.product?.images[0]?.url ?? null,
       price: Number(order.totalAmount),
     }));
+  }
+
+  async favorites(identity: AegisCustomerIdentity) {
+    const customer = await this.ensureCustomer(identity);
+    const saved = await this.prisma.customerFavorite.findMany({
+      where: { customerId: customer.id, product: { status: "ACTIVE" } },
+      orderBy: { createdAt: "desc" },
+      include: {
+        product: {
+          include: {
+            category: true,
+            gemstoneType: true,
+            materialOption: true,
+            images: { orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }], take: 2 },
+            variants: { orderBy: { sortOrder: "asc" } },
+          },
+        },
+      },
+    });
+    return saved.map((item) => item.product);
+  }
+
+  async addFavorite(identity: AegisCustomerIdentity, productId: string) {
+    const customer = await this.ensureCustomer(identity);
+    const product = await this.prisma.product.findFirst({ where: { id: productId, status: "ACTIVE" }, select: { id: true } });
+    if (!product) throw new NotFoundException("Không tìm thấy sản phẩm đang bán.");
+    await this.prisma.customerFavorite.upsert({
+      where: { customerId_productId: { customerId: customer.id, productId } },
+      create: { customerId: customer.id, productId },
+      update: {},
+    });
+    return { productId, saved: true };
+  }
+
+  async removeFavorite(identity: AegisCustomerIdentity, productId: string) {
+    const customer = await this.ensureCustomer(identity);
+    await this.prisma.customerFavorite.deleteMany({ where: { customerId: customer.id, productId } });
+    return { productId, saved: false };
   }
 
   private async ensureCustomer(identity: AegisCustomerIdentity) {

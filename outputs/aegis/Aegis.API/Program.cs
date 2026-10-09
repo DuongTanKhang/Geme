@@ -1,6 +1,7 @@
 using Aegis.Application;
 using Aegis.API;
 using Aegis.Infrastructure;
+using Aegis.Infrastructure.Email;
 using Aegis.Infrastructure.Middlewares;
 using Aegis.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -53,6 +54,8 @@ builder.Services
     .AddApplication()
     .AddInfrastructure(configuration);
 builder.Services.AddHostedService<OtpEmailWorker>();
+builder.Services.AddSingleton<OrderConfirmationEmailQueue>();
+builder.Services.AddHostedService<OrderConfirmationEmailWorker>();
 builder.Services.AddHostedService<AuthenticationWarmupService>();
 builder.Services.AddHostedService<AuthenticationEndpointWarmupService>();
 
@@ -95,6 +98,22 @@ builder.Services.AddRateLimiter(options =>
         return RateLimitPartition.GetFixedWindowLimiter(ip, _ => new FixedWindowRateLimiterOptions
         {
             PermitLimit = 20,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        });
+    });
+    // Session validation is used by the storefront for every signed-in
+    // visitor. Keep abuse protection, but allow normal bursts from hundreds
+    // of shoppers behind one reverse proxy.
+    options.AddPolicy("session", context =>
+    {
+        var ip = context.Connection.RemoteIpAddress?.MapToIPv4().ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(ip, _ => new FixedWindowRateLimiterOptions
+        {
+            // The storefront API proxies all customers through one source IP.
+            // Set capacity for high traffic while retaining an abuse ceiling.
+            PermitLimit = 30_000,
             Window = TimeSpan.FromMinutes(1),
             QueueLimit = 0,
             AutoReplenishment = true

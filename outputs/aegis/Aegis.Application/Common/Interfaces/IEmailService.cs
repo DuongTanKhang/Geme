@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Aegis.Application.Common.Models;
 
 namespace Aegis.Application.Common.Interfaces
 {
@@ -11,5 +12,6 @@ namespace Aegis.Application.Common.Interfaces
         Task SendVerifyEmailAsync(string email, string token);
         Task SendAsync(string to, string subject, string body);
         Task SendRegistrationOtpAsync(string email, string customerName, string otp, TimeSpan lifetime);
+        Task SendOrderConfirmationAsync(OrderConfirmationEmail order);
     }
 }

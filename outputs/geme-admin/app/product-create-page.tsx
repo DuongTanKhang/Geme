@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { AdminProduct, ProductPriceVariant } from "./products-workspace";
 import type { AdminCategory } from "./categories-workspace";
 import type { MaterialOption } from "./materials-workspace";
-import { compressProductImage, MAX_PRODUCT_IMAGES, MAX_VARIANT_MEDIA_ITEMS, parsePriceInput } from "./product-images";
+import { uploadProductImage, uploadProductVideo, MAX_PRODUCT_IMAGES, MAX_VARIANT_MEDIA_ITEMS, parsePriceInput } from "./product-images";
 import { TechnicalImagePicker } from "./technical-image-picker";
 import { apiBaseUrl } from "../lib/api";
 
@@ -21,7 +21,7 @@ type Props = {
 type TabKey = "basic" | "images" | "variants" | "seo" | "other";
 
 type PricingMode = "FIXED" | "QUALITY" | "QUALITY_AND_BEAD_SIZE";
-type InventorySkuRule = { categoryId: string; materialPrefixes?: { materialOptionId: string }[] };
+type InventorySkuRule = { categoryId: string; materialOptionIds?: string[]; materialPrefixes?: { materialOptionId: string }[] };
 const qualityPricing = (mode?: PricingMode) => mode === "QUALITY" || mode === "QUALITY_AND_BEAD_SIZE";
 
 const tabs: { key: TabKey; label: string }[] = [
@@ -55,7 +55,7 @@ function fromInventoryProduct(value: Record<string, any>): AdminProduct {
     category: String(category?.name || ""), categoryId: String(value.categoryId || ""), materialOptionId: value.materialOptionId || undefined,
     subcategory: String(material?.name || gemstoneType?.name || ""), categoryPricingMode: category?.pricingMode,
     description: String(value.description || ""), fullDescription: String(value.fullDescription || ""),
-    image: gallery[0] || "", gallery, technicalImage: String(value.technicalImageUrl || ""),
+    image: gallery[0] || "", gallery, coverVideoUrl: String(value.coverVideoUrl || ""), technicalImage: String(value.technicalImageUrl || ""), technicalVideo: String(value.technicalVideoUrl || ""),
     weightGrams: value.weightGrams == null ? undefined : Number(value.weightGrams),
     lengthCm: value.lengthCm == null ? undefined : Number(value.lengthCm), widthCm: value.widthCm == null ? undefined : Number(value.widthCm), heightCm: value.heightCm == null ? undefined : Number(value.heightCm),
     qualityGrades: [...new Set(variants.map((row) => row.quality))],
@@ -98,7 +98,9 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     originalPrice: 0,
     image: "",
     gallery: [],
+    coverVideoUrl: "",
     technicalImage: "",
+    technicalVideo: "",
     weightGrams: 0,
     qualityGrades: [],
     beadSizes: [],
@@ -107,8 +109,10 @@ export default function ProductCreatePage({ products, categories: categoryRecord
   });
   const [imagePreview, setImagePreview] = useState("");
   const [uploadingImages, setUploadingImages] = useState(false);
+  const [uploadingCoverVideo, setUploadingCoverVideo] = useState(false);
   const [uploadingVariantMedia, setUploadingVariantMedia] = useState<Record<string, boolean>>({});
   const [uploadingTechnicalImage, setUploadingTechnicalImage] = useState(false);
+  const [uploadingTechnicalVideo, setUploadingTechnicalVideo] = useState(false);
   const [saving, setSaving] = useState(false);
   const [inventoryProducts, setInventoryProducts] = useState<AdminProduct[]>(products);
   const [inventorySkuRules, setInventorySkuRules] = useState<InventorySkuRule[]>([]);
@@ -157,8 +161,13 @@ export default function ProductCreatePage({ products, categories: categoryRecord
   const availableInventoryMaterialIds = new Set(categoryInventoryProducts.map((item) => item.materialOptionId).filter(Boolean));
   const availableInventoryStoneNames = new Set(categoryInventoryProducts.map((item) => item.subcategory).filter(Boolean));
   const selectedCategoryId = product.categoryId || selectedProductCategory?.id;
-  const skuRuleMaterialIds = new Set(inventorySkuRules.find((rule) => rule.categoryId === selectedCategoryId)?.materialPrefixes?.map((item) => item.materialOptionId) || []);
-  const availableStoneOptions = materials.filter((item) => item.scope === (isGemstone ? "Đá quý" : "Trang sức") && item.active && item.kind === "STONE" && (availableInventoryMaterialIds.has(item.id) || availableInventoryStoneNames.has(item.name) || skuRuleMaterialIds.has(item.id)));
+  const selectedSkuRule = inventorySkuRules.find((rule) => rule.categoryId === selectedCategoryId);
+  const skuRuleMaterialIds = new Set([...(selectedSkuRule?.materialOptionIds || []), ...(selectedSkuRule?.materialPrefixes?.map((item) => item.materialOptionId) || [])]);
+  const availableStoneOptions = materials.filter((item) => {
+    if (item.scope !== (isGemstone ? "Đá quý" : "Trang sức") || !item.active || item.kind !== "STONE") return false;
+    if (Array.isArray(item.appliedCategoryIds)) return Boolean(selectedCategoryId && item.appliedCategoryIds.includes(selectedCategoryId));
+    return availableInventoryMaterialIds.has(item.id) || availableInventoryStoneNames.has(item.name) || skuRuleMaterialIds.has(item.id);
+  });
   const availableJewelryMaterials = availableStoneOptions;
   const categories = availableCategoryRecords;
   const availableInventoryProducts = categoryInventoryProducts.filter((item) => {
@@ -186,7 +195,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     setProduct((current) => ({
       ...current, id: `SP${String(Date.now()).slice(-6)}`, apiId: undefined, name: "", price: 0, originalPrice: 0,
       stock: 0, sold: 0, revenue: 0, status: "Bản nháp", isNew: true, description: "", fullDescription: "",
-      image: "", gallery: [], technicalImage: "", weightGrams: 0, lengthCm: undefined, widthCm: undefined, heightCm: undefined, qualityGrades: [], beadSizes: [], priceVariants: [], seoTitle: "", seoDescription: "",
+      image: "", gallery: [], coverVideoUrl: "", technicalImage: "", technicalVideo: "", weightGrams: 0, lengthCm: undefined, widthCm: undefined, heightCm: undefined, qualityGrades: [], beadSizes: [], priceVariants: [], seoTitle: "", seoDescription: "",
     }));
   };
 
@@ -254,9 +263,9 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     setUploadingVariantMedia((current) => ({ ...current, [key]: true }));
     try {
       const added: string[] = [];
-      for (const file of files) added.push(await compressProductImage(file));
+      for (const file of files) added.push(await uploadProductImage(file, `variant-${product.id}-${key}-${existing.length + added.length + 1}.webp`, `${product.name} · ${variant.quality}`));
       updateVariant(variant, { imageUrls: [...existing, ...added].slice(0, 8) });
-      onNotify(`Đã thêm ${added.length} ảnh cho SKU ${variant.sku || "biến thể"}. Lưu sản phẩm để hoàn tất.`);
+      onNotify(`Đã tải ${added.length} ảnh lên cho SKU ${variant.sku || "biến thể"}. Lưu sản phẩm để hoàn tất.`);
     } catch (error) { onNotify(error instanceof Error ? error.message : "Không xử lý được ảnh biến thể."); }
     finally { setUploadingVariantMedia((current) => ({ ...current, [key]: false })); }
   };
@@ -265,27 +274,12 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     if (!file) return;
     if (!variant.videoUrl && (variant.imageUrls?.length || 0) >= MAX_VARIANT_MEDIA_ITEMS) { onNotify(`Mỗi biến thể tối đa ${MAX_VARIANT_MEDIA_ITEMS} tệp, tính cả video.`); return; }
     const extension = file.name.split(".").pop()?.toLowerCase();
-    const mimeType = file.type.toLowerCase().split(";", 1)[0] || (extension === "webm" ? "video/webm" : extension === "mp4" ? "video/mp4" : "");
-    if (mimeType !== "video/mp4" && mimeType !== "video/webm") { onNotify("Chỉ nhận video MP4 hoặc WebM."); return; }
-    if (!file.size || file.size > 8 * 1024 * 1024) { onNotify("Video biến thể tối đa 8 MB."); return; }
+    if (extension !== "webm" && extension !== "mp4") { onNotify("Chỉ nhận video MP4 hoặc WebM."); return; }
     const key = variant.sku || `${variant.quality}-${variant.beadSize || ""}`;
     setUploadingVariantMedia((current) => ({ ...current, [key]: true }));
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Không đọc được video."));
-        reader.onerror = () => reject(new Error("Không đọc được video."));
-        reader.readAsDataURL(file);
-      });
-      const response = await fetch(`${apiBaseUrl}/media`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filename: file.name, mimeType, base64: dataUrl.slice(dataUrl.indexOf(",") + 1), alt: `${product.name} · ${variant.quality}` }) });
-      if (!response.ok) {
-        let message = "Không thể lưu video biến thể.";
-        try { const body = await response.json(); message = Array.isArray(body.message) ? body.message.join(" ") : body.message || message; } catch { /* keep default */ }
-        throw new Error(message);
-      }
-      const asset = await response.json() as { url?: string };
-      if (!asset.url) throw new Error("API chưa trả đường dẫn video đã lưu.");
-      updateVariant(variant, { videoUrl: asset.url });
+      const url = await uploadProductVideo(file, `variant-${product.id}-${key}.${extension}`, `${product.name} · ${variant.quality}`);
+      updateVariant(variant, { videoUrl: url });
       onNotify(`Đã tải video cho SKU ${variant.sku || "biến thể"}.`);
     } catch (error) { onNotify(error instanceof Error ? error.message : "Không tải được video biến thể."); }
     finally { setUploadingVariantMedia((current) => ({ ...current, [key]: false })); }
@@ -305,19 +299,35 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     let failure = "";
     try {
       for (const file of files) {
-        try { added.push(await compressProductImage(file)); }
+        try { added.push(await uploadProductImage(file, `product-${product.id}-${existing.length + added.length + 1}.webp`, product.name)); }
         catch (error) { failure = error instanceof Error ? error.message : "Không thể xử lý ảnh."; }
       }
       if (added.length) {
         const next = [...existing, ...added].slice(0, MAX_PRODUCT_IMAGES);
         setProduct((current) => ({ ...current, gallery: next, image: next[0] ?? "" }));
         setImagePreview(next[0] ?? "");
-        onNotify(`Đã thêm ${added.length} ảnh. Ảnh đầu tiên là ảnh bìa; lưu sản phẩm để đồng bộ.`);
+        onNotify(`Đã tải ${added.length} ảnh lên. Ảnh đầu tiên là ảnh bìa; lưu sản phẩm để hoàn tất.`);
       }
       if (files.length < fileList.length) onNotify(`Mỗi sản phẩm tối đa ${MAX_PRODUCT_IMAGES} ảnh; các ảnh vượt giới hạn chưa được thêm.`);
       else if (failure) onNotify(failure);
     } finally {
       setUploadingImages(false);
+    }
+  };
+
+  const handleCoverVideo = async (file?: File) => {
+    if (!file) return;
+    const extension = file.name.split(".").pop()?.toLowerCase();
+    if (extension !== "mp4" && extension !== "webm") { onNotify("Chỉ nhận video MP4 hoặc WebM."); return; }
+    setUploadingCoverVideo(true);
+    try {
+      const url = await uploadProductVideo(file, `product-${product.id}-cover.${extension}`, `${product.name} · video bìa`);
+      update("coverVideoUrl", url);
+      onNotify("Đã tải video bìa lên. Video sẽ tự chạy, tắt tiếng và lặp trên website.");
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : "Không thể tải video bìa.");
+    } finally {
+      setUploadingCoverVideo(false);
     }
   };
 
@@ -331,17 +341,29 @@ export default function ProductCreatePage({ products, categories: categoryRecord
   const handleTechnicalImage = async (file: File) => {
     setUploadingTechnicalImage(true);
     try {
-      update("technicalImage", await compressProductImage(file));
-      onNotify("Đã thêm ảnh kỹ thuật. Lưu sản phẩm để ghi vào database.");
+      update("technicalImage", await uploadProductImage(file, `product-${product.id}-technical.webp`, `${product.name} · ảnh kỹ thuật`));
+      update("technicalVideo", "");
+      onNotify("Đã tải ảnh kỹ thuật lên. Lưu sản phẩm để ghi vào database.");
     } catch (error) {
       onNotify(error instanceof Error ? error.message : "Không thể xử lý ảnh kỹ thuật.");
     } finally {
       setUploadingTechnicalImage(false);
     }
   };
+  const handleTechnicalVideo = async (file: File) => {
+    const extension = file.name.split(".").pop()?.toLowerCase();
+    if (extension !== "mp4" && extension !== "webm") { onNotify("Chỉ nhận video MP4 hoặc WebM."); return; }
+    setUploadingTechnicalVideo(true);
+    try {
+      update("technicalVideo", await uploadProductVideo(file, `product-${product.id}-technical.${extension}`, `${product.name} · video kỹ thuật`));
+      update("technicalImage", "");
+      onNotify("Đã tải video kỹ thuật lên. Lưu sản phẩm để hoàn tất.");
+    } catch (error) { onNotify(error instanceof Error ? error.message : "Không thể tải video kỹ thuật."); }
+    finally { setUploadingTechnicalVideo(false); }
+  };
 
   const save = async (publish: boolean) => {
-    if (saving || uploadingImages || uploadingTechnicalImage || Object.values(uploadingVariantMedia).some(Boolean)) return;
+    if (saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)) return;
     if (!selectedInventoryProduct) {
       onNotify("Chọn một SKU đã có trong kho trước khi lưu bài đăng. Muốn tạo SKU mới, hãy dùng mục Nhập hàng.");
       setActiveTab("basic");
@@ -389,8 +411,8 @@ export default function ProductCreatePage({ products, categories: categoryRecord
         <div><h1>Tạo bài đăng</h1><p>Chọn một SKU đã có trong kho để đưa lên website GEME.</p></div>
       </div>
       <div className="product-create-actions">
-        <button className="button button-quiet" disabled={saving || uploadingImages || uploadingTechnicalImage || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save(false)}>{saving ? "Đang lưu…" : "Lưu nháp"}</button>
-        <button className="button button-primary" disabled={saving || uploadingImages || uploadingTechnicalImage || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save(true)}><span>↗</span>{saving ? "Đang lưu…" : "Lưu và đăng"}</button>
+        <button className="button button-quiet" disabled={saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save(false)}>{saving ? "Đang lưu…" : "Lưu nháp"}</button>
+        <button className="button button-primary" disabled={saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save(true)}><span>↗</span>{saving ? "Đang lưu…" : uploadingImages || uploadingCoverVideo || uploadingTechnicalVideo ? "Đang tải media…" : "Lưu và đăng"}</button>
       </div>
     </div>
 
@@ -420,12 +442,13 @@ export default function ProductCreatePage({ products, categories: categoryRecord
 
             <section className="create-card create-images-card">
               <div className="create-card-title"><h2>Hình ảnh sản phẩm</h2><span>Tối thiểu 1 ảnh, tối đa 10 ảnh</span></div>
+              <div className="create-cover-video-field"><div><strong>Video bìa (không bắt buộc)</strong><small>MP4/WebM tối đa 8 MB. Nếu có video, web sẽ ưu tiên hiển thị video thay ảnh bìa.</small></div>{product.coverVideoUrl && <video src={product.coverVideoUrl} muted autoPlay loop playsInline preload="metadata" aria-label={`${product.name} · video bìa`}/>}<label><input type="file" accept="video/mp4,video/webm,.mp4,.webm" disabled={uploadingCoverVideo} onChange={(event) => { void handleCoverVideo(event.target.files?.[0]); event.currentTarget.value = ""; }}/><span>{uploadingCoverVideo ? "Đang tải video…" : product.coverVideoUrl ? "Đổi video bìa" : "Chọn video bìa"}</span></label>{product.coverVideoUrl && <button type="button" onClick={() => update("coverVideoUrl", "")}>Gỡ video</button>}<label className="create-cover-video-url"><span>Hoặc dán đường dẫn video</span><input type="url" value={product.coverVideoUrl || ""} onChange={(event) => update("coverVideoUrl", event.target.value)} placeholder="https://… hoặc /media/…"/></label></div>
               <div className="create-upload-row">
                 <label className="create-upload-tile"><input type="file" accept="image/*" multiple disabled={uploadingImages || (product.gallery?.length ?? 0) >= MAX_PRODUCT_IMAGES} onChange={(event) => { void handleImages(event.target.files ?? undefined); event.currentTarget.value = ""; }}/><span className="upload-cloud">⇧</span><strong>Thêm nhiều ảnh</strong><small>Chọn cùng lúc nhiều tệp</small><small>(Tối đa {MAX_PRODUCT_IMAGES} ảnh)</small></label>
                 {(product.gallery ?? []).map((src, index) => <div className="create-image-thumb" key={`${src}-${index}`}><img src={src} alt={`Ảnh sản phẩm ${index + 1}`}/><small>{index === 0 ? "Ảnh bìa" : `Ảnh ${index + 1}`}</small><button type="button" aria-label={`Xóa ảnh ${index + 1}`} onClick={() => removeImage(index)}>×</button></div>)}
-                <label className="create-upload-more"><input type="file" accept="image/*" multiple disabled={uploadingImages || (product.gallery?.length ?? 0) >= MAX_PRODUCT_IMAGES} onChange={(event) => { void handleImages(event.target.files ?? undefined); event.currentTarget.value = ""; }}/><strong>＋</strong><span>{uploadingImages ? "Đang nén ảnh" : "Thêm ảnh"}</span></label>
+                <label className="create-upload-more"><input type="file" accept="image/*" multiple disabled={uploadingImages || (product.gallery?.length ?? 0) >= MAX_PRODUCT_IMAGES} onChange={(event) => { void handleImages(event.target.files ?? undefined); event.currentTarget.value = ""; }}/><strong>＋</strong><span>{uploadingImages ? "Đang tải ảnh" : "Thêm ảnh"}</span></label>
               </div>
-              <TechnicalImagePicker image={product.technicalImage} uploading={uploadingTechnicalImage} onSelect={(file) => void handleTechnicalImage(file)} onRemove={() => update("technicalImage", "")}/>
+              <TechnicalImagePicker image={product.technicalImage} video={product.technicalVideo} uploading={uploadingTechnicalImage} uploadingVideo={uploadingTechnicalVideo} onSelect={(file) => void handleTechnicalImage(file)} onSelectVideo={(file) => void handleTechnicalVideo(file)} onRemove={() => update("technicalImage", "")} onRemoveVideo={() => update("technicalVideo", "")}/>
             </section>
           </div>
 
@@ -454,7 +477,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
           </div>
         </div>}
 
-        {activeTab === "images" && <section className="create-card create-tab-card"><div className="create-card-title"><div><h2>Hình ảnh &amp; Video</h2><p>Chọn nhiều ảnh; ảnh đầu tiên sẽ làm ảnh bìa.</p></div><span>{product.gallery?.length ?? 0}/{MAX_PRODUCT_IMAGES} ảnh</span></div><label className="create-upload-wide"><input type="file" accept="image/*" multiple disabled={uploadingImages || (product.gallery?.length ?? 0) >= MAX_PRODUCT_IMAGES} onChange={(event) => { void handleImages(event.target.files ?? undefined); event.currentTarget.value = ""; }}/><span className="upload-cloud">⇧</span><strong>{uploadingImages ? "Đang nén ảnh…" : "Chọn một hoặc nhiều ảnh"}</strong><small>Ảnh sẽ tự tối ưu trước khi lưu.</small><button type="button" className="button button-quiet">Chọn hình ảnh</button></label><div className="create-image-gallery">{(product.gallery ?? []).map((src, index) => <div className="create-image-thumb large" key={`${src}-${index}`}><img src={src} alt={`Ảnh sản phẩm ${index + 1}`}/><span>{index === 0 ? "Ảnh bìa" : `Ảnh ${index + 1}`}</span><button type="button" aria-label={`Xóa ảnh ${index + 1}`} onClick={() => removeImage(index)}>×</button></div>)}</div><TechnicalImagePicker image={product.technicalImage} uploading={uploadingTechnicalImage} onSelect={(file) => void handleTechnicalImage(file)} onRemove={() => update("technicalImage", "")}/><div className="create-image-info"><strong>Mẹo chụp ảnh sản phẩm</strong><span>Dùng ánh sáng tự nhiên, nền đơn giản và chụp sản phẩm từ nhiều góc để khách dễ quan sát chất liệu.</span></div></section>}
+        {activeTab === "images" && <section className="create-card create-tab-card"><div className="create-card-title"><div><h2>Hình ảnh &amp; Video</h2><p>Video bìa tự chạy khi khách nhìn thấy sản phẩm, tắt tiếng và lặp liên tục.</p></div><span>{product.gallery?.length ?? 0}/{MAX_PRODUCT_IMAGES} ảnh</span></div><div className="create-cover-video-field"><div><strong>Video bìa (không bắt buộc)</strong><small>MP4/WebM tối đa 8 MB. Khi có video, website ưu tiên phát video thay ảnh bìa.</small></div>{product.coverVideoUrl && <video src={product.coverVideoUrl} muted autoPlay loop playsInline preload="metadata" aria-label={`${product.name} · video bìa`}/>}<label><input type="file" accept="video/mp4,video/webm,.mp4,.webm" disabled={uploadingCoverVideo} onChange={(event) => { void handleCoverVideo(event.target.files?.[0]); event.currentTarget.value = ""; }}/><span>{uploadingCoverVideo ? "Đang tải video…" : product.coverVideoUrl ? "Đổi video bìa" : "Chọn video bìa"}</span></label>{product.coverVideoUrl && <button type="button" onClick={() => update("coverVideoUrl", "")}>Gỡ video</button>}<label className="create-cover-video-url"><span>Hoặc dán đường dẫn video</span><input type="url" value={product.coverVideoUrl || ""} onChange={(event) => update("coverVideoUrl", event.target.value)} placeholder="https://… hoặc /media/…"/></label></div><label className="create-upload-wide"><input type="file" accept="image/*" multiple disabled={uploadingImages || (product.gallery?.length ?? 0) >= MAX_PRODUCT_IMAGES} onChange={(event) => { void handleImages(event.target.files ?? undefined); event.currentTarget.value = ""; }}/><span className="upload-cloud">⇧</span><strong>{uploadingImages ? "Đang tải ảnh lên…" : "Chọn một hoặc nhiều ảnh"}</strong><small>Ảnh được tối ưu và tải lên ngay khi chọn.</small><button type="button" className="button button-quiet">Chọn hình ảnh</button></label><div className="create-image-gallery">{(product.gallery ?? []).map((src, index) => <div className="create-image-thumb large" key={`${src}-${index}`}><img src={src} alt={`Ảnh sản phẩm ${index + 1}`}/><span>{index === 0 && !product.coverVideoUrl ? "Ảnh bìa dự phòng" : `Ảnh ${index + 1}`}</span><button type="button" aria-label={`Xóa ảnh ${index + 1}`} onClick={() => removeImage(index)}>×</button></div>)}</div><TechnicalImagePicker image={product.technicalImage} video={product.technicalVideo} uploading={uploadingTechnicalImage} uploadingVideo={uploadingTechnicalVideo} onSelect={(file) => void handleTechnicalImage(file)} onSelectVideo={(file) => void handleTechnicalVideo(file)} onRemove={() => update("technicalImage", "")} onRemoveVideo={() => update("technicalVideo", "")}/><div className="create-image-info"><strong>Mẹo chụp ảnh sản phẩm</strong><span>Dùng ánh sáng tự nhiên, nền đơn giản và chụp sản phẩm từ nhiều góc để khách dễ quan sát chất liệu.</span></div></section>}
 
         {activeTab === "variants" && <section className="create-card create-tab-card">
           <div className="create-card-title"><div><h2>Thông số &amp; Biến thể</h2><p>Biến thể và số lượng lấy từ kho. Tại đây chỉ nhập giá bán cho từng lựa chọn, không tạo hay xóa biến thể.</p></div></div>
@@ -468,7 +491,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
 
       <aside className="create-live-preview">
         <div className="create-preview-heading"><h2>Xem trước sản phẩm</h2><button onClick={() => onNotify("Trang sản phẩm sẽ xem được sau khi kết nối website GEME.")}>◉ <span>Xem trang sản phẩm</span></button></div>
-        {previewImage ? <img className="create-preview-image" src={previewImage} alt={product.name || "Ảnh xem trước sản phẩm"}/> : <div className="create-preview-image create-preview-placeholder">Ảnh sản phẩm sẽ hiển thị tại đây</div>}
+        {product.coverVideoUrl ? <video className="create-preview-image" src={product.coverVideoUrl} muted autoPlay loop playsInline preload="metadata" aria-label={`${product.name} · video bìa`}/> : previewImage ? <img className="create-preview-image" src={previewImage} alt={product.name || "Ảnh xem trước sản phẩm"}/> : <div className="create-preview-image create-preview-placeholder">Ảnh sản phẩm sẽ hiển thị tại đây</div>}
         <h3>{product.name || "Tên sản phẩm"}</h3>
         <p>GEME　|　Mã: {product.id}</p>
         <div className="create-preview-price"><strong>{money(previewPrice)}</strong>{(product.originalPrice ?? 0) > previewPrice && <del>{money(product.originalPrice ?? 0)}</del>}{product.isNew && <span>Mới</span>}</div>

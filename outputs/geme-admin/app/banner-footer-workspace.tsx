@@ -118,6 +118,10 @@ function canonicalBannerPosition(position: unknown) {
     "mặt đá quý": "Mặt đá quý - Banner",
     blog: "Blog - Banner",
     "new arrivals": "New Arrivals - Hero",
+    "đăng nhập": "Đăng nhập - Banner",
+    "đăng nhập - banner": "Đăng nhập - Banner",
+    "tài khoản": "Đăng nhập - Banner",
+    "tài khoản - banner": "Đăng nhập - Banner",
     "liên hệ - cta": "Liên hệ - Banner tư vấn",
     "về geme - cuối trang": "Về GEME - Banner cuối",
     "new arrivals - cuối trang": "New Arrivals - Banner cuối",
@@ -133,12 +137,6 @@ const carouselCopy = [
   { eyebrow: "COLLECTION / GEME", title: "Tinh tế trong từng chi tiết", description: "Dấu ấn thủ công và vẻ đẹp thiên nhiên gặp nhau trong những món trang sức GEME.", ctaLabel: "Khám phá trang sức", href: "#san-pham" },
 ];
 
-const retiredHomePositions = new Set([
-  "Trang chủ - Dải đá quý",
-  "Trang chủ - Ô New Arrivals",
-  "Trang chủ - Viên đá",
-]);
-
 const currentHomePositions = [
   "Trang chủ - Hero",
   "Trang chủ - Ô Trang sức",
@@ -151,6 +149,23 @@ const currentHomePositions = [
   "Trang chủ - GEME trên bạn - Nhẫn",
   "Trang chủ - GEME trên bạn - Khuyên tai",
 ];
+
+// Keep this list aligned with the banner positions the storefront actually reads.
+// Legacy settings remain stored, but are not offered as editable placements.
+const websiteBannerPositions = [
+  ...currentHomePositions,
+  "Trang sức - Carousel 1",
+  "Trang sức - Carousel 2",
+  "Trang sức - Carousel 3",
+  "Trang sức - Carousel 4",
+  "Trang sức - Carousel 5",
+  "Về GEME - Hero",
+  "Về GEME - Câu chuyện",
+  "Về GEME - Sứ mệnh",
+  "New Arrivals - Hero",
+  "Đăng nhập - Banner",
+];
+const websiteBannerPositionSet = new Set(websiteBannerPositions);
 
 const fallbackBanners: Banner[] = [
   ["Trang chủ · Hero", "Trang chủ - Hero", "/images/home/geme/01-hero-opal.webp"],
@@ -168,21 +183,32 @@ const fallbackBanners: Banner[] = [
   ["Trang sức · Carousel 3", "Trang sức - Banner 3", "/assets/collection-jewelry-banner-3.png"],
   ["Trang sức · Carousel 4", "Trang sức - Banner 4", "/assets/collection-jewelry-banner-4.png"],
   ["Trang sức · Carousel 5", "Trang sức - Banner 5", "/assets/collection-jewelry-banner-5.png"],
-  ["Mặt đá quý", "Mặt đá quý - Banner", "/assets/gemstone-banner-crisp.jpg"],
-  ["Blog", "Blog - Banner", "/assets/blog-banner.png"],
   ["Về GEME · Hero", "Về GEME - Hero", "/assets/about-geme-hero.png"],
   ["Về GEME · Câu chuyện", "Về GEME - Câu chuyện", "/assets/about-geme-intro.png"],
   ["Về GEME · Sứ mệnh", "Về GEME - Sứ mệnh", "/assets/about-geme-opal.png"],
-  ["Về GEME · Cuối trang", "Về GEME - Banner cuối", "/assets/about-geme-footer.png"],
-  ["Liên hệ · Hero", "Liên hệ - Hero", "/assets/collection-jewelry-banner-4.png"],
-  ["Liên hệ · CTA", "Liên hệ - Banner tư vấn", "/assets/collection-jewelry-banner-1.png"],
-  ["New Arrivals", "New Arrivals - Hero", "/assets/collection-jewelry-banner-1.png"],
-  ["New Arrivals · cuối trang", "New Arrivals - Banner cuối", "/assets/blog-card-gemstones.png"],
+  ["New Arrivals", "New Arrivals - Hero", "/assets/new-arrivals-hero.png"],
+  ["Đăng nhập GEME", "Đăng nhập - Banner", "/assets/category-jewelry-final.jpg"],
 ].map(([position, name, imageUrl], index) => {
   const canonicalPosition = canonicalBannerPosition(position);
   const carouselIndex = Number(canonicalPosition.match(/^Trang sức - Carousel ([1-5])$/)?.[1] || 0) - 1;
   return { id: `seed-${index + 1}`, name, position: canonicalPosition, imageUrl, season: "", startAt: "", endAt: "", href: "", status: "ACTIVE", devices: ["desktop", "tablet", "mobile"], ...(carouselIndex >= 0 ? carouselCopy[carouselIndex] : {}) } as Banner;
 });
+const loginBannerFallback: Banner = {
+  id: "seed-login-banner",
+  name: "Đăng nhập GEME",
+  position: "Đăng nhập - Banner",
+  imageUrl: "/assets/category-jewelry-final.jpg",
+  eyebrow: "KHÔNG GIAN CỦA BẠN",
+  title: "Chào mừng bạn trở lại GEME",
+  description: "Tiếp tục hành trình khám phá những viên đá quý độc đáo cùng GEME.",
+  ctaLabel: "",
+  season: "",
+  startAt: "",
+  endAt: "",
+  href: "",
+  status: "ACTIVE",
+  devices: ["desktop", "tablet", "mobile"],
+};
 
 const defaultFooter: FooterContent = {
   brandDescription: "Natural Gemstones · Fine Jewelry · For You",
@@ -205,14 +231,22 @@ function normalizeBanners(value: unknown): Banner[] {
   const normalized: Banner[] = value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")).map((item, index) => {
     const position = canonicalBannerPosition(item.position);
     const defaultBanner = defaultsByPosition.get(position);
-    const isSeededDefault = String(item.id || "").startsWith("seed-") && Boolean(defaultBanner);
+    const savedImageUrl = typeof item.imageUrl === "string" ? item.imageUrl : "";
+    // The storefront deliberately treats this former admin default as missing.
+    // Show the same effective hero image in admin while preserving real uploads.
+    const effectiveImageUrl = position === "New Arrivals - Hero" && savedImageUrl === "/assets/collection-jewelry-banner-1.png"
+      ? "/assets/new-arrivals-hero.png"
+      : savedImageUrl || defaultBanner?.imageUrl || "";
     return {
-      id: String(item.id || `banner-${index + 1}`), name: isSeededDefault ? defaultBanner!.name : String(item.name || "Banner mới"), position,
-      imageUrl: isSeededDefault ? defaultBanner!.imageUrl : String(item.imageUrl || ""), eyebrow: String(item.eyebrow || ""), title: String(item.title || ""), description: String(item.description || ""), ctaLabel: String(item.ctaLabel || ""), season: String(item.season || ""), startAt: String(item.startAt || ""), endAt: String(item.endAt || ""), href: String(item.href || ""), status: item.status === "HIDDEN" || item.status === "SCHEDULED" ? item.status : "ACTIVE", devices: Array.isArray(item.devices) ? item.devices.map(String) : ["desktop", "tablet", "mobile"],
+      id: String(item.id || `banner-${index + 1}`), name: typeof item.name === "string" ? item.name : defaultBanner?.name || "Banner mới", position,
+      // A saved image is authoritative even when the record still has a seed-* ID.
+      imageUrl: effectiveImageUrl, eyebrow: String(item.eyebrow || ""), title: String(item.title || ""), description: String(item.description || ""), ctaLabel: String(item.ctaLabel || ""), season: String(item.season || ""), startAt: String(item.startAt || ""), endAt: String(item.endAt || ""), href: String(item.href || ""), status: item.status === "HIDDEN" || item.status === "SCHEDULED" ? item.status : "ACTIVE", devices: Array.isArray(item.devices) ? item.devices.map(String) : ["desktop", "tablet", "mobile"],
     };
   });
-  const requiredHomeBanners = fallbackBanners.filter((item) => currentHomePositions.includes(item.position));
-  return [...normalized, ...requiredHomeBanners.filter((item) => !normalized.some((saved) => saved.position === item.position))];
+  const requiredWebsiteBanners = fallbackBanners.filter((item) => websiteBannerPositionSet.has(item.position));
+  const complete = [...normalized, ...requiredWebsiteBanners.filter((item) => !normalized.some((saved) => saved.position === item.position))];
+  if (!complete.some((item) => canonicalBannerPosition(item.position) === "Đăng nhập - Banner")) complete.push(loginBannerFallback);
+  return complete;
 }
 
 function normalizeFooter(value: unknown): FooterContent {
@@ -330,7 +364,7 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
     return () => document.removeEventListener("keydown", closeOnEscape, true);
   }, [zoomImage]);
   const selected = useMemo(() => banners.find((item) => item.id === selectedId), [banners, selectedId]);
-  const managedBanners = useMemo(() => banners.filter((item) => !retiredHomePositions.has(item.position)), [banners]);
+  const managedBanners = useMemo(() => banners.filter((item) => websiteBannerPositionSet.has(item.position)), [banners]);
   const positions = useMemo(() => [...new Set(managedBanners.map((item) => item.position))], [managedBanners]);
   const seasons = useMemo(() => [...new Set(["Mùa xuân", "Mùa hạ", "Mùa thu", "Mùa đông", "Tết", "Giáng Sinh", "Hè", ...banners.map((item) => item.season)].filter(Boolean))], [banners]);
   const visibleBanners = useMemo(() => managedBanners.filter((item) => (filterPosition === "Tất cả vị trí" || item.position === filterPosition) && (filterSeason === "Tất cả mùa" || item.season === filterSeason)), [managedBanners, filterPosition, filterSeason]);
@@ -350,14 +384,16 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
     void fetch(`${apiBaseUrl}/settings`, { cache: "no-store" }).then((response) => { if (!response.ok) throw new Error(); return response.json(); }).then((settings: SiteContent) => {
       if (!alive) return;
       const nextBanners = normalizeBanners(settings.banners);
-      const firstManagedBanner = nextBanners.find((item) => !retiredHomePositions.has(item.position));
-      const savedHomePositions = new Set(Array.isArray(settings.banners) ? settings.banners.flatMap((item: unknown) => {
+      const loginFallback = fallbackBanners.find((item) => item.position === "Đăng nhập - Banner");
+      if (loginFallback && !nextBanners.some((item) => item.position === "Đăng nhập - Banner")) nextBanners.push(loginFallback);
+      const firstManagedBanner = nextBanners.find((item) => websiteBannerPositionSet.has(item.position));
+      const savedWebsitePositions = new Set(Array.isArray(settings.banners) ? settings.banners.flatMap((item: unknown) => {
         if (!item || typeof item !== "object" || !("position" in item)) return [];
         const position = canonicalBannerPosition(item.position);
-        return currentHomePositions.includes(position) ? [position] : [];
+        return websiteBannerPositionSet.has(position) ? [position] : [];
       }) : []);
-      const hasSavedAllHomeSlots = currentHomePositions.every((position) => savedHomePositions.has(position));
-      setBanners(nextBanners); setSelectedId(firstManagedBanner?.id || ""); setDraft(firstManagedBanner || emptyBanner()); setFooter(normalizeFooter(settings.footerContent)); setCatalogPromos(normalizeCatalogEditorialPromos(settings.catalogEditorialPromos)); setNewArrivalsMedia(normalizeNewArrivalsMedia(settings.newArrivalsMedia)); setBannerConfigSaved(hasSavedAllHomeSlots); setLoaded(true);
+      const hasSavedAllWebsiteSlots = websiteBannerPositions.every((position) => savedWebsitePositions.has(position));
+      setBanners(nextBanners); setSelectedId(firstManagedBanner?.id || ""); setDraft(firstManagedBanner || emptyBanner()); setFooter(normalizeFooter(settings.footerContent)); setCatalogPromos(normalizeCatalogEditorialPromos(settings.catalogEditorialPromos)); setNewArrivalsMedia(normalizeNewArrivalsMedia(settings.newArrivalsMedia)); setBannerConfigSaved(hasSavedAllWebsiteSlots); setLoaded(true);
     }).catch(() => { if (alive) { setLoaded(true); notifyRef.current("Không tải được cấu hình nội dung từ database."); } });
     return () => { alive = false; };
   }, []);
@@ -372,6 +408,17 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
   const selectBanner = (banner: Banner) => { setSelectedId(banner.id); setDraft({ ...banner }); };
   const editBanner = (banner: Banner) => {
     selectBanner(banner);
+    setTab("banners");
+    window.requestAnimationFrame(() => document.querySelector(".bf-editor-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+  const editLoginBanner = () => {
+    const existing = banners.find((item) => canonicalBannerPosition(item.position) === "Đăng nhập - Banner");
+    const banner = existing || loginBannerFallback;
+    if (!existing) setBanners((current) => [...current, banner]);
+    setFilterPosition("Đăng nhập - Banner");
+    setFilterSeason("Tất cả mùa");
+    setSelectedId(banner.id);
+    setDraft({ ...banner });
     setTab("banners");
     window.requestAnimationFrame(() => document.querySelector(".bf-editor-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
@@ -498,7 +545,7 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
   const isJewelryCarousel = /^Trang sức - Carousel [1-5]$/.test(draft.position);
 
   return <section className="bf-workspace">
-    <div className="page-heading bf-heading"><div><h1>Quản lý Banner &amp; Footer</h1><p>Cập nhật banner và nội dung chân trang; ảnh được lưu bền vững trong database.</p></div>{tab === "banners" && <button className="button button-primary" onClick={beginCreate}>＋ Thêm banner mới</button>}</div>
+    <div className="page-heading bf-heading"><div><h1>Quản lý Banner &amp; Footer</h1><p>Cập nhật banner và nội dung chân trang; ảnh được lưu bền vững trong database.</p></div>{tab === "banners" && <div className="bf-heading-actions"><button className="button button-quiet" onClick={editLoginBanner}>Chỉnh ảnh đăng nhập</button><button className="button button-primary" onClick={beginCreate}>＋ Thêm banner mới</button></div>}</div>
     <div className="bf-tabs"><button className={tab === "banners" ? "active" : ""} onClick={() => setTab("banners")}>▧ &nbsp; Banner</button><button className={tab === "footer" ? "active" : ""} onClick={() => setTab("footer")}>▤ &nbsp; Footer</button><button className={tab === "catalog" ? "active" : ""} onClick={() => setTab("catalog")}>▧ &nbsp; Ảnh &amp; video Trang sức / New Arrivals</button><button className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}>▦ &nbsp; Thư viện ảnh</button></div>
 
     {tab === "banners" ? <div className="bf-banner-layout">
@@ -509,8 +556,8 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
 
       <aside className="bf-editor-panel"><h2>{banners.some((item) => item.id === draft.id) ? "Chỉnh sửa banner" : "Thêm banner"}</h2><p>Thay đổi hiển thị ở các trang dùng vị trí tương ứng.</p>
         <label className="bf-field"><span>Tên banner</span><input value={draft.name} onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))} placeholder="Ví dụ: Banner trang chủ mùa xuân"/></label>
-        <label className="bf-field"><span>Vị trí hiển thị</span><select value={draft.position} onChange={(event) => setDraft((old) => ({ ...old, position: event.target.value }))}>{[...new Set([...currentHomePositions, "Trang sức - Carousel 1", "Trang sức - Carousel 2", "Trang sức - Carousel 3", "Trang sức - Carousel 4", "Trang sức - Carousel 5", "Mặt đá quý - Banner", "Blog - Banner", "Về GEME - Hero", "Về GEME - Câu chuyện", "Về GEME - Sứ mệnh", "Về GEME - Banner cuối", "Liên hệ - Hero", "Liên hệ - Banner tư vấn", "New Arrivals - Hero", "New Arrivals - Banner cuối", ...positions])].filter((position) => !retiredHomePositions.has(position)).map((position) => <option key={position}>{position}</option>)}</select></label>
-        <label className="bf-field"><span>Ảnh banner</span><span className="bf-image-picker">{draft.imageUrl ? <img src={apiImageUrl(draft.imageUrl)} alt="Xem trước banner"/> : <span className="bf-image-empty">Chọn ảnh banner</span>}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void pickBannerImage(event)} disabled={uploading}/></span>{draft.imageUrl && <button type="button" className="bf-preview-zoom" onClick={() => setZoomImage({ url: apiImageUrl(draft.imageUrl), name: draft.name || "Banner GEME" })}>Phóng to ảnh đang chọn</button>}</label>
+        <label className="bf-field"><span>Vị trí hiển thị</span><select value={draft.position} onChange={(event) => setDraft((old) => ({ ...old, position: event.target.value }))}>{websiteBannerPositions.map((position) => <option key={position}>{position}</option>)}</select></label>
+        <div className="bf-field"><span>Ảnh banner</span><span className="bf-image-picker">{draft.imageUrl ? <img src={apiImageUrl(draft.imageUrl)} alt="Xem trước banner"/> : <span className="bf-image-empty">Chưa chọn ảnh banner</span>}</span><label className="bf-image-upload-control"><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void pickBannerImage(event)} disabled={uploading}/><span>{uploading ? "Đang tải ảnh…" : draft.imageUrl ? "Chọn ảnh khác" : "Tải ảnh banner"}</span><small>PNG, JPG hoặc WebP</small></label>{draft.imageUrl && <button type="button" className="bf-preview-zoom" onClick={() => setZoomImage({ url: apiImageUrl(draft.imageUrl), name: draft.name || "Banner GEME" })}>Phóng to ảnh đang chọn</button>}</div>
         {isJewelryCarousel && <div className="bf-banner-copy-fields"><p>Nội dung hiển thị trên slide (để trống sẽ dùng nội dung mặc định của GEME).</p><div className="bf-two-fields"><label className="bf-field"><span>Nhãn nhỏ</span><input value={draft.eyebrow || ""} onChange={(event) => setDraft((old) => ({ ...old, eyebrow: event.target.value }))} placeholder="COLLECTION / GEME"/></label><label className="bf-field"><span>Tiêu đề</span><input value={draft.title || ""} onChange={(event) => setDraft((old) => ({ ...old, title: event.target.value }))} placeholder="Tất cả sản phẩm"/></label></div><label className="bf-field"><span>Mô tả</span><textarea rows={3} value={draft.description || ""} onChange={(event) => setDraft((old) => ({ ...old, description: event.target.value }))} placeholder="Trang sức bạc tinh tế kết hợp đá quý thiên nhiên…"/></label><label className="bf-field"><span>Nhãn liên kết</span><input value={draft.ctaLabel || ""} onChange={(event) => setDraft((old) => ({ ...old, ctaLabel: event.target.value }))} placeholder="Khám phá trang sức"/></label></div>}
         <div className="bf-two-fields"><label className="bf-field"><span>Mùa áp dụng</span><select value={draft.season} onChange={(event) => setDraft((old) => ({ ...old, season: event.target.value }))}><option value="">Không theo mùa</option>{[...new Set([...seasons, draft.season].filter(Boolean))].map((season) => <option key={season} value={season}>{season}</option>)}</select></label><label className="bf-field"><span>Liên kết khi bấm</span><input value={draft.href} onChange={(event) => setDraft((old) => ({ ...old, href: event.target.value }))} placeholder="/san-pham"/></label></div>
         <div className="bf-two-fields"><label className="bf-field"><span>Bắt đầu</span><input type="date" value={draft.startAt} onChange={(event) => setDraft((old) => ({ ...old, startAt: event.target.value }))}/></label><label className="bf-field"><span>Kết thúc</span><input type="date" value={draft.endAt} onChange={(event) => setDraft((old) => ({ ...old, endAt: event.target.value }))}/></label></div>

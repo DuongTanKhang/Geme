@@ -62,6 +62,17 @@ export default function InventoryWorkspace({ categories, materials, initialTab, 
   const [saving, setSaving] = useState(false);
   const [editingMinimum, setEditingMinimum] = useState(false);
   const [minimumDraft, setMinimumDraft] = useState("5");
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetScope, setResetScope] = useState<"ALL" | "SELECTED">("ALL");
+  const [resetPreview, setResetPreview] = useState<{ selectedProductCount: number; affectedProductCount: number; skuCount: number; totalQuantity: number } | null>(null);
+  const [resetPreviewLoading, setResetPreviewLoading] = useState(false);
+  const [resetPreviewError, setResetPreviewError] = useState("");
+  const [resetPreviewAttempt, setResetPreviewAttempt] = useState(0);
+  const [resetNote, setResetNote] = useState("");
+  const [resetConfirmation, setResetConfirmation] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<InventoryProduct | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
 
   const reload = async () => {
     setLoading(true);
@@ -78,6 +89,20 @@ export default function InventoryWorkspace({ categories, materials, initialTab, 
 
   useEffect(() => { void reload(); }, []);
   useEffect(() => { setTab(initialTab); setPage(1); }, [initialTab]);
+  const selectedResetIds = selectedRows.join(",");
+  useEffect(() => {
+    if (!resetOpen) return;
+    let active = true;
+    setResetPreview(null);
+    setResetPreviewError("");
+    setResetPreviewLoading(true);
+    void request<{ selectedProductCount: number; affectedProductCount: number; skuCount: number; totalQuantity: number }>("inventory/reset/preview", {
+      method: "POST", body: JSON.stringify({ scope: resetScope, productIds: resetScope === "SELECTED" ? selectedResetIds.split(",").filter(Boolean) : [] }),
+      }).then((result) => { if (active) setResetPreview(result); })
+      .catch((cause) => { if (active) setResetPreviewError(cause instanceof Error ? cause.message : "Không xem trước được phạm vi reset."); })
+      .finally(() => { if (active) setResetPreviewLoading(false); });
+    return () => { active = false; };
+  }, [resetOpen, resetScope, selectedResetIds, resetPreviewAttempt]);
 
   const stoneOptions = useMemo(() => [...new Set(products.map(stoneNameOf).filter(Boolean))].sort((a, b) => a.localeCompare(b, "vi")), [products]);
   const filtered = useMemo(() => products.filter((product) => {
@@ -97,6 +122,8 @@ export default function InventoryWorkspace({ categories, materials, initialTab, 
     return groupA.localeCompare(groupB, "vi") || a.name.localeCompare(b.name, "vi");
   }), [pageRows]);
   const selected = filtered.find((product) => product.id === selectedId) || filtered[0];
+  const resetSkuCount = resetPreview?.skuCount || 0;
+  const resetUnitCount = resetPreview?.totalQuantity || 0;
   const summary = {
     total: products.length,
     available: products.filter((product) => product.stock > product.minimumStock).length,
@@ -113,6 +140,47 @@ export default function InventoryWorkspace({ categories, materials, initialTab, 
       setEditingMinimum(false);
       onNotify("Đã cập nhật mức tồn kho tối thiểu.");
     } catch (cause) { onNotify(cause instanceof Error ? cause.message : "Không thể lưu mức tồn tối thiểu."); }
+    finally { setSaving(false); }
+  };
+
+  const openReset = () => {
+    setResetScope(selectedRows.length ? "SELECTED" : "ALL");
+    setResetNote("");
+    setResetConfirmation("");
+    setResetOpen(true);
+  };
+
+  const submitReset = async () => {
+    if (!resetPreview || !resetNote.trim() || resetConfirmation !== "RESET" || (resetScope === "SELECTED" && !selectedRows.length)) return;
+    setSaving(true);
+    try {
+      const result = await request<{ issueNo: string; resetSummary?: { productCount: number; skuCount: number; totalQuantity: number } }>("inventory/reset", {
+        method: "POST", body: JSON.stringify({ scope: resetScope, productIds: resetScope === "SELECTED" ? selectedRows : [], note: resetNote, confirmation: resetConfirmation, expectedProductCount: resetPreview?.affectedProductCount, expectedSkuCount: resetPreview?.skuCount, expectedTotalQuantity: resetPreview?.totalQuantity }),
+      });
+      setResetOpen(false);
+      setSelectedRows([]);
+      onNotify(`Đã điều chỉnh ${money(result.resetSummary?.totalQuantity || 0)} cái từ ${money(result.resetSummary?.productCount || 0)} sản phẩm (${money(result.resetSummary?.skuCount || 0)} SKU). Phiếu ${result.issueNo} đã lưu; POS sẽ nhận tồn theo cấu hình đồng bộ.`);
+      await reload();
+    } catch (cause) { onNotify(cause instanceof Error ? cause.message : "Không thể reset kho."); }
+    finally { setSaving(false); }
+  };
+
+  const submitHardDelete = async () => {
+    if (!deleteTarget || !deleteReason.trim() || deleteConfirmation !== deleteTarget.sku) return;
+    setSaving(true);
+    try {
+      const result = await request<{ adjustmentIssueNo?: string | null }>(`products/${encodeURIComponent(deleteTarget.id)}`, {
+        method: "DELETE", body: JSON.stringify({ reason: deleteReason }),
+      });
+      setDeleteTarget(null);
+      setDeleteReason("");
+      setDeleteConfirmation("");
+      setSelectedRows((current) => current.filter((id) => id !== deleteTarget.id));
+      onNotify(result.adjustmentIssueNo
+        ? `Đã xóa SKU khỏi hệ thống; tồn cũ được ghi vào phiếu ${result.adjustmentIssueNo}. Lịch sử cũ được giữ.`
+        : "Đã xóa SKU khỏi hệ thống. Lịch sử phiếu và đơn hàng được giữ.");
+      await reload();
+    } catch (cause) { onNotify(cause instanceof Error ? cause.message : "Không thể xóa SKU."); }
     finally { setSaving(false); }
   };
 
@@ -144,7 +212,7 @@ export default function InventoryWorkspace({ categories, materials, initialTab, 
 
     {error && <div className="inventory-error" role="alert">{error}<button onClick={() => void reload()}>Thử tải lại</button></div>}
     {tab === "history" ? <section className="inventory-history-panel"><div className="inventory-panel-title"><div><h2>Lịch sử nhập / xuất kho</h2><p>Các điều chỉnh đã được ghi trong database.</p></div><button className="button button-quiet" onClick={() => void reload()}>Làm mới</button></div><MovementTable movements={movements} empty={loading ? "Đang tải lịch sử…" : "Chưa có lượt nhập hoặc xuất kho."}/></section> : tab === "receipts" ? <InventoryReceiptsWorkspace /> : tab === "inbound" ? <InboundReceiptPage products={products} categories={categories} materials={materials} onCategoryCreated={onCategoryCreated} onCancel={() => { setTab("stock"); onNavigate("stock"); }} onComplete={async () => { await reload(); setTab("stock"); onNavigate("stock"); }} onNotify={onNotify}/> : tab === "outbound" ? <OutboundIssuePage products={products} onCancel={() => { setTab("stock"); onNavigate("stock"); }} onComplete={async () => { await reload(); }} onNotify={onNotify}/> : <>
-      <div className="inventory-toolbar"><label className="inventory-search"><span>⌕</span><input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Tìm theo tên sản phẩm, mã SKU, mã vạch..."/></label><label className="inventory-filter">Nhóm sản phẩm<select value={kindFilter} onChange={(event) => { setKindFilter(event.target.value); setCategoryFilter(""); setStoneFilter(""); setPage(1); setSelectedRows([]); }}><option value="">Trang sức &amp; đá quý</option><option value="JEWELRY">Trang sức</option><option value="GEMSTONE">Đá quý</option></select></label><label className="inventory-filter">Danh mục<select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setStoneFilter(""); setPage(1); setSelectedRows([]); }}><option value="">Tất cả</option>{categories.filter((category) => !kindFilter || products.some((product) => product.kind === kindFilter && product.category?.id === category.id)).map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label><label className="inventory-filter">Loại đá<select value={stoneFilter} onChange={(event) => { setStoneFilter(event.target.value); setPage(1); setSelectedRows([]); }}><option value="">Tất cả loại đá</option>{stoneOptions.filter((stone) => products.some((product) => (!kindFilter || product.kind === kindFilter) && (!categoryFilter || product.category?.id === categoryFilter) && stoneNameOf(product) === stone)).map((stone) => <option value={stone} key={stone}>{stone}</option>)}</select></label><label className="inventory-filter">Trạng thái tồn kho<select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value); setPage(1); setSelectedRows([]); }}><option value="">Tất cả trạng thái</option><option>Còn hàng</option><option>Sắp hết</option><option>Hết hàng</option></select></label><label className="inventory-filter">Kho<select defaultValue="main"><option value="main">Kho chính</option></select></label><div className="inventory-toolbar-actions"><button className="button button-quiet" onClick={() => { setTab("inbound"); onNavigate("inbound"); }}>＋ Nhập kho</button><button className="button button-primary" onClick={() => { setTab("outbound"); onNavigate("outbound"); }}>⇧ Xuất kho</button></div></div>
+      <div className="inventory-toolbar"><label className="inventory-search"><span>⌕</span><input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Tìm theo tên sản phẩm, mã SKU, mã vạch..."/></label><label className="inventory-filter">Nhóm sản phẩm<select value={kindFilter} onChange={(event) => { setKindFilter(event.target.value); setCategoryFilter(""); setStoneFilter(""); setPage(1); setSelectedRows([]); }}><option value="">Trang sức &amp; đá quý</option><option value="JEWELRY">Trang sức</option><option value="GEMSTONE">Đá quý</option></select></label><label className="inventory-filter">Danh mục<select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setStoneFilter(""); setPage(1); setSelectedRows([]); }}><option value="">Tất cả</option>{categories.filter((category) => !kindFilter || products.some((product) => product.kind === kindFilter && product.category?.id === category.id)).map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label><label className="inventory-filter">Loại đá<select value={stoneFilter} onChange={(event) => { setStoneFilter(event.target.value); setPage(1); setSelectedRows([]); }}><option value="">Tất cả loại đá</option>{stoneOptions.filter((stone) => products.some((product) => (!kindFilter || product.kind === kindFilter) && (!categoryFilter || product.category?.id === categoryFilter) && stoneNameOf(product) === stone)).map((stone) => <option value={stone} key={stone}>{stone}</option>)}</select></label><label className="inventory-filter">Trạng thái tồn kho<select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value); setPage(1); setSelectedRows([]); }}><option value="">Tất cả trạng thái</option><option>Còn hàng</option><option>Sắp hết</option><option>Hết hàng</option></select></label><label className="inventory-filter">Kho<select defaultValue="main"><option value="main">Kho chính</option></select></label><div className="inventory-toolbar-actions"><button className="button button-danger" onClick={openReset}>↺ Reset kho</button><button className="button button-quiet" onClick={() => { setTab("inbound"); onNavigate("inbound"); }}>＋ Nhập kho</button><button className="button button-primary" onClick={() => { setTab("outbound"); onNavigate("outbound"); }}>⇧ Xuất kho</button></div></div>
 
       <div className="inventory-main-grid"><section className="inventory-table-panel"><div className="inventory-table-scroll"><table className="inventory-table"><thead><tr><th><input type="checkbox" aria-label="Chọn tất cả" checked={pageRows.length > 0 && pageRows.every((product) => selectedRows.includes(product.id))} onChange={toggleAll}/></th><th>Sản phẩm</th><th>Mã SKU</th><th>Danh mục</th><th>Tồn kho ↕</th><th>Đã bán (tháng) ↕</th><th>Trạng thái</th></tr></thead><tbody>{loading ? <tr><td colSpan={7} className="inventory-empty">Đang tải sản phẩm…</td></tr> : pageRows.length ? groupedPageRows.map((product, index) => {
         const previous = groupedPageRows[index - 1];
@@ -155,20 +223,26 @@ export default function InventoryWorkspace({ categories, materials, initialTab, 
 
       <aside className="inventory-detail-panel">{selected ? <><div className="inventory-detail-heading"><div><h2>Chi tiết tồn kho</h2><span className={`inventory-status ${statusOf(selected) === "Còn hàng" ? "ok" : statusOf(selected) === "Sắp hết" ? "low" : "out"}`}>{statusOf(selected)}</span></div><button className="inventory-refresh" title="Làm mới" onClick={() => void reload()}>↻</button></div><div className="inventory-detail-product">{selected.images?.[0]?.url ? <img src={selected.images[0].url} alt={selected.name}/> : <span className="inventory-product-placeholder">◇</span>}<div><strong>{selected.name}</strong><small>{selected.sku}</small><small>{productKindLabel(selected)} · {selected.category?.name || "Chưa phân loại"}</small>{stoneNameOf(selected) && <small>Loại đá: {stoneNameOf(selected)}</small>}</div></div><div className="inventory-detail-metrics"><div><small>Tồn kho hiện tại</small><strong>{money(selected.stock)}</strong></div><div><small>Đã bán (tháng)</small><strong>{money(selected.soldThisMonth)}</strong></div><div className="minimum-metric"><small>Tồn kho tối thiểu</small>{editingMinimum ? <div className="minimum-edit"><input type="number" min="0" value={minimumDraft} onChange={(event) => setMinimumDraft(event.target.value)}/><button disabled={saving} onClick={() => void saveMinimum()}>Lưu</button></div> : <strong>{money(selected.minimumStock)} <button className="minimum-pencil" title="Sửa mức tồn tối thiểu" onClick={() => { setMinimumDraft(String(selected.minimumStock)); setEditingMinimum(true); }}>✎</button></strong>}</div></div>
         <section className="inventory-variants"><div className="inventory-subheading"><h3>Theo kích thước / phân loại</h3><span>{selected.variants.length || 1}</span></div><div className="inventory-variant-head"><span>Kích thước / phân loại</span><span>Tồn kho</span><span>Khả dụng</span></div>{selected.variants.length ? selected.variants.map((variant) => <div className="inventory-variant-row" key={variant.id}><span>{[variant.quality, variant.beadSize].filter(Boolean).join(" · ") || "Tiêu chuẩn"}{variant.sku && <small>{variant.sku}</small>}</span><b>{money(variant.stock)}</b><b>{money(variant.stock)}</b></div>) : <div className="inventory-variant-row"><span>Tồn kho chung</span><b>{money(selected.stock)}</b><b>{money(selected.stock)}</b></div>}</section>
+        <div className="inventory-retire-action"><button className="button button-danger button-outline" type="button" onClick={() => { setDeleteTarget(selected); setDeleteReason(""); setDeleteConfirmation(""); }}>Xóa SKU khỏi hệ thống</button><small>Xóa cứng sản phẩm này và toàn bộ SKU biến thể; lịch sử phiếu vẫn được giữ.</small></div>
         <section className="inventory-recent"><div className="inventory-subheading"><h3>Lịch sử nhập/xuất gần đây</h3><button onClick={() => { setTab("history"); onNavigate("history"); }}>Xem tất cả →</button></div>{selectedMovements.length ? selectedMovements.map((movement) => <MovementLine key={movement.id} movement={movement}/>) : <p className="inventory-no-history">Chưa có giao dịch nhập hoặc xuất kho.</p>}</section>
         {summary.low + summary.empty > 0 && <div className="inventory-alert"><strong>⚠&nbsp; Cảnh báo tồn kho</strong><span>{summary.low + summary.empty} sản phẩm sắp hết hoặc đã hết hàng.</span><button onClick={() => { setStatusFilter("Sắp hết"); setPage(1); }}>Xem danh sách →</button></div>}
       </> : <div className="inventory-detail-empty">Chọn một sản phẩm để xem tồn kho.</div>}</aside></div>
       </>}
 
+    {resetOpen && <div className="inventory-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setResetOpen(false); }}><section className="inventory-modal inventory-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="inventory-reset-title"><header><div><span className="inventory-eyebrow">ĐIỀU CHỈNH TỒN KHO</span><h2 id="inventory-reset-title">Reset số lượng tồn</h2></div><button type="button" aria-label="Đóng" onClick={() => setResetOpen(false)}>×</button></header><p className="inventory-confirm-copy">Số lượng còn lại sẽ về 0. GEME tạo phiếu điều chỉnh và ghi từng SKU vào lịch sử; sản phẩm, SKU, phiếu nhập cũ và đơn hàng không bị xóa. Tồn mới của POS sẽ được đưa vào hàng đợi đồng bộ.</p><div className="inventory-reset-scope"><label><input type="radio" name="reset-scope" checked={resetScope === "ALL"} onChange={() => setResetScope("ALL")}/> Toàn bộ kho <small>{resetPreviewLoading ? "Đang tính…" : resetPreview ? `${money(resetPreview.selectedProductCount)} sản phẩm` : "—"}</small></label><label><input type="radio" name="reset-scope" checked={resetScope === "SELECTED"} disabled={!selectedRows.length} onChange={() => setResetScope("SELECTED")}/> Chỉ sản phẩm đã chọn <small>{money(selectedRows.length)} sản phẩm</small></label></div>{resetPreviewError && <div className="inventory-error" role="alert">Không tải được dữ liệu xem trước: {resetPreviewError}<button type="button" onClick={() => setResetPreviewAttempt((attempt) => attempt + 1)}>Thử lại</button></div>}<div className="inventory-reset-summary"><span>Sản phẩm có tồn <b>{resetPreviewLoading ? "…" : resetPreview ? money(resetPreview.affectedProductCount) : "—"}</b></span><span>SKU / số lượng <b>{resetPreviewLoading ? "…" : resetPreview ? `${money(resetSkuCount)} SKU · ${money(resetUnitCount)} cái` : "—"}</b></span></div><label>Lý do điều chỉnh<textarea rows={3} value={resetNote} onChange={(event) => setResetNote(event.target.value)} placeholder="Ví dụ: kiểm kê đầu kỳ, làm sạch dữ liệu để nhập lại kho…"/></label><label>Nhập <code>RESET</code> để xác nhận<input value={resetConfirmation} onChange={(event) => setResetConfirmation(event.target.value)} autoComplete="off" placeholder="RESET"/></label><footer><button className="button button-quiet" type="button" disabled={saving} onClick={() => setResetOpen(false)}>Hủy</button><button className="button button-danger" type="button" disabled={saving || resetPreviewLoading || !resetPreview || !resetNote.trim() || resetConfirmation !== "RESET" || (resetScope === "SELECTED" && !selectedRows.length) || resetSkuCount === 0} onClick={() => void submitReset()}>{saving ? "Đang reset…" : "Đưa tồn về 0 và lưu phiếu"}</button></footer></section></div>}
+
+    {deleteTarget && <div className="inventory-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setDeleteTarget(null); }}><section className="inventory-modal inventory-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="inventory-delete-title"><header><div><span className="inventory-eyebrow">XÓA CỨNG SKU</span><h2 id="inventory-delete-title">Xóa khỏi hệ thống?</h2></div><button type="button" aria-label="Đóng" onClick={() => setDeleteTarget(null)}>×</button></header><p className="inventory-confirm-copy">Sản phẩm <strong>{deleteTarget.name}</strong> · SKU mẹ <code>{deleteTarget.sku}</code>{deleteTarget.variants.length ? ` cùng ${deleteTarget.variants.length} SKU biến thể` : ""} sẽ bị xóa khỏi GEME và các mã POS365 tương ứng sẽ được gỡ. Phiếu nhập, phiếu xuất, lịch sử kho và đơn hàng cũ vẫn giữ tên, SKU, số lượng và giá đã chụp; liên kết tới bản ghi sản phẩm sẽ được bỏ. {deleteTarget.stock > 0 ? `Tồn hiện tại (${money(deleteTarget.stock)} cái) sẽ được ghi thành phiếu điều chỉnh trước khi xóa.` : ""} Thao tác xóa không thể hoàn tác.</p><label>Lý do xóa<input value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} placeholder="Nhập lý do để lưu vào nhật ký quản trị"/></label><label>Nhập chính xác SKU mẹ <code>{deleteTarget.sku}</code> để xác nhận<input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} autoComplete="off" placeholder={deleteTarget.sku}/></label><footer><button className="button button-quiet" type="button" disabled={saving} onClick={() => setDeleteTarget(null)}>Hủy</button><button className="button button-danger" type="button" disabled={saving || !deleteReason.trim() || deleteConfirmation !== deleteTarget.sku} onClick={() => void submitHardDelete()}>{saving ? "Đang xóa…" : "Xóa cứng SKU"}</button></footer></section></div>}
+
   </div>;
 }
 
 function MovementLine({ movement }: { movement: Movement }) {
-  return <div className="inventory-movement-line"><i className={movement.type === "IN" ? "in" : "out"}>{movement.type === "IN" ? "+" : "−"}</i><span><strong>{movement.type === "IN" ? "Nhập kho" : "Xuất kho"}{movement.variantLabel ? ` · ${movement.variantLabel}` : ""}</strong><small>{movement.reference || dateLabel(movement.createdAt)}</small></span><b className={movement.type === "IN" ? "in" : "out"}>{movement.type === "IN" ? "+" : "−"}{money(movement.quantity)}</b></div>;
+  const action = movement.note?.startsWith("[RESET]") ? "Reset kho" : movement.note?.startsWith("[DELETE]") ? "Xóa SKU" : movement.type === "IN" ? "Nhập kho" : "Xuất kho";
+  return <div className="inventory-movement-line"><i className={movement.type === "IN" ? "in" : "out"}>{movement.type === "IN" ? "+" : "−"}</i><span><strong>{action}{movement.variantLabel ? ` · ${movement.variantLabel}` : ""}</strong><small>{movement.reference || dateLabel(movement.createdAt)}</small></span><b className={movement.type === "IN" ? "in" : "out"}>{movement.type === "IN" ? "+" : "−"}{money(movement.quantity)}</b></div>;
 }
 
 function MovementTable({ movements, empty }: { movements: Movement[]; empty: string }) {
-  return <div className="inventory-history-scroll"><table className="inventory-history-table"><thead><tr><th>Thời gian</th><th>Loại</th><th>Sản phẩm</th><th>SKU / Phiên bản</th><th>Số lượng</th><th>Tồn sau giao dịch</th><th>Tham chiếu / Ghi chú</th></tr></thead><tbody>{movements.length ? movements.map((movement) => <tr key={movement.id}><td>{dateLabel(movement.createdAt)}</td><td><span className={`inventory-status ${movement.type === "IN" ? "ok" : "out"}`}>{movement.type === "IN" ? "Nhập kho" : "Xuất kho"}</span></td><td>{movement.productName}</td><td>{movement.productSku}{movement.variantLabel && <small className="history-subline">{movement.variantLabel}</small>}</td><td className={movement.type === "IN" ? "movement-in" : "movement-out"}>{movement.type === "IN" ? "+" : "−"}{money(movement.quantity)}</td><td>{money(movement.stockAfter)}</td><td>{movement.reference || movement.note || "—"}</td></tr>) : <tr><td colSpan={7} className="inventory-empty">{empty}</td></tr>}</tbody></table></div>;
+  return <div className="inventory-history-scroll"><table className="inventory-history-table"><thead><tr><th>Thời gian</th><th>Loại</th><th>Sản phẩm</th><th>SKU / Phiên bản</th><th>Số lượng</th><th>Tồn sau giao dịch</th><th>Tham chiếu / Ghi chú</th></tr></thead><tbody>{movements.length ? movements.map((movement) => { const action = movement.note?.startsWith("[RESET]") ? "Reset kho" : movement.note?.startsWith("[DELETE]") ? "Xóa SKU" : movement.type === "IN" ? "Nhập kho" : "Xuất kho"; return <tr key={movement.id}><td>{dateLabel(movement.createdAt)}</td><td><span className={`inventory-status ${movement.type === "IN" ? "ok" : "out"}`}>{action}</span></td><td>{movement.productName}</td><td>{movement.productSku}{movement.variantLabel && <small className="history-subline">{movement.variantLabel}</small>}</td><td className={movement.type === "IN" ? "movement-in" : "movement-out"}>{movement.type === "IN" ? "+" : "−"}{money(movement.quantity)}</td><td>{money(movement.stockAfter)}</td><td>{[movement.reference, movement.note?.replace(/^\[(RESET|DELETE)\]\s*/, "")].filter(Boolean).join(" · ") || "—"}</td></tr>; }) : <tr><td colSpan={7} className="inventory-empty">{empty}</td></tr>}</tbody></table></div>;
 }
 
 type IssueItem = { id: string; productId?: string | null; variantId?: string | null; productName: string; productSku: string; variantLabel?: string | null; categoryName?: string | null; stoneName?: string | null; kind: string; quantity: number; unitPrice: number | string; lineTotal: number | string };
@@ -414,14 +488,16 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const selectedNewCategoryParent = newCategoryParents.find((category) => category.id === newCategoryParentId) || newCategoryParents[0];
   const newProductCategory = newProductCategories.find((category) => category.id === newProductCategoryId);
   const newProductVariantMode: NewProductVariantMode = newProductVariantChoice === "SINGLE" ? null : newProductVariantChoice;
-  const newProductScopeMaterials = materialOptions.filter((material) => material.active && material.kind === "STONE" && material.scope === (newProductKind === "Đá quý" ? "Đá quý" : "Trang sức"));
+  const newProductScopeMaterials = materialOptions.filter((material) => material.active && material.kind === "STONE" && material.scope === (newProductKind === "Đá quý" ? "Đá quý" : "Trang sức") && (!Array.isArray(material.appliedCategoryIds) || material.appliedCategoryIds.includes(newProductCategoryId)));
   const newProductRule = skuRules.find((rule) => rule.categoryId === newProductCategoryId);
   const newProductAllowedMaterialIds = newProductRule
     ? new Set(Array.isArray(newProductRule.materialOptionIds) ? newProductRule.materialOptionIds : newProductScopeMaterials.map((material) => material.id))
     : new Set<string>();
-  const newProductMaterials = newProductScopeMaterials.filter((material) => newProductAllowedMaterialIds.has(material.id));
+  const newProductMaterials = newProductScopeMaterials.filter((material) => Array.isArray(material.appliedCategoryIds)
+    ? material.appliedCategoryIds.includes(newProductCategoryId)
+    : newProductAllowedMaterialIds.has(material.id));
   const ruleCategory = ruleCategories.find((category) => category.id === ruleCategoryId);
-  const ruleScopeMaterials = materialOptions.filter((material) => material.active && material.kind === "STONE" && material.scope === (ruleCategory?.kind === "Đá quý" ? "Đá quý" : "Trang sức"));
+  const ruleScopeMaterials = materialOptions.filter((material) => material.active && material.kind === "STONE" && material.scope === (ruleCategory?.kind === "Đá quý" ? "Đá quý" : "Trang sức") && (!Array.isArray(material.appliedCategoryIds) || material.appliedCategoryIds.includes(ruleCategoryId)));
   const ruleMaterials = ruleScopeMaterials.filter((material) => stoneMaterialIdsDraft.includes(material.id));
   const savedSkuRules = skuRules.filter((rule) => ruleCategories.some((category) => category.id === rule.categoryId)).map((rule) => ({
     ...rule,
@@ -599,8 +675,8 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
       const previouslyAllowed = Array.isArray(categoryRule.materialOptionIds)
         ? categoryRule.materialOptionIds
         : materialOptions.filter((material) => material.active && material.kind === "STONE" && material.scope === scope).map((material) => material.id);
-      const record = await request<Record<string, any>>("materials", { method: "POST", body: JSON.stringify({ name, scope: newProductKind === "Đá quý" ? "GEMSTONE" : "JEWELRY", kind: "STONE", active: true }) });
-      const material: MaterialOption = { id: String(record.id), name: String(record.name), scope: record.scope === "GEMSTONE" ? "Đá quý" : "Trang sức", kind: "STONE", active: record.active !== false, ...(record.imageUrl ? { imageUrl: record.imageUrl } : {}), sortOrder: Number(record.sortOrder || 0) };
+      const record = await request<Record<string, any>>("materials", { method: "POST", body: JSON.stringify({ name, scope: newProductKind === "Đá quý" ? "GEMSTONE" : "JEWELRY", kind: "STONE", active: true, appliedCategoryIds: [newProductCategoryId] }) });
+      const material: MaterialOption = { id: String(record.id), name: String(record.name), scope: record.scope === "GEMSTONE" ? "Đá quý" : "Trang sức", kind: "STONE", active: record.active !== false, ...(record.imageUrl ? { imageUrl: record.imageUrl } : {}), appliedCategoryIds: Array.isArray(record.appliedCategoryIds) ? record.appliedCategoryIds : [newProductCategoryId], sortOrder: Number(record.sortOrder || 0) };
       const nextRule: SkuRule = {
         ...categoryRule,
         materialOptionIds: [...new Set([...previouslyAllowed, material.id])],

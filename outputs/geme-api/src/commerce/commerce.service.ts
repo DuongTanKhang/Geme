@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
-import { Observable, Subject } from "rxjs";
+import { Observable, Subject, interval, merge, map } from "rxjs";
 import { PrismaService } from "../prisma/prisma.service.js";
 import type { Prisma } from "../generated/prisma/client.js";
 import { Pos365Service } from "../pos365/pos365.service.js";
@@ -66,6 +66,7 @@ const selectStorefrontListing = {
   lengthCm: true,
   widthCm: true,
   heightCm: true,
+  coverVideoUrl: true,
   stock: true,
   createdAt: true,
   category: { select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true, status: true, sortOrder: true } },
@@ -88,6 +89,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   private readonly catalogChanges = new Subject<{ data: { entity: string; action: string; id?: string; at: string } }>();
   private readonly logger = new Logger(CommerceService.name);
   private soldOutCleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private categoryCache: { expiresAt: number; records: any[] } | null = null;
+  private categoryLoad: Promise<any[]> | null = null;
+  private categoryCacheVersion = 0;
 
   constructor(private readonly prisma: PrismaService, private readonly pos365: Pos365Service) {}
 
@@ -108,7 +112,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  onModuleInit() {
+  async onModuleInit() {
+    // Seed the required jewelry categories once at startup. Doing these
+    // upserts inside GET /categories made every storefront page read write to
+    // PostgreSQL and amplified traffic spikes into lock contention.
+    await this.ensureRequiredJewelryCategories();
     void this.backfillMissingJewelryVariantSkus().catch((error) => this.logger.error("Không thể bổ sung SKU còn thiếu cho biến thể trang sức.", error));
     void this.normalizeLegacyProductImages().catch((error) => this.logger.error("Không thể chuyển ảnh sản phẩm sang thư viện media trong database.", error));
     void this.hideExpiredSoldOutListings().catch((error) => this.logger.error("Không thể tự ẩn bài đăng hết hàng đã quá 3 ngày.", error));
@@ -219,8 +227,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (expired.count || started.count) this.publishCatalogChange("promotion", "updated");
   }
 
-  catalogEvents(): Observable<{ data: { entity: string; action: string; id?: string; at: string } }> {
-    return this.catalogChanges.asObservable();
+  catalogEvents(): Observable<{ data: { entity?: string; action?: string; id?: string; at?: string } | string; type?: string }> {
+    const keepAlive = interval(25_000).pipe(map(() => ({ type: "ping", data: "" })));
+    return merge(this.catalogChanges.asObservable(), keepAlive);
   }
 
   private publishCatalogChange(entity: string, action: string, id?: string) {
@@ -285,8 +294,26 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   async categories() {
-    await this.ensureRequiredJewelryCategories();
-    return this.prisma.category.findMany({ include: { _count: { select: { products: true } } }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] });
+    if (this.categoryCache && this.categoryCache.expiresAt > Date.now()) return this.categoryCache.records;
+    if (this.categoryLoad) return this.categoryLoad;
+
+    const version = this.categoryCacheVersion;
+    const load = this.prisma.category.findMany({ include: { _count: { select: { products: true } } }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }).then((records) => {
+      if (version === this.categoryCacheVersion) this.categoryCache = { records, expiresAt: Date.now() + 2_000 };
+      return records;
+    });
+    this.categoryLoad = load;
+    try {
+      return await load;
+    } finally {
+      if (this.categoryLoad === load) this.categoryLoad = null;
+    }
+  }
+
+  private invalidateCategoryCache() {
+    this.categoryCacheVersion += 1;
+    this.categoryCache = null;
+    this.categoryLoad = null;
   }
 
   private categoryData(input: Input) {
@@ -317,6 +344,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     await this.validateCategoryHierarchy(data);
     try {
       const category = await this.prisma.category.create({ data });
+      this.invalidateCategoryCache();
       this.publishCatalogChange("category", "created", category.id);
       return category;
     }
@@ -347,12 +375,14 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           }
           return tx.category.findUniqueOrThrow({ where: { id } });
         });
+        this.invalidateCategoryCache();
         this.publishCatalogChange("category", "updated", category.id);
         return category;
       }
       const data = this.categoryData(input);
       await this.validateCategoryHierarchy(data, id);
       const category = await this.prisma.category.update({ where: { id }, data });
+      this.invalidateCategoryCache();
       this.publishCatalogChange("category", "updated", category.id);
       return category;
     }
@@ -380,6 +410,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       const deletedCategories = await tx.category.deleteMany({ where: { id: { in: ids } } });
       return { deleted: true, deletedCategories: deletedCategories.count, hiddenProducts: hiddenProducts.count };
     });
+    this.invalidateCategoryCache();
     this.publishCatalogChange("category", "deleted", id);
     return result;
   }
@@ -480,7 +511,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       sku, name, slug: slugify(input.slug || name), kind: enumValue(input.kind || input.productType, ["JEWELRY", "GEMSTONE", "Trang sức", "Đá quý"], "JEWELRY").replace("Trang sức", "JEWELRY").replace("Đá quý", "GEMSTONE") as any,
       categoryId, gemstoneTypeId: input.gemstoneTypeId || null, materialOptionId: input.materialOptionId || null,
       description: input.description || null, fullDescription: input.fullDescription || null,
+      ...(Object.prototype.hasOwnProperty.call(input, "coverVideoUrl") ? { coverVideoUrl: typeof input.coverVideoUrl === "string" ? input.coverVideoUrl.trim().slice(0, 2000) || null : null } : {}),
       technicalImageUrl: typeof input.technicalImageUrl === "string" ? input.technicalImageUrl.trim() || null : null,
+      ...(Object.prototype.hasOwnProperty.call(input, "technicalVideoUrl") ? { technicalVideoUrl: typeof input.technicalVideoUrl === "string" ? input.technicalVideoUrl.trim().slice(0, 2000) || null : null } : {}),
       weightGrams,
       lengthCm: dimension("lengthCm"), widthCm: dimension("widthCm"), heightCm: dimension("heightCm"),
       status: status as any, isNew: Boolean(input.isNew), isFeatured: Boolean(input.isFeatured),
@@ -496,7 +529,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       const option = await this.prisma.materialOption.findUnique({ where: { id: data.materialOptionId }, select: { scope: true, active: true } });
       const expectedScope = data.kind === "GEMSTONE" ? "GEMSTONE" : "JEWELRY";
       if (!option || !option.active || option.scope !== expectedScope) throw new BadRequestException("Loại đá hoặc chất liệu không thuộc đúng nhóm sản phẩm, hoặc đã bị ẩn.");
-      await this.assertCategoryAllowsMaterial(this.prisma, data.categoryId, data.materialOptionId);
+      const previous = id ? await this.prisma.product.findUnique({ where: { id }, select: { categoryId: true, materialOptionId: true } }) : null;
+      const unchangedAssociation = previous?.categoryId === data.categoryId && previous.materialOptionId === data.materialOptionId;
+      await this.assertCategoryAllowsMaterial(this.prisma, data.categoryId, data.materialOptionId, !unchangedAssociation);
     }
     const imageInputs = (Array.isArray(input.gallery) ? input.gallery : input.image ? [input.image] : []).filter((url: unknown) => typeof url === "string" && url.length > 0).slice(0, 10) as string[];
     const images = await Promise.all(imageInputs.map((url, index) => url.startsWith("data:image/") ? this.persistDataImageReference(url, `product-${data.sku}-${index + 1}.webp`, data.name) : url));
@@ -600,10 +635,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     catch (error: any) { if (error?.code === "P2025") throw new NotFoundException("Không tìm thấy sản phẩm trong kho."); throw error; }
   }
 
-  async deleteProduct(id: string) {
+  async deleteProduct(id: string, input: Input = {}) {
     const product = await this.prisma.product.findUnique({
       where: { id },
-      include: { variants: { select: { sku: true } } },
+      include: { category: true, materialOption: true, gemstoneType: true, variants: { orderBy: { sortOrder: "asc" } } },
     });
     if (!product) throw new NotFoundException("Không tìm thấy sản phẩm trong kho.");
     const skus = [...new Set([product.sku, ...product.variants.map((variant) => variant.sku || "")].map((sku) => sku.trim()).filter(Boolean))];
@@ -612,10 +647,78 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     }
     // Match exact SKU/Code and remove POS first. If POS rejects the deletion,
     // retain the local product so the two catalogs cannot silently diverge.
-    await this.pos365.deleteProductsBySku(skus);
-    await this.prisma.product.delete({ where: { id } });
+    const posResult = await this.pos365.deleteProductsBySku(skus);
+    const reason = String(input.reason || "Xóa cứng sản phẩm theo yêu cầu quản trị").trim().slice(0, 1000);
+    const deletedAt = new Date();
+    const dateKey = `${deletedAt.getUTCFullYear()}${String(deletedAt.getUTCMonth() + 1).padStart(2, "0")}${String(deletedAt.getUTCDate()).padStart(2, "0")}`;
+    const issueId = randomUUID();
+    const issueNo = `PX${dateKey}-${issueId.slice(0, 6).toUpperCase()}`;
+    let adjustmentIssueNo: string | null = null;
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const current = await tx.product.findUnique({
+          where: { id },
+          include: { category: true, materialOption: true, gemstoneType: true, variants: { orderBy: { sortOrder: "asc" } } },
+        });
+        if (!current) throw new NotFoundException("Sản phẩm đã bị xóa khỏi kho.");
+        const currentSkus = [...new Set([current.sku, ...current.variants.map((variant) => variant.sku || "")].map((sku) => sku.trim()).filter(Boolean))].sort();
+        if (currentSkus.join("|") !== [...skus].sort().join("|")) {
+          throw new ConflictException("SKU sản phẩm vừa thay đổi. Đã gỡ mã cũ khỏi POS; hãy tải lại danh sách và thử lại.");
+        }
+        const adjustmentNote = `[DELETE] Xóa cứng SKU ${current.sku}; giữ lại lịch sử phiếu. Lý do: ${reason}`;
+        const historyRows = current.variants.length
+          ? current.variants.filter((variant) => variant.stock > 0).map((variant) => ({
+              variant, sku: variant.sku || current.sku,
+              label: [variant.quality, variant.beadSize].filter(Boolean).join(" · ") || null,
+              quantity: variant.stock,
+            }))
+          : current.stock > 0 ? [{ variant: null, sku: current.sku, label: null, quantity: current.stock }] : [];
+        const totalQuantity = historyRows.reduce((sum, row) => sum + row.quantity, 0);
+        if (!Number.isSafeInteger(totalQuantity) || totalQuantity > 2_147_483_647) throw new BadRequestException("Tổng tồn của SKU vượt giới hạn phiếu điều chỉnh.");
+        if (historyRows.length) {
+          await tx.inventoryIssue.create({ data: {
+            id: issueId, issueNo, issuedAt: deletedAt, reason: "OTHER", recipient: "Xóa SKU khỏi hệ thống",
+            warehouseName: "Kho chính", status: "COMPLETED", note: adjustmentNote,
+            totalQuantity, totalAmount: 0,
+          } });
+          for (const row of historyRows) {
+            const stoneName = current.kind === "GEMSTONE" ? current.gemstoneType?.name || current.materialOption?.name || null : current.materialOption?.name || null;
+            await tx.inventoryIssueItem.create({ data: {
+              issueId, productId: current.id, variantId: row.variant?.id || null,
+              productName: current.name, productSku: row.sku, variantLabel: row.label,
+              categoryName: current.category?.name || null, stoneName, kind: current.kind,
+              quantity: row.quantity, unitPrice: 0, lineTotal: 0,
+            } });
+            await tx.inventoryMovement.create({ data: {
+              productId: current.id, variantId: row.variant?.id || null,
+              productName: current.name, productSku: row.sku, variantLabel: row.label,
+              type: "OUT", quantity: row.quantity, stockBefore: row.quantity, stockAfter: 0,
+              reference: issueNo, note: adjustmentNote,
+            } });
+          }
+          adjustmentIssueNo = issueNo;
+        }
+        await tx.auditLog.create({ data: {
+          action: "PRODUCT_HARD_DELETED", entityType: "Product", entityId: current.id,
+          before: {
+            id: current.id, sku: current.sku, name: current.name, status: current.status, stock: current.stock,
+            variants: current.variants.map((variant) => ({ id: variant.id, sku: variant.sku, quality: variant.quality, beadSize: variant.beadSize, stock: variant.stock })),
+          },
+          after: { deleted: true, reason, pos365DeletedSkus: posResult.deleted },
+        } });
+        // Historical rows keep their captured name, SKU, quantity and price; FK
+        // relations are configured as SET NULL, so deleting catalog rows cannot
+        // remove receipt, issue, movement or order history.
+        await tx.product.delete({ where: { id: current.id } });
+      }, { isolationLevel: "Serializable" });
+    } catch (error) {
+      // If the database transaction did not complete after POS365 removed the
+      // item, queue a catalog stock sync to recreate/repair the still-local SKU.
+      await this.queueProductStockSync(this.prisma, [id]).catch(() => undefined);
+      throw error;
+    }
     this.publishCatalogChange("product", "deleted", id);
-    return { id, sku: product.sku, deletedPosSkus: skus };
+    return { id, sku: product.sku, deletedPosSkus: posResult.deleted, retainedHistory: true, adjustmentIssueNo };
   }
 
   async inventory() {
@@ -669,12 +772,23 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return prefix;
   }
 
-  private async assertCategoryAllowsMaterial(client: any, categoryId: string, materialOptionId: string) {
-    const setting = await client.siteSetting.findUnique({ where: { key: "inventory.skuRules" }, select: { value: true } });
+  private async assertCategoryAllowsMaterial(client: any, categoryId: string, materialOptionId: string, enforceCategoryApplicability = true) {
+    const [setting, applicabilitySetting] = await Promise.all([
+      client.siteSetting.findUnique({ where: { key: "inventory.skuRules" }, select: { value: true } }),
+      client.siteSetting.findUnique({ where: { key: "inventory.materialCategoryApplicability" }, select: { value: true } }),
+    ]);
     const rules = Array.isArray(setting?.value) ? setting.value as Input[] : [];
+    const applicability = applicabilitySetting?.value && typeof applicabilitySetting.value === "object" && !Array.isArray(applicabilitySetting.value)
+      ? applicabilitySetting.value as Record<string, unknown>
+      : {};
+    const categoryIds = applicability[materialOptionId];
+    const hasExplicitApplicability = Object.prototype.hasOwnProperty.call(applicability, materialOptionId) && Array.isArray(categoryIds);
+    if (enforceCategoryApplicability && hasExplicitApplicability && !categoryIds.includes(categoryId)) {
+      throw new BadRequestException("Loại đá này chưa được áp dụng cho danh mục sản phẩm đã chọn. Hãy chỉnh trong mục Loại đá.");
+    }
     const rule = rules.find((candidate) => candidate.categoryId === categoryId);
     // Rules saved before category-specific stone lists remain unrestricted until edited.
-    if (rule && Array.isArray(rule.materialOptionIds) && !rule.materialOptionIds.includes(materialOptionId)) {
+    if (!hasExplicitApplicability && rule && Array.isArray(rule.materialOptionIds) && !rule.materialOptionIds.includes(materialOptionId)) {
       throw new BadRequestException("Loại đá này chưa được áp dụng cho danh mục sản phẩm đã chọn.");
     }
   }
@@ -888,6 +1002,154 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       if (error?.code === "P2002") throw new ConflictException("Mã phiếu xuất vừa được tạo. Hãy tải lại rồi thử lại.");
       throw error;
     }
+  }
+
+  async resetInventory(input: Input) {
+    if (String(input.confirmation || "").trim() !== "RESET") {
+      throw new BadRequestException("Nhập RESET để xác nhận thao tác đưa tồn kho về 0.");
+    }
+    const scope = String(input.scope || "").toUpperCase();
+    const requestedIds = [...new Set((Array.isArray(input.productIds) ? input.productIds : []).map((id: unknown) => String(id || "").trim()).filter(Boolean))];
+    if (!["ALL", "SELECTED"].includes(scope)) throw new BadRequestException("Chọn phạm vi reset tồn kho hợp lệ.");
+    if (scope === "SELECTED" && (!requestedIds.length || requestedIds.length > 1000)) {
+      throw new BadRequestException("Chọn từ 1 đến 1.000 sản phẩm để reset.");
+    }
+    const reason = String(input.note || "").trim().slice(0, 1000);
+    if (!reason) throw new BadRequestException("Nhập lý do reset kho để lưu vào phiếu và lịch sử.");
+
+    const issuedAt = new Date();
+    const dateKey = `${issuedAt.getUTCFullYear()}${String(issuedAt.getUTCMonth() + 1).padStart(2, "0")}${String(issuedAt.getUTCDate()).padStart(2, "0")}`;
+    const issueId = randomUUID();
+    const issueNo = `PX${dateKey}-${issueId.slice(0, 6).toUpperCase()}`;
+    const note = `[RESET] Reset tồn kho: ${reason}`;
+    const changedProductIds: string[] = [];
+
+    try {
+      const result = await this.prisma.$transaction(async (tx) => {
+        const products = await tx.product.findMany({
+          where: scope === "SELECTED" ? { id: { in: requestedIds } } : undefined,
+          include: { category: true, materialOption: true, gemstoneType: true, variants: { orderBy: { sortOrder: "asc" } } },
+          orderBy: [{ sku: "asc" }],
+        });
+        if (scope === "SELECTED" && products.length !== requestedIds.length) {
+          throw new BadRequestException("Một hoặc nhiều sản phẩm đã bị xóa hoặc không còn tồn kho. Tải lại danh sách rồi thử lại.");
+        }
+
+        const rows: Input[] = [];
+        for (const product of products) {
+          if (product.variants.length) {
+            for (const variant of product.variants) {
+              if (variant.stock <= 0) continue;
+              rows.push({
+                product, variant, quantity: variant.stock, unitPrice: 0, lineTotal: 0,
+                variantLabel: [variant.quality, variant.beadSize].filter(Boolean).join(" · ") || null,
+                stoneName: product.kind === "GEMSTONE" ? product.gemstoneType?.name || product.materialOption?.name || null : product.materialOption?.name || null,
+              });
+            }
+          } else if (product.stock > 0) {
+            rows.push({
+              product, variant: null, quantity: product.stock, unitPrice: 0, lineTotal: 0,
+              variantLabel: null,
+              stoneName: product.kind === "GEMSTONE" ? product.gemstoneType?.name || product.materialOption?.name || null : product.materialOption?.name || null,
+            });
+          }
+        }
+        if (!rows.length) throw new BadRequestException("Không có sản phẩm hoặc biến thể nào còn tồn để reset.");
+
+        const totalQuantity = rows.reduce((sum, row) => sum + row.quantity, 0);
+        if (!Number.isSafeInteger(totalQuantity) || totalQuantity > 2_147_483_647) {
+          throw new BadRequestException("Tổng số lượng reset vượt giới hạn của phiếu kho.");
+        }
+        const affectedProductCount = new Set(rows.map((row) => row.product.id)).size;
+        if (input.expectedSkuCount !== undefined || input.expectedTotalQuantity !== undefined || input.expectedProductCount !== undefined) {
+          if (Number(input.expectedSkuCount) !== rows.length || Number(input.expectedTotalQuantity) !== totalQuantity || Number(input.expectedProductCount) !== affectedProductCount) {
+            throw new ConflictException("Tồn kho đã thay đổi sau khi xem trước. Hãy đóng hộp thoại, tải lại kho và xem trước lần nữa.");
+          }
+        }
+        await tx.inventoryIssue.create({ data: {
+          id: issueId, issueNo, issuedAt, reason: "OTHER", recipient: "Điều chỉnh tồn kho",
+          warehouseName: "Kho chính", status: "COMPLETED", note, totalQuantity, totalAmount: 0,
+        } });
+
+        const touched = new Set<string>();
+        for (const row of rows) {
+          const product = row.product;
+          const variant = row.variant;
+          const stockBefore = row.quantity as number;
+          if (variant) {
+            const updated = await tx.productPriceVariant.updateMany({
+              where: { id: variant.id, productId: product.id, stock: stockBefore }, data: { stock: 0 },
+            });
+            if (updated.count !== 1) throw new ConflictException(`Tồn kho ${variant.sku || product.sku} vừa thay đổi. Tải lại rồi thử lại.`);
+          } else {
+            const updated = await tx.product.updateMany({
+              where: { id: product.id, stock: stockBefore }, data: { stock: 0, soldOutAt: product.soldOutAt ?? issuedAt },
+            });
+            if (updated.count !== 1) throw new ConflictException(`Tồn kho ${product.sku} vừa thay đổi. Tải lại rồi thử lại.`);
+          }
+
+          const productSku = variant?.sku || product.sku;
+          await tx.inventoryIssueItem.create({ data: {
+            issueId, productId: product.id, variantId: variant?.id || null,
+            productName: product.name, productSku, variantLabel: row.variantLabel,
+            categoryName: product.category?.name || null, stoneName: row.stoneName,
+            kind: product.kind, quantity: stockBefore, unitPrice: 0, lineTotal: 0,
+          } });
+          await tx.inventoryMovement.create({ data: {
+            productId: product.id, variantId: variant?.id || null, productName: product.name,
+            productSku, variantLabel: row.variantLabel, type: "OUT", quantity: stockBefore,
+            stockBefore, stockAfter: 0, reference: issueNo, note,
+          } });
+          touched.add(product.id);
+          changedProductIds.push(product.id);
+        }
+
+        // Keep the parent stock total equal to the sum of its variants, including
+        // legacy rows where the cached parent quantity had drifted from the variants.
+        for (const productId of touched) {
+          const product = products.find((entry) => entry.id === productId)!;
+          if (product.variants.length) {
+            await tx.product.update({ where: { id: productId }, data: { stock: 0, soldOutAt: product.soldOutAt ?? issuedAt } });
+          }
+        }
+        await this.queueProductStockSync(tx, touched);
+        const issue = await tx.inventoryIssue.findUniqueOrThrow({ where: { id: issueId }, include: { items: { orderBy: { createdAt: "asc" } } } });
+        return { issue, skuCount: rows.length, productCount: affectedProductCount, totalQuantity };
+      }, { isolationLevel: "Serializable" });
+
+      for (const id of new Set(changedProductIds)) this.publishCatalogChange("product", "updated", id);
+      return { ...result.issue, resetSummary: { scope, productCount: result.productCount, skuCount: result.skuCount, totalQuantity: result.totalQuantity } };
+    } catch (error: any) {
+      if (error?.code === "P2002") throw new ConflictException("Mã phiếu reset vừa được tạo. Tải lại rồi thử lại.");
+      throw error;
+    }
+  }
+
+  async inventoryResetPreview(input: Input) {
+    const scope = String(input.scope || "").toUpperCase();
+    const productIds = [...new Set((Array.isArray(input.productIds) ? input.productIds : []).map((id: unknown) => String(id || "").trim()).filter(Boolean))];
+    if (!["ALL", "SELECTED"].includes(scope)) throw new BadRequestException("Chọn phạm vi reset tồn kho hợp lệ.");
+    if (scope === "SELECTED" && (!productIds.length || productIds.length > 1000)) {
+      throw new BadRequestException("Chọn từ 1 đến 1.000 sản phẩm để xem trước.");
+    }
+    const products = await this.prisma.product.findMany({
+      where: scope === "SELECTED" ? { id: { in: productIds } } : undefined,
+      select: { id: true, stock: true, variants: { select: { stock: true } } },
+    });
+    if (scope === "SELECTED" && products.length !== productIds.length) {
+      throw new BadRequestException("Một hoặc nhiều sản phẩm không còn tồn tại. Tải lại danh sách rồi thử lại.");
+    }
+    let skuCount = 0;
+    let totalQuantity = 0;
+    let affectedProductCount = 0;
+    for (const product of products) {
+      const quantities = product.variants.length ? product.variants.map((variant) => variant.stock) : [product.stock];
+      const positive = quantities.filter((quantity) => quantity > 0);
+      if (positive.length) affectedProductCount += 1;
+      skuCount += positive.length;
+      totalQuantity += positive.reduce((sum, quantity) => sum + quantity, 0);
+    }
+    return { scope, selectedProductCount: products.length, affectedProductCount, skuCount, totalQuantity };
   }
 
   private async skuPrefixFor(client: any, categoryId: string, materialOptionId?: string) {
@@ -1332,7 +1594,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const method = enumValue(input.paymentMethod, ["COD", "BANK_TRANSFER", "MOMO", "CREDIT_CARD", "OTHER"], "COD");
     const paid = storeSale && (input.paid === true || method === "COD");
     const code = `GME-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 5).toUpperCase()}`;
-    const customerId = String(input.customerId || authenticatedCustomerId || "");
+    const customerId = String(authenticatedCustomerId || input.customerId || "");
     const changedProductIds = new Set<string>();
     const order = await this.prisma.$transaction(async (tx) => {
       const customer = customerId ? await tx.customer.findUnique({ where: { id: customerId } }) : null;
@@ -1412,10 +1674,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       const discountAmount = Math.min(subtotal, Math.max(0, Number(input.discountAmount) || 0));
       const shippingFee = Math.max(0, Number(input.shippingFee) || 0);
       const totalAmount = subtotal - discountAmount + shippingFee;
-      const customerName = customer?.name || String(input.customerName || input.name || "").trim();
+      const customerName = String(input.customerName || input.name || "").trim() || customer?.name || "";
       if (!customerName && !storeSale) throw new BadRequestException("Nhập tên khách hàng hoặc chọn hồ sơ khách hàng.");
-      const customerPhone = customer?.phone || String(input.phone || "").trim();
-      const customerEmail = customer?.email || (input.email ? String(input.email).trim().toLowerCase() : null);
+      const customerPhone = String(input.phone || "").trim() || customer?.phone || null;
+      const customerEmail = (input.email ? String(input.email).trim().toLowerCase() : "") || customer?.email || null;
       if (paid) {
         const issuedAt = new Date();
         const dateKey = `${issuedAt.getUTCFullYear()}${String(issuedAt.getUTCMonth() + 1).padStart(2, "0")}${String(issuedAt.getUTCDate()).padStart(2, "0")}`;
@@ -1447,7 +1709,62 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     });
     for (const id of changedProductIds) this.publishCatalogChange("product", "updated", id);
     if (this.pos365.isSyncEnabled()) void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đánh thức hàng đợi POS365 cho đơn ${order.code}.`, error));
+    if (!storeSale) void this.queueOrderConfirmationEmail(order);
     return order;
+  }
+
+  private async queueOrderConfirmationEmail(order: any) {
+    const recipient = typeof order.customerEmail === "string" ? order.customerEmail.trim().toLowerCase() : "";
+    if (!recipient) {
+      this.logger.warn(`Đơn ${order.code} chưa có email nhận xác nhận.`);
+      return;
+    }
+
+    const baseUrl = (process.env.AEGIS_ORDER_EMAIL_URL || process.env.AEGIS_AUTH_API_URL || "http://127.0.0.1:5130").trim().replace(/\/+$/, "");
+    const apiKey = process.env.GEME_ORDER_EMAIL_API_KEY?.trim();
+    if (!apiKey) {
+      this.logger.warn(`Chưa cấu hình dịch vụ email xác nhận cho đơn ${order.code}.`);
+      return;
+    }
+
+    const payment = order.payments?.[0];
+    const requestBody = {
+      recipient,
+      customerName: order.customerName || null,
+      orderCode: order.code,
+      placedAt: order.placedAt,
+      status: order.status,
+      paymentMethod: payment?.method || "OTHER",
+      paymentStatus: payment?.status || null,
+      shippingAddress: order.shippingAddress,
+      customerPhone: order.customerPhone,
+      subtotal: Number(order.subtotal),
+      discountAmount: Number(order.discountAmount),
+      shippingFee: Number(order.shippingFee),
+      totalAmount: Number(order.totalAmount),
+      note: order.note,
+      items: order.items.map((item: any) => ({
+        productName: item.productName,
+        productSku: item.productSku,
+        quality: item.quality,
+        beadSize: item.beadSize,
+        quantity: item.quantity,
+        unitPrice: Number(item.unitPrice),
+        lineTotal: Number(item.lineTotal),
+      })),
+    };
+
+    try {
+      const response = await fetch(`${baseUrl}/internal/email/order-confirmation`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-GEME-Internal-Key": apiKey },
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!response.ok) this.logger.warn(`Không thể đưa email xác nhận đơn ${order.code} vào hàng đợi (HTTP ${response.status}).`);
+    } catch (error) {
+      this.logger.warn(`Không thể kết nối dịch vụ email xác nhận cho đơn ${order.code}.`, error);
+    }
   }
 
   async promotions() {

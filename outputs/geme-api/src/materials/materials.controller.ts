@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, Sse } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Header, Param, ParseUUIDPipe, Patch, Post, Query, Sse } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 import { MaterialOptionScope } from "../generated/prisma/client.js";
 import { ImportMaterialOptionsDto, MaterialOptionInputDto, UpdateMaterialOptionDto } from "./dto/material-option.dto.js";
@@ -10,6 +10,7 @@ export class MaterialsController {
   constructor(private readonly materials: MaterialsService) {}
 
   @Get()
+  @Header("Cache-Control", "public, max-age=5, stale-while-revalidate=30")
   list(@Query("scope") scope?: string) {
     if (!scope) return this.materials.list();
     if (scope !== "JEWELRY" && scope !== "GEMSTONE") return this.materials.list();

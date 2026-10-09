@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { StoreProductCard } from "./store-product-grid";
+import { useWishlist } from "./wishlist-provider";
 
 type AccountMode = "login" | "register";
 type SavedProfile = { name?: string; email?: string; phone?: string };
@@ -12,8 +14,67 @@ type AccountProfile = {
   defaultAddress: string | null;
   avatarUrl: string | null;
   orderCount: number;
+  favoriteCount?: number;
 };
-type AccountOrder = { id: string; date: string; status: string; title: string; image?: string | null; price: number };
+type AccountOrder = {
+  id: string;
+  date: string;
+  status: string;
+  title: string;
+  image?: string | null;
+  price: number;
+};
+
+type UnknownRecord = Record<string, unknown>;
+
+function firstOrderValue(order: UnknownRecord, ...keys: string[]) {
+  for (const key of keys) {
+    const value = order[key];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return undefined;
+}
+
+function nestedOrderValue(order: UnknownRecord, key: string, ...fields: string[]) {
+  const nested = order[key];
+  if (!nested || typeof nested !== "object") return undefined;
+  return firstOrderValue(nested as UnknownRecord, ...fields);
+}
+
+function normalizeAccountOrders(payload: unknown): AccountOrder[] {
+  const envelope = payload && typeof payload === "object" ? payload as UnknownRecord : {};
+  const rows = Array.isArray(payload)
+    ? payload
+    : Array.isArray(envelope.orders)
+      ? envelope.orders
+        : Array.isArray(envelope.data)
+          ? envelope.data
+          : [];
+
+  return rows.filter((value): value is UnknownRecord => Boolean(value && typeof value === "object")).map((order) => {
+    const rawItems = Array.isArray(order.items)
+      ? order.items
+      : Array.isArray(order.orderItems)
+        ? order.orderItems
+        : Array.isArray(order.order_items)
+          ? order.order_items
+          : [];
+    const itemSummary = rawItems.filter((value): value is UnknownRecord => Boolean(value && typeof value === "object")).map((item) => {
+      const productName = firstOrderValue(item, "productName", "product_name") ?? nestedOrderValue(item, "product", "name") ?? "Sản phẩm";
+      return `${productName} × ${Number(firstOrderValue(item, "quantity") ?? 0)}`;
+    }).join(", ");
+    const rawDate = firstOrderValue(order, "date", "placedAt", "placed_at", "createdAt", "created_at");
+
+    return {
+      id: String(firstOrderValue(order, "id", "code", "orderCode", "order_code") ?? ""),
+      date: rawDate ? String(rawDate) : "",
+      status: String(firstOrderValue(order, "status") ?? ""),
+      title: String(firstOrderValue(order, "title") ?? itemSummary),
+      image: firstOrderValue(order, "image") as string | null | undefined,
+      price: Number(firstOrderValue(order, "price", "totalAmount", "total_amount", "total") ?? 0),
+    };
+  }).filter((order) => Boolean(order.id));
+}
 
 function postLoginDestination() {
   if (typeof window === "undefined") return "/tai-khoan";
@@ -76,7 +137,7 @@ function EyeIcon({ hidden }: { hidden: boolean }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{hidden ? <><path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8" /><path d="M9.9 5.2A10.8 10.8 0 0 1 12 5c5 0 8.7 4.5 9.5 6-.4.8-1.3 2.1-2.7 3.3M6.2 6.2C4.1 7.5 2.8 9.7 2.5 11c.8 1.5 4.5 6 9.5 6 1 0 2-.2 2.8-.5" /></> : <><path d="M2.5 12s3.2-6 9.5-6 9.5 6 9.5 6-3.2 6-9.5 6-9.5-6-9.5-6Z" /><circle cx="12" cy="12" r="2.6" /></>}</svg>;
 }
 
-export function AuthPage({ mode }: { mode: AccountMode }) {
+export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage: string }) {
   const isRegister = mode === "register";
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
@@ -233,7 +294,7 @@ export function AuthPage({ mode }: { mode: AccountMode }) {
   return <main className="account-page auth-page">
     <section className="auth-main" aria-label="Tài khoản GEME">
       <div className="auth-visual">
-        <img src="/assets/category-jewelry-final.jpg" alt="Nhẫn Opal bạc trên nền vải sáng và hoa trắng" />
+        <img src={bannerImage} alt="Trang sức GEME trong không gian thương hiệu" />
         <div className="auth-visual-copy">
           <div className="auth-visual-message">
             <span className="eyebrow">KHÔNG GIAN CỦA BẠN</span>
@@ -286,6 +347,7 @@ const orderStatusLabels: Record<string, string> = {
 };
 
 export function ProfilePage() {
+  const { favorites } = useWishlist();
   const [tab, setTab] = useState("overview");
   const [profile, setProfile] = useState<AccountProfile | null>(null);
   const [orders, setOrders] = useState<AccountOrder[]>([]);
@@ -299,13 +361,31 @@ export function ProfilePage() {
   const [avatarDataUrl, setAvatarDataUrl] = useState("");
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [notice, setNotice] = useState("");
-  const [openOrder, setOpenOrder] = useState<string | null>(null);
 
   useEffect(() => {
     const requestedTab = new URLSearchParams(window.location.search).get("tab");
     if (accountTabs.some(([id]) => id === requestedTab)) setTab(requestedTab!);
 
     let cancelled = false;
+    let pendingOrdersLoad: Promise<void> | null = null;
+    async function loadOrders() {
+      if (pendingOrdersLoad) return pendingOrdersLoad;
+      pendingOrdersLoad = (async () => {
+        const response = await fetch("/api/account/orders", { cache: "no-store", headers: { "Cache-Control": "no-cache" } });
+        if (!response.ok) return;
+        const loadedOrders = normalizeAccountOrders(await response.json());
+        if (!cancelled) {
+          setOrders(loadedOrders);
+          setProfile((current) => current ? { ...current, orderCount: loadedOrders.length } : current);
+        }
+      })();
+      try {
+        await pendingOrdersLoad;
+      } finally {
+        pendingOrdersLoad = null;
+      }
+    }
+
     async function loadAccount() {
       try {
         const response = await fetch("/api/auth/me", { cache: "no-store" });
@@ -324,19 +404,24 @@ export function ProfilePage() {
         setDefaultAddress(customer.defaultAddress || "");
         setAvatarPreview(customer.avatarUrl || "");
 
-        const ordersResponse = await fetch("/api/account/orders", { cache: "no-store" });
-        if (ordersResponse.ok) {
-          const orderRows = await ordersResponse.json();
-          if (!cancelled) setOrders(Array.isArray(orderRows) ? orderRows : []);
-        }
+        await loadOrders();
       } catch (error) {
         if (!cancelled) setNotice(error instanceof Error ? error.message : "Không tải được thông tin tài khoản.");
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
+    const refreshOrdersWhenVisible = () => {
+      if (document.visibilityState === "visible") void loadOrders().catch(() => {});
+    };
+    window.addEventListener("focus", refreshOrdersWhenVisible);
+    document.addEventListener("visibilitychange", refreshOrdersWhenVisible);
     void loadAccount();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refreshOrdersWhenVisible);
+      document.removeEventListener("visibilitychange", refreshOrdersWhenVisible);
+    };
   }, []);
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
@@ -397,11 +482,11 @@ export function ProfilePage() {
         {!loading && !profile && <p className="profile-orders-empty">Không tải được hồ sơ khách hàng.</p>}
         {!loading && profile && <>
           {tab === "overview" && <>
-            <div className="profile-stats"><div><AccountIcon name="calendar" /><strong>{profile.orderCount}</strong><span>Đơn hàng</span></div><div><AccountIcon name="heart" /><strong>0</strong><span>Sản phẩm yêu thích</span></div><div><AccountIcon name="star" /><strong>0</strong><span>Điểm thưởng</span></div><div><AccountIcon name="gift" /><strong>0</strong><span>Ưu đãi đang có</span></div></div>
-            <section className="profile-panel"><div className="profile-panel-heading"><h2>Đơn hàng gần đây</h2><button type="button" onClick={() => setTab("orders")}>Xem tất cả <span>→</span></button></div><OrderList openOrder={openOrder} setOpenOrder={setOpenOrder} orders={orders.slice(0, 5)} /></section>
+            <div className="profile-stats"><div><AccountIcon name="calendar" /><strong>{profile.orderCount}</strong><span>Đơn hàng</span></div><div><AccountIcon name="heart" /><strong>{favorites.length}</strong><span>Sản phẩm yêu thích</span></div><div><AccountIcon name="star" /><strong>0</strong><span>Điểm thưởng</span></div><div><AccountIcon name="gift" /><strong>0</strong><span>Ưu đãi đang có</span></div></div>
+            <section className="profile-panel"><div className="profile-panel-heading"><h2>Đơn hàng gần đây</h2><button type="button" onClick={() => setTab("orders")}>Xem tất cả <span>→</span></button></div><OrderList orders={orders.slice(0, 5)} /></section>
           </>}
-          {tab === "orders" && <section className="profile-panel"><div className="profile-panel-heading"><h2>Đơn hàng của tôi</h2><span>{orders.length} đơn hàng</span></div><OrderList openOrder={openOrder} setOpenOrder={setOpenOrder} orders={orders} /></section>}
-          {tab === "favorites" && <section className="profile-panel"><div className="profile-panel-heading"><h2>Sản phẩm yêu thích</h2><span>0 sản phẩm</span></div><div className="profile-favorites-empty">Bạn chưa có sản phẩm yêu thích.</div></section>}
+          {tab === "orders" && <section className="profile-panel"><div className="profile-panel-heading"><h2>Đơn hàng của tôi</h2><span>{orders.length} đơn hàng</span></div><OrderList orders={orders} /></section>}
+          {tab === "favorites" && <section className="profile-panel"><div className="profile-panel-heading"><h2>Sản phẩm yêu thích</h2><span>{favorites.length} sản phẩm</span></div>{favorites.length ? <div className="profile-favorites-grid">{favorites.map((product) => <StoreProductCard key={product.id} product={product} promotions={[]} />)}</div> : <div className="profile-favorites-empty">Bạn chưa có sản phẩm yêu thích.</div>}</section>}
           {tab === "addresses" && <section className="profile-panel profile-edit-panel"><div className="profile-panel-heading"><h2>Địa chỉ giao hàng mặc định</h2><span>Được dùng khi đặt hàng</span></div><form className="profile-form" onSubmit={saveProfile}><label>Số điện thoại<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Nhập số điện thoại" /></label><label>Địa chỉ giao hàng<textarea value={defaultAddress} onChange={(event) => setDefaultAddress(event.target.value)} placeholder="Nhập địa chỉ giao hàng" rows={3} /></label><button type="submit" disabled={busy}>{busy ? "ĐANG LƯU..." : "LƯU THAY ĐỔI"}</button></form></section>}
           {tab === "profile" && <section className="profile-panel profile-edit-panel"><div className="profile-panel-heading"><h2>Thông tin tài khoản</h2><span>Email đăng nhập đã xác minh bởi AEGIS</span></div><div className="profile-avatar-editor"><div className="profile-avatar profile-avatar-large">{avatarPreview ? <img src={avatarPreview} alt="Ảnh đại diện xem trước"/> : <AccountIcon name="user" />}</div><label>Ảnh đại diện<input type="file" accept="image/png,image/jpeg,image/webp" disabled={avatarBusy || busy} onChange={(event) => { void selectAvatar(event.currentTarget.files?.[0]); event.currentTarget.value = ""; }}/><small>{avatarBusy ? "Đang xử lý ảnh…" : "PNG, JPG hoặc WebP. Ảnh sẽ được thu nhỏ và nén trước khi lưu."}</small></label></div><form className="profile-form" onSubmit={saveProfile}><label>Họ và tên<input value={name} onChange={(event) => setName(event.target.value)} maxLength={160} autoComplete="name" required /></label><label>Email<input type="email" value={email} readOnly /></label><label>Số điện thoại<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Nhập số điện thoại" autoComplete="tel" /></label><label>Địa chỉ giao hàng<textarea value={defaultAddress} onChange={(event) => setDefaultAddress(event.target.value)} placeholder="Nhập địa chỉ giao hàng" rows={3} /></label><button type="submit" disabled={busy || avatarBusy}>{busy ? "ĐANG LƯU..." : "LƯU THAY ĐỔI"}</button></form></section>}
           {tab === "password" && <section className="profile-panel profile-edit-panel"><div className="profile-panel-heading"><h2>Đổi mật khẩu</h2><span>Bảo vệ tài khoản của bạn</span></div><p className="profile-address-empty">Luồng đổi mật khẩu chưa được bật trên AEGIS. Hãy liên hệ GEME để được hỗ trợ.</p></section>}
@@ -411,6 +496,6 @@ export function ProfilePage() {
   </main>;
 }
 
-function OrderList({ orders, openOrder, setOpenOrder }: { orders: AccountOrder[]; openOrder: string | null; setOpenOrder: (id: string | null) => void }) {
-  return <div className="profile-orders">{orders.length ? orders.map((order) => <article className="profile-order" key={order.id}>{order.image && <img src={order.image} alt="" />}<div className="profile-order-info"><strong>{order.id}</strong><span>{new Date(order.date).toLocaleDateString("vi-VN")} · {orderStatusLabels[order.status] || order.status}</span><small>{order.title}</small></div><strong className="profile-order-price">{Number(order.price).toLocaleString("vi-VN")} ₫</strong><button type="button" onClick={() => setOpenOrder(openOrder === order.id ? null : order.id)}>{openOrder === order.id ? "Thu gọn" : "Xem chi tiết"}</button>{openOrder === order.id && <p className="profile-order-detail">{order.title}</p>}</article>) : <p className="profile-orders-empty">Chưa có đơn hàng.</p>}</div>;
+function OrderList({ orders }: { orders: AccountOrder[] }) {
+  return <div className="profile-orders">{orders.length ? orders.map((order) => <article className="profile-order" key={order.id}>{order.image && <img src={order.image} alt="" />}<div className="profile-order-info"><strong>{order.id}</strong><span>{new Date(order.date).toLocaleDateString("vi-VN")} · <b className={`profile-order-status status-${order.status.toLocaleLowerCase("en")}`}>{orderStatusLabels[order.status] || order.status}</b></span><small>{order.title}</small></div><strong className="profile-order-price">{Number(order.price).toLocaleString("vi-VN")} ₫</strong></article>) : <p className="profile-orders-empty">Chưa có đơn hàng.</p>}</div>;
 }

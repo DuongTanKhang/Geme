@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from "class-validator";
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateNested } from "class-validator";
 
 export class MaterialOptionInputDto {
   @IsString()
@@ -27,6 +27,12 @@ export class MaterialOptionInputDto {
   @Min(0)
   @Max(100_000)
   sortOrder?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @IsUUID("4", { each: true })
+  appliedCategoryIds?: string[];
 }
 
 export class ImportMaterialOptionsDto {
@@ -64,4 +70,10 @@ export class UpdateMaterialOptionDto {
   @Min(0)
   @Max(100_000)
   sortOrder?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @IsUUID("4", { each: true })
+  appliedCategoryIds?: string[];
 }

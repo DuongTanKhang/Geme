@@ -12,6 +12,7 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Caching.Memory;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 
@@ -23,12 +24,14 @@ namespace Aegis.API.Controllers;
 public class AuthController : ControllerBase
 {
     private const string DeviceCookieName = "device_id";
+    private sealed record AuthMeResponse(Guid Id, string Name, string Email, bool EmailVerified);
     private readonly IMediator _mediator;
     private readonly ILogger<AuthController> _logger;
     private readonly IUserRepository _userRepository;
     private readonly ISessionRepository _sessionRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IWebHostEnvironment _environment;
+    private readonly IMemoryCache _memoryCache;
 
     public AuthController(
         IMediator mediator,
@@ -36,7 +39,8 @@ public class AuthController : ControllerBase
         IUserRepository userRepository,
         ISessionRepository sessionRepository,
         IUnitOfWork unitOfWork,
-        IWebHostEnvironment environment)
+        IWebHostEnvironment environment,
+        IMemoryCache memoryCache)
     {
         _mediator = mediator;
         _logger = logger;
@@ -44,6 +48,7 @@ public class AuthController : ControllerBase
         _sessionRepository = sessionRepository;
         _unitOfWork = unitOfWork;
         _environment = environment;
+        _memoryCache = memoryCache;
     }
 
     [HttpPost("refresh")]
@@ -144,6 +149,7 @@ public class AuthController : ControllerBase
 
     [HttpGet("me")]
     [Authorize]
+    [EnableRateLimiting("session")]
     public async Task<IActionResult> Me()
     {
         var sub = User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value
@@ -151,11 +157,19 @@ public class AuthController : ControllerBase
         if (!Guid.TryParse(sub, out var userId))
             return Unauthorized();
 
+        var sessionId = User.FindFirst("sid")?.Value;
+        var cacheKey = Guid.TryParse(sessionId, out _) ? $"auth-me:{sessionId}" : null;
+        if (cacheKey is not null && _memoryCache.TryGetValue<AuthMeResponse>(cacheKey, out var cached))
+            return Ok(cached);
+
         var user = await _userRepository.GetByIdAsync(userId);
         if (user is null || !user.IsActive || user.IsLocked() || !user.IsEmailVerified)
             return Unauthorized();
 
-        return Ok(new { id = user.Id, name = user.Name, email = user.Email, emailVerified = user.IsEmailVerified });
+        var result = new AuthMeResponse(user.Id, user.Name, user.Email, user.IsEmailVerified);
+        if (cacheKey is not null)
+            _memoryCache.Set(cacheKey, result, TimeSpan.FromSeconds(2));
+        return Ok(result);
     }
 
     [HttpPost("logout")]

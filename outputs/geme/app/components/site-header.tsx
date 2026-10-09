@@ -5,9 +5,9 @@ import { normalizeApiBaseUrl } from "../lib/api-base";
 
 type MenuId = "trang-suc" | "da-quy" | "san-pham";
 
-type MenuStone = { id: string; name: string; slug: string; imageUrl?: string };
+type MenuStone = { id: string; name: string; slug: string; imageUrl?: string; appliedCategoryIds?: string[] };
 type MenuCategory = { id: string; name: string; slug: string; kind: "JEWELRY" | "GEMSTONE"; usage: "PRODUCT_CATEGORY" | "GEMSTONE_TYPE"; level: number; parentId?: string | null; status: "ACTIVE" | "INACTIVE"; imageUrl?: string | null; sortOrder?: number };
-type ApiMaterialOption = { id: string; name: string; scope: "JEWELRY" | "GEMSTONE"; kind: "MATERIAL" | "STONE"; active: boolean; imageUrl?: string | null; slug?: string; sortOrder?: number };
+type ApiMaterialOption = { id: string; name: string; scope: "JEWELRY" | "GEMSTONE"; kind: "MATERIAL" | "STONE"; active: boolean; imageUrl?: string | null; slug?: string; sortOrder?: number; appliedCategoryIds?: string[] };
 type StoreCartLine = { key: string; productId: string; variantId: string | null; slug: string; name: string; sku: string; price: number; quality: string | null; beadSize: string | null; quantity: number; stock: number };
 const CART_STORAGE_KEY = "geme-cart-v1";
 function readStoreCart(): StoreCartLine[] {
@@ -101,17 +101,24 @@ function GemstoneListColumn({ stones, categories = [], showHeading = true }: { s
 function JewelLinks({ showAll = false, categories, stones }: { showAll?: boolean; categories: MenuCategory[]; stones: MenuStone[] }) {
   const [activeType, setActiveType] = useState<string | null>(null);
   const [activeChild, setActiveChild] = useState<string | null>(null);
-  const rootIds = new Set(categories.filter((item) => item.level === 1 && item.kind === "JEWELRY" && item.usage === "PRODUCT_CATEGORY").map((item) => item.id));
-  const typeCategories = categories.filter((item) => item.level === 2 && item.usage === "PRODUCT_CATEGORY" && rootIds.has(item.parentId || "")).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  const jewelryProductCategories = categories.filter((item) => item.kind === "JEWELRY" && item.usage === "PRODUCT_CATEGORY");
+  const rootIds = new Set(jewelryProductCategories.filter((item) => !item.parentId).map((item) => item.id));
+  const sortCategories = (items: MenuCategory[]) => items.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name, "vi"));
+  // Parent links are the source of truth; level is only display metadata and
+  // older categories may have been saved with a missing or stale level.
+  const typeCategories = sortCategories(jewelryProductCategories.filter((item) => rootIds.has(item.parentId || "")));
   const activeCategory = categories.find((item) => item.id === (activeChild || activeType));
-  const children = activeType ? categories.filter((item) => item.parentId === activeType && item.status === "ACTIVE" && item.usage === "PRODUCT_CATEGORY").sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) : [];
-  const selectedChildren = activeChild ? categories.filter((item) => item.parentId === activeChild && item.status === "ACTIVE" && item.usage === "PRODUCT_CATEGORY") : [];
-  const showStones = Boolean(activeCategory && (children.length === 0 || (activeChild && selectedChildren.length === 0)));
+  const children = activeType ? sortCategories(jewelryProductCategories.filter((item) => item.parentId === activeType)) : [];
+  const selectedChildren = activeChild ? sortCategories(jewelryProductCategories.filter((item) => item.parentId === activeChild)) : [];
+  const showStones = Boolean(activeCategory);
   const stoneCategory = activeChild ? categories.find((item) => item.id === activeChild) : activeCategory;
   const typeColumn = <JewelryTypeColumn categories={typeCategories} activeType={activeType} onSelect={(id) => { setActiveType(id); setActiveChild(null); }} />;
   const secondColumn = activeType && children.length > 0 ? <BraceletCategoryColumn categories={children} activeCategory={activeChild} onSelect={setActiveChild} /> : null;
   const thirdColumn = activeChild && selectedChildren.length > 0 ? <BraceletCategoryColumn categories={selectedChildren} activeCategory={null} onSelect={setActiveChild} /> : null;
-  const stonesColumn = showStones ? <JewelryStoneColumn stones={stones} categorySlug={stoneCategory?.slug || ""} /> : null;
+  const applicableStones = stoneCategory
+    ? stones.filter((stone) => stone.appliedCategoryIds === undefined || stone.appliedCategoryIds.includes(stoneCategory.id))
+    : [];
+  const stonesColumn = showStones ? <JewelryStoneColumn stones={applicableStones} categorySlug={stoneCategory?.slug || ""} /> : null;
   if (showAll) return <div className="mega-columns has-selection">{typeColumn}{secondColumn}{thirdColumn}{stonesColumn}</div>;
   return <div className={"mega-selection-layout" + (activeType ? " has-selection" : "")}>
     <MenuCard id="trang-suc" title="TRANG SỨC"><div className="mega-columns">{typeColumn}</div></MenuCard>
@@ -160,6 +167,7 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
         name: item.name,
         slug: item.slug || slugifyStone(item.name),
         imageUrl: item.imageUrl || fallbackStoneImages[item.name],
+        ...(Array.isArray(item.appliedCategoryIds) ? { appliedCategoryIds: item.appliedCategoryIds } : {}),
         sortOrder: item.sortOrder ?? 0,
       }));
       const order = (left: MenuStone & { sortOrder?: number }, right: MenuStone & { sortOrder?: number }) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name, "vi");
@@ -173,26 +181,27 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
       setGemstoneTypes(enabled.filter((item) => item.kind === "GEMSTONE" && item.usage === "GEMSTONE_TYPE"));
       setGemstoneCategories(enabled.filter((item) => item.kind === "GEMSTONE" && item.usage === "PRODUCT_CATEGORY"));
     };
-    const fetchCategories = async () => {
+    let categoriesRequestId = 0;
+    const fetchCategories = async (fresh = false) => {
+      const requestId = ++categoriesRequestId;
       try {
-        const response = await fetch(`${materialsApiBase}/categories`, { cache: "no-store" });
-        if (response.ok) applyCategories(await response.json() as MenuCategory[]);
+        const response = await fetch(`${materialsApiBase}/categories`, { cache: fresh ? "no-store" : "default" });
+        if (response.ok) {
+          const records = await response.json() as MenuCategory[];
+          if (requestId === categoriesRequestId) applyCategories(records);
+        }
       } catch { /* Keep the category menu empty until the API is available. */ }
     };
-    const fetchCatalog = async () => {
-      void fetchCategories();
-      try {
-        const response = await fetch(`${materialsApiBase}/materials`, { cache: "no-store" });
-        if (response.ok) applyMaterials(await response.json() as ApiMaterialOption[]);
-      } catch { /* The menu stays empty until the backend provides its catalog. */ }
-    };
-    void fetchCatalog();
-    window.addEventListener("geme:categories-changed", fetchCategories);
+    const refreshCategories = () => { void fetchCategories(true); };
+    // The materials SSE stream delivers a shared in-memory snapshot on open;
+    // avoid issuing a duplicate database read for every visitor.
+    void fetchCategories(true);
+    window.addEventListener("geme:categories-changed", refreshCategories);
     const events = new EventSource(`${materialsApiBase}/materials/events`);
     events.onmessage = (event) => {
       try { applyMaterials(JSON.parse(event.data) as ApiMaterialOption[]); } catch { /* Ignore malformed event payloads. */ }
     };
-    return () => { active = false; window.removeEventListener("geme:categories-changed", fetchCategories); events.close(); };
+    return () => { active = false; window.removeEventListener("geme:categories-changed", refreshCategories); events.close(); };
   }, []);
 
   useEffect(() => {
@@ -201,7 +210,7 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
     const checkAccountSession = async () => {
       try {
         const response = await fetch("/api/auth/me", { cache: "no-store" });
-        if (!response.ok) {
+        if (response.status === 401) {
           if (alive) {
             setAccountHref("/dang-nhap?next=%2Ftai-khoan");
             setAccountAvatarUrl("");
@@ -209,6 +218,9 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
           }
           return;
         }
+        // A timeout, rate limit, or temporary API outage is not evidence that
+        // the customer signed out. Keep the account link and current identity.
+        if (!response.ok) return;
         const result = await response.json() as { customer?: { name?: string; avatarUrl?: string | null }; sessionExpiresAt?: number };
         if (!alive) return;
         setAccountHref("/tai-khoan");
@@ -223,11 +235,7 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
           }, Math.max(0, expiresAt - Date.now()));
         }
       } catch {
-        if (alive) {
-          setAccountHref("/dang-nhap?next=%2Ftai-khoan");
-          setAccountAvatarUrl("");
-          setAccountName("");
-        }
+        // Preserve the signed-in state when the auth service is temporarily unreachable.
       }
     };
     void checkAccountSession();

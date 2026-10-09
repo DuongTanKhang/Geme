@@ -58,7 +58,9 @@ export type StoreProduct = {
   materialOptionId?: string | null;
   description?: string | null;
   fullDescription?: string | null;
+  coverVideoUrl?: string | null;
   technicalImageUrl?: string | null;
+  technicalVideoUrl?: string | null;
   weightGrams?: number | null;
   lengthCm?: number | null;
   widthCm?: number | null;
@@ -97,6 +99,13 @@ export type StoreSalesProduct = {
 // Server Components should call the API over Docker's private network when available.
 // The public URL remains the fallback for local runs outside Compose.
 const API_BASE = normalizeApiBaseUrl(process.env.GEME_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:4000/api/v1");
+// Share public catalogue reads between visitors for a short window. Product,
+// banner, and price changes appear quickly while bursts do not fan out into
+// hundreds of identical database queries.
+const STOREFRONT_REVALIDATE_SECONDS = (() => {
+  const configured = Number(process.env.STOREFRONT_API_REVALIDATE_SECONDS);
+  return Number.isInteger(configured) && configured >= 1 && configured <= 60 ? configured : 5;
+})();
 
 const requestApi = cache(async (path: string, revalidateSeconds = 0, cacheTag = ""): Promise<{ data: unknown | null; connected: boolean }> => {
   try {
@@ -115,7 +124,7 @@ const requestApi = cache(async (path: string, revalidateSeconds = 0, cacheTag = 
 });
 
 async function readApi<T>(path: string, options?: { revalidateSeconds?: number; cacheTag?: string }): Promise<{ data: T | null; connected: boolean }> {
-  return await requestApi(path, options?.revalidateSeconds ?? 0, options?.cacheTag ?? "") as { data: T | null; connected: boolean };
+  return await requestApi(path, options?.revalidateSeconds ?? STOREFRONT_REVALIDATE_SECONDS, options?.cacheTag ?? "") as { data: T | null; connected: boolean };
 }
 
 export type StoreBanner = {
@@ -235,6 +244,10 @@ function canonicalBannerPosition(position: string) {
     "mặt đá quý": "Mặt đá quý - Banner",
     blog: "Blog - Banner",
     "new arrivals": "New Arrivals - Hero",
+    "đăng nhập": "Đăng nhập - Banner",
+    "đăng nhập - banner": "Đăng nhập - Banner",
+    "tài khoản": "Đăng nhập - Banner",
+    "tài khoản - banner": "Đăng nhập - Banner",
     "liên hệ - cta": "Liên hệ - Banner tư vấn",
     "về geme - cuối trang": "Về GEME - Banner cuối",
     "new arrivals - cuối trang": "New Arrivals - Banner cuối",
@@ -302,7 +315,9 @@ function asStoreProduct(value: any): StoreProduct {
     materialOptionId: value.materialOptionId ?? null,
     description: value.description ?? null,
     fullDescription: value.fullDescription ?? null,
+    coverVideoUrl: typeof value.coverVideoUrl === "string" && value.coverVideoUrl ? value.coverVideoUrl : null,
     technicalImageUrl: value.technicalImageUrl ?? null,
+    technicalVideoUrl: value.technicalVideoUrl ?? null,
     weightGrams: value.weightGrams == null ? null : Number(value.weightGrams),
     lengthCm: value.lengthCm == null ? null : Number(value.lengthCm),
     widthCm: value.widthCm == null ? null : Number(value.widthCm),

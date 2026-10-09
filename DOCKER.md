@@ -49,6 +49,8 @@ docker compose --env-file .env.docker up -d aegis
 
 The localhost base URL is for local testing only. Before sending verification links to customers, set `AEGIS_EMAIL_PUBLIC_BASE_URL` to the publicly reachable HTTPS AEGIS URL. Unset the Gmail variables to return to Mailpit defaults.
 
+Order confirmations are sent to the email entered at checkout through the same AEGIS SMTP/Gmail configuration. Set `GEME_ORDER_EMAIL_API_KEY` to a separate random secret in the ignored `.env.docker`; Compose shares it only between the API and AEGIS internal endpoint. Set `AEGIS_JWT_KEY` to a stable random secret so local customer sessions survive AEGIS restarts. Do not commit either secret.
+
 ## POS365 connection setup (read-only first step)
 
 POS365 credentials are passed only to the `geme-api` container. They are not exposed to the storefront or admin browser. Keep integration disabled until POS365 confirms API access and grants the required permissions. Put real values only in the ignored `.env.docker` file:

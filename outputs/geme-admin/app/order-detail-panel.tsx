@@ -6,6 +6,8 @@ type Props = {
   order: OrderReceiptData;
   onClose: () => void;
   onConfirm: () => void;
+  onDispatch: () => void;
+  onDelivered: () => void;
   onShowBill: () => void;
   onCustomerHistory: () => void;
 };
@@ -43,7 +45,7 @@ function posSyncName(status?: string | null) {
   return ({ PENDING: "Đang chờ gửi", SYNCING: "Đang đồng bộ", RETRYING: "Sẽ tự thử lại", SYNCED: "Đã đồng bộ", BLOCKED: "Cần cấu hình thanh toán" } as Record<string, string>)[status || ""] || "Chưa gửi lên POS365";
 }
 
-export default function OrderDetailPanel({ order, onClose, onConfirm, onShowBill, onCustomerHistory }: Props) {
+export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch, onDelivered, onShowBill, onCustomerHistory }: Props) {
   const statusSteps = ["Đặt hàng", "Chờ xác nhận", "Đang xử lý", "Đang giao", "Đã giao", "Đã hủy"];
   const statusIndex = Math.max(0, statusSteps.indexOf(order.status));
 
@@ -77,7 +79,13 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onShowBill
 
     {order.note && <section className="drawer-note"><h3><SectionIcon name="note"/>Ghi chú đơn hàng</h3><p>{order.note}</p></section>}
     <div className="drawer-actions">
-      {order.status === "Chờ xác nhận" ? <button className="button button-primary" type="button" onClick={onConfirm}>✓ Xác nhận đơn</button> : <button className="button button-quiet" type="button" onClick={onShowBill}>Chi tiết hóa đơn</button>}
+      {order.status === "Chờ xác nhận"
+        ? <button className="button button-primary" type="button" onClick={onConfirm}>✓ Xác nhận đơn</button>
+        : order.status === "Đang xử lý"
+          ? <button className="button button-primary" type="button" onClick={onDispatch}>✓ Đã xử lý xong · Chuyển sang giao</button>
+          : order.status === "Đang giao"
+            ? <button className="button button-primary" type="button" onClick={onDelivered}>✓ Xác nhận đã giao</button>
+            : <button className="button button-quiet" type="button" onClick={onShowBill}>Chi tiết hóa đơn</button>}
       <button className="button button-quiet" type="button" onClick={onShowBill}>▤ In đơn</button>
       {order.phone ? <a className="button button-quiet" href={`tel:${order.phone}`}>☎ Liên hệ khách</a> : <button className="button button-quiet" type="button" disabled>☎ Liên hệ khách</button>}
     </div>

@@ -5,6 +5,10 @@ services:
     build:
       context: ./outputs/geme
       dockerfile: Dockerfile
+      args:
+        GEME_API_BASE_URL: http://geme-api:4000/api/v1
+        NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:4000/api/v1
+        AEGIS_AUTH_API_URL: http://aegis:5130
     environment:
       NODE_ENV: development
       NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:4000/api/v1
@@ -56,6 +60,8 @@ services:
       CORS_ORIGINS: http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001
       DATABASE_URL: ${GEME_DATABASE_URL:?Set GEME_DATABASE_URL in .env.docker}
       AEGIS_AUTH_API_URL: http://aegis:5130
+      AEGIS_ORDER_EMAIL_URL: http://aegis:5130
+      GEME_ORDER_EMAIL_API_KEY: ${GEME_ORDER_EMAIL_API_KEY:?Set GEME_ORDER_EMAIL_API_KEY in .env.docker}
       # POS365 credentials stay on the API container; never expose them to storefront/admin browsers.
       POS365_ENABLED: ${POS365_ENABLED:-false}
       POS365_API_BASE_URL: ${POS365_API_BASE_URL:-}
@@ -104,6 +110,8 @@ services:
       PasswordHashing__WorkFactor: ${AEGIS_BCRYPT_WORK_FACTOR:-10}
       Jwt__Issuer: Aegis
       Jwt__Audience: AegisClient
+      Jwt__Key: ${AEGIS_JWT_KEY:?Set AEGIS_JWT_KEY in .env.docker}
+      InternalApi__OrderEmailKey: ${GEME_ORDER_EMAIL_API_KEY:?Set GEME_ORDER_EMAIL_API_KEY in .env.docker}
     ports:
       - "5130:5130"
     depends_on:

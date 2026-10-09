@@ -17,6 +17,43 @@ export type CustomerSession = {
   user: { id: string; name: string; email: string; emailVerified: boolean };
 };
 
+/**
+ * Check the browser Origin against the host that received the request.
+ * Next's parsed URL can use an internal/proxy hostname, while Host or the
+ * trusted reverse-proxy headers retain the public hostname the browser used.
+ */
+export function isSameOriginRequest(request: NextRequest) {
+  const rawOrigin = request.headers.get("origin");
+  if (!rawOrigin) return true;
+
+  let origin: URL;
+  try {
+    origin = new URL(rawOrigin);
+  } catch {
+    return false;
+  }
+  if (origin.protocol !== "http:" && origin.protocol !== "https:") return false;
+
+  const hosts = [
+    request.headers.get("host"),
+    request.headers.get("x-forwarded-host")?.split(",", 1)[0]?.trim(),
+    request.nextUrl.host,
+  ].filter((value): value is string => Boolean(value));
+  const protocols = [
+    request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim(),
+    request.nextUrl.protocol.replace(/:$/, ""),
+  ].filter((value): value is string => value === "http" || value === "https");
+
+  return hosts.some((host) => {
+    try {
+      const normalizedHost = new URL(`${origin.protocol}//${host}`).host;
+      return normalizedHost === origin.host && protocols.includes(origin.protocol.slice(0, -1));
+    } catch {
+      return false;
+    }
+  });
+}
+
 export async function callAegis(path: string, init: RequestInit = {}) {
   if (!AEGIS_BASE) throw new Error("AEGIS_AUTH_API_URL is required in production.");
   return fetch(`${AEGIS_BASE}${path}`, {
@@ -53,12 +90,20 @@ export async function callGemePublicApi(path: string, init: RequestInit = {}) {
 }
 
 export async function getCustomerSession(request: NextRequest): Promise<CustomerSession | null> {
-  const accessToken = request.cookies.get(ACCESS_COOKIE)?.value;
+  const accessToken = getCustomerAccessToken(request);
   if (!accessToken) return null;
   const me = await callAegis("/auth/me", { headers: { Authorization: `Bearer ${accessToken}` } });
   if (me.status === 401 || me.status === 403) return null;
   if (!me.ok) throw new Error("Aegis session validation failed.");
   return { accessToken, user: await me.json() };
+}
+
+/** Read the HttpOnly access token for a server-side proxy to the API.
+ * The API's customer guard is the authoritative session check; proxy routes
+ * should not make a second round-trip to Aegis before forwarding it.
+ */
+export function getCustomerAccessToken(request: NextRequest) {
+  return request.cookies.get(ACCESS_COOKIE)?.value || null;
 }
 
 export function applyAuthCookies(response: NextResponse, pair: TokenPair) {
