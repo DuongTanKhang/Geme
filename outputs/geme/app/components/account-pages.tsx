@@ -23,6 +23,10 @@ type AccountOrder = {
   title: string;
   image?: string | null;
   price: number;
+  shippingProvider?: string | null;
+  shippingMethod?: string | null;
+  trackingCode?: string | null;
+  carrierStatusName?: string | null;
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -72,6 +76,10 @@ function normalizeAccountOrders(payload: unknown): AccountOrder[] {
       title: String(firstOrderValue(order, "title") ?? itemSummary),
       image: firstOrderValue(order, "image") as string | null | undefined,
       price: Number(firstOrderValue(order, "price", "totalAmount", "total_amount", "total") ?? 0),
+      shippingProvider: firstOrderValue(order, "shippingProvider", "shipping_provider") as string | null | undefined,
+      shippingMethod: firstOrderValue(order, "shippingMethod", "shipping_method") as string | null | undefined,
+      trackingCode: firstOrderValue(order, "trackingCode", "tracking_code") as string | null | undefined,
+      carrierStatusName: firstOrderValue(order, "carrierStatusName", "carrier_status_name") as string | null | undefined,
     };
   }).filter((order) => Boolean(order.id));
 }
@@ -497,5 +505,5 @@ export function ProfilePage() {
 }
 
 function OrderList({ orders }: { orders: AccountOrder[] }) {
-  return <div className="profile-orders">{orders.length ? orders.map((order) => <article className="profile-order" key={order.id}>{order.image && <img src={order.image} alt="" />}<div className="profile-order-info"><strong>{order.id}</strong><span>{new Date(order.date).toLocaleDateString("vi-VN")} · <b className={`profile-order-status status-${order.status.toLocaleLowerCase("en")}`}>{orderStatusLabels[order.status] || order.status}</b></span><small>{order.title}</small></div><strong className="profile-order-price">{Number(order.price).toLocaleString("vi-VN")} ₫</strong></article>) : <p className="profile-orders-empty">Chưa có đơn hàng.</p>}</div>;
+  return <div className="profile-orders">{orders.length ? orders.map((order) => <article className="profile-order" key={order.id}>{order.image && <img src={order.image} alt="" />}<div className="profile-order-info"><strong>{order.id}</strong><span>{new Date(order.date).toLocaleDateString("vi-VN")} · <b className={`profile-order-status status-${order.status.toLocaleLowerCase("en")}`}>{orderStatusLabels[order.status] || order.status}</b></span><small>{order.title}</small>{order.trackingCode && <small className="profile-order-shipment">Viettel Post · Mã vận đơn {order.trackingCode}{order.carrierStatusName ? ` · ${order.carrierStatusName}` : ""}</small>}</div><strong className="profile-order-price">{Number(order.price).toLocaleString("vi-VN")} ₫</strong></article>) : <p className="profile-orders-empty">Chưa có đơn hàng.</p>}</div>;
 }

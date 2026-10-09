@@ -92,6 +92,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   private categoryCache: { expiresAt: number; records: any[] } | null = null;
   private categoryLoad: Promise<any[]> | null = null;
   private categoryCacheVersion = 0;
+  private readonly productReadCache = new Map<string, { expiresAt: number; records: any[] }>();
+  private readonly productReadLoads = new Map<string, Promise<any[]>>();
+  private productReadGeneration = 0;
 
   constructor(private readonly prisma: PrismaService, private readonly pos365: Pos365Service) {}
 
@@ -233,7 +236,35 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   private publishCatalogChange(entity: string, action: string, id?: string) {
+    if (entity === "product" || entity === "category") {
+      this.productReadGeneration += 1;
+      this.productReadCache.clear();
+      this.productReadLoads.clear();
+    }
     this.catalogChanges.next({ data: { entity, action, ...(id ? { id } : {}), at: new Date().toISOString() } });
+  }
+
+  private cachedPublicProductRead(key: string, load: () => Promise<any[]>) {
+    const now = Date.now();
+    const cached = this.productReadCache.get(key);
+    if (cached && cached.expiresAt > now) return Promise.resolve(cached.records);
+    if (cached) this.productReadCache.delete(key);
+    const active = this.productReadLoads.get(key);
+    if (active) return active;
+    const generation = this.productReadGeneration;
+    let request: Promise<any[]>;
+    request = load().then((records) => {
+      if (generation !== this.productReadGeneration) return records;
+      this.productReadCache.set(key, { expiresAt: Date.now() + 2_000, records });
+      while (this.productReadCache.size > 80) {
+        const oldestKey = this.productReadCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        this.productReadCache.delete(oldestKey);
+      }
+      return records;
+    }).finally(() => { if (this.productReadLoads.get(key) === request) this.productReadLoads.delete(key); });
+    this.productReadLoads.set(key, request);
+    return request;
   }
 
   private async ensureRequiredJewelryCategories() {
@@ -461,10 +492,18 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (query.search) where.OR = [{ name: { contains: query.search, mode: "insensitive" } }, { sku: { contains: query.search, mode: "insensitive" } }];
     const orderBy = [{ isNew: "desc" as const }, { createdAt: "desc" as const }];
     const take = Math.min(Math.max(Number(query.limit) || 500, 1), 500);
-    if (query.view === "storefront-list") {
-      return this.prisma.product.findMany({ where, select: selectStorefrontListing, orderBy, take });
-    }
-    return this.prisma.product.findMany({ where, include: query.view === "storefront" ? includeStorefrontProduct : includeProduct, orderBy, take });
+    const load = () => query.view === "storefront-list"
+      ? this.prisma.product.findMany({ where, select: selectStorefrontListing, orderBy, take })
+      : this.prisma.product.findMany({ where, include: query.view === "storefront" ? includeStorefrontProduct : includeProduct, orderBy, take });
+    if (query.all === "true" || query.search || !["storefront", "storefront-list"].includes(query.view)) return load();
+    const cacheKey = JSON.stringify(Object.entries(query).sort(([left], [right]) => left.localeCompare(right)));
+    return this.cachedPublicProductRead(cacheKey, load);
+  }
+
+  async adminProduct(id: string) {
+    const product = await this.prisma.product.findUnique({ where: { id }, include: includeProduct });
+    if (!product) throw new NotFoundException("Không tìm thấy sản phẩm.");
+    return product;
   }
 
   async product(slug: string) {
@@ -1567,12 +1606,36 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     catch (error: any) { if (error?.code === "P2025") throw new NotFoundException("Không tìm thấy khách hàng."); if (error?.code === "P2002") throw new ConflictException("Email hoặc số điện thoại đã được sử dụng."); throw error; }
   }
 
-  orders() { return this.prisma.order.findMany({ include: { items: { include: { product: { include: { images: { orderBy: { sortOrder: "asc" as const }, take: 1 } } } } }, payments: true, customer: true }, orderBy: { placedAt: "desc" }, take: 500 }); }
+  orders(query: Record<string, string> = {}) {
+    const take = Math.min(Math.max(Number(query.limit) || 500, 1), 500);
+    if (query.view === "admin-summary") return this.prisma.order.findMany({
+      select: {
+        id: true, code: true, customerName: true, customerPhone: true, customerEmail: true,
+        shippingMethod: true, status: true, totalAmount: true, placedAt: true,
+        customer: { select: { name: true, phone: true, email: true } },
+        items: { select: { productName: true, productSku: true, quantity: true, unitPrice: true, lineTotal: true } },
+        payments: { select: { method: true, status: true }, take: 1 },
+      },
+      orderBy: { placedAt: "desc" }, take,
+    });
+    return this.prisma.order.findMany({ include: { items: { include: { product: { include: { images: { orderBy: { sortOrder: "asc" as const }, take: 1 } } } } }, payments: true, customer: true }, orderBy: { placedAt: "desc" }, take });
+  }
 
   async updateOrderStatus(id: string, statusInput: unknown) {
     const status = enumValue(statusInput, ["PENDING_CONFIRMATION", "PROCESSING", "SHIPPING", "DELIVERED", "CANCELLED"], "");
     if (!status) throw new BadRequestException("Trạng thái đơn hàng không hợp lệ.");
     try {
+      const current = await this.prisma.order.findUnique({ where: { id }, select: { status: true, shippingProvider: true, trackingCode: true, carrierShipmentStatus: true } });
+      if (!current) throw new NotFoundException("Không tìm thấy đơn hàng.");
+      if (current.shippingProvider === "VIETTEL_POST" && status === "SHIPPING" && current.carrierShipmentStatus !== "IN_TRANSIT") {
+        throw new BadRequestException("Chỉ chuyển đơn Viettel Post sang Đang giao khi hãng đã xác nhận nhận kiện.");
+      }
+      if (current.shippingProvider === "VIETTEL_POST" && status === "DELIVERED" && current.carrierShipmentStatus !== "DELIVERED") {
+        throw new BadRequestException("Viettel Post chưa xác nhận giao thành công cho đơn này.");
+      }
+      if (current.shippingProvider === "VIETTEL_POST" && status === "CANCELLED" && current.trackingCode && !["CANCELLED", "RETURNING", "EXCEPTION"].includes(String(current.carrierShipmentStatus || ""))) {
+        throw new BadRequestException("Vui lòng hủy hoặc xử lý hoàn vận đơn trên Viettel Post trước khi hủy đơn GEME.");
+      }
       const order = await this.prisma.order.update({
         where: { id },
         data: {
@@ -1767,9 +1830,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async promotions() {
-    await this.syncPromotionStatuses();
-    return this.prisma.promotion.findMany({ include: { targets: { include: { category: true, product: true } }, _count: { select: { usages: true } } }, orderBy: { createdAt: "desc" }, take: 500 });
+  async promotions(query: Record<string, string> = {}) {
+    const take = Math.min(Math.max(Number(query.limit) || 500, 1), 500);
+    if (query.view === "admin-summary") return this.prisma.promotion.findMany({
+      select: { id: true, name: true, code: true, type: true, value: true, status: true, visible: true, startsAt: true, endsAt: true, createdAt: true },
+      orderBy: { createdAt: "desc" }, take,
+    });
+    return this.prisma.promotion.findMany({ include: { targets: { include: { category: true, product: true } }, _count: { select: { usages: true } } }, orderBy: { createdAt: "desc" }, take });
   }
 
   async storefrontPromotions() {
@@ -1883,6 +1950,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (query.view === "storefront-list") return this.prisma.blogPost.findMany({
       where,
       select: { id: true, slug: true, title: true, summary: true, category: true, tags: true, coverImageUrl: true, publishedAt: true, createdAt: true, views: true, images: { orderBy: { sortOrder: "asc" }, take: 1, select: { url: true, alt: true, sortOrder: true } } },
+      orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }], take, skip,
+    });
+    if (query.view === "admin-summary") return this.prisma.blogPost.findMany({
+      where,
+      select: { id: true, title: true, summary: true, category: true, status: true, publishedAt: true, createdAt: true, coverImageUrl: true },
       orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }], take, skip,
     });
     return this.prisma.blogPost.findMany({ where, include: { images: { orderBy: { sortOrder: "asc" } }, author: { select: { displayName: true } } }, orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }], take, skip });
@@ -2042,10 +2114,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const from = parseDate(query.from, new Date(Date.now() - 30 * 86400000));
     const to = parseDate(query.to, new Date());
     const orderWhere = { placedAt: { gte: from, lte: to }, status: { not: "CANCELLED" as const } };
-    const [orderStats, customerCount, newCustomers, productsSold, timeline, categories, products, payments, salesChannels, promotionPerformance, topOrders] = await Promise.all([
+    const [orderStats, customerCount, newCustomers, productCount, productsSold, timeline, categories, products, payments, salesChannels, promotionPerformance, topOrders] = await Promise.all([
       this.prisma.order.aggregate({ where: orderWhere, _sum: { totalAmount: true }, _count: { _all: true } }),
       this.prisma.customer.count({ where: { createdAt: { lte: to } } }),
       this.prisma.customer.count({ where: { createdAt: { gte: from, lte: to } } }),
+      this.prisma.product.count({ where: { status: { not: "ARCHIVED" } } }),
       this.prisma.$queryRaw<Array<{ count: number }>>`
         SELECT COALESCE(SUM(i.quantity), 0)::int AS count
         FROM order_items i JOIN orders o ON o.id = i.order_id
@@ -2129,7 +2202,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const revenue = Number(orderStats._sum.totalAmount) || 0;
     const orderCount = orderStats._count._all;
     return {
-      from, to, revenue, orderCount, customerCount, newCustomers,
+      from, to, revenue, orderCount, customerCount, newCustomers, productCount,
       productsSold: Number(productsSold[0]?.count) || 0,
       averageOrderValue: orderCount ? Math.round(revenue / orderCount) : 0,
       timeline, categories, products, payments, salesChannels, promotionPerformance, topOrders,

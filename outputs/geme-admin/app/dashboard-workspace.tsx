@@ -16,6 +16,7 @@ export type DashboardReport = {
   revenue: number;
   orderCount: number;
   customerCount: number;
+  productCount?: number;
   newCustomers: number;
   productsSold: number;
   averageOrderValue: number;
@@ -83,8 +84,8 @@ export default function DashboardWorkspace({ products, orders, promotions, posts
       {[
         { label: "Đơn hàng · 30 ngày", value: report ? report.orderCount : "—", icon: "cart", tone: "green" },
         { label: "Doanh thu · 30 ngày", value: report ? money(report.revenue) : "—", icon: "coins", tone: "amber" },
-        { label: "Khách hàng", value: customerCount, icon: "person", tone: "purple" },
-        { label: "Sản phẩm", value: products.length, icon: "cube", tone: "blue" },
+        { label: "Khách hàng", value: report?.customerCount ?? customerCount, icon: "person", tone: "purple" },
+        { label: "Sản phẩm", value: report?.productCount ?? products.length, icon: "cube", tone: "blue" },
       ].map((card) => <article className="kpi-card" key={card.label}>
         <span className={`kpi-icon ${card.tone}`}><span aria-hidden="true">{card.icon === "cart" ? "▣" : card.icon === "coins" ? "◉" : card.icon === "person" ? "♙" : "◇"}</span></span>
         <div className="kpi-copy"><span className="kpi-label">{card.label}</span><strong className="kpi-value">{card.value}</strong></div>

@@ -35,7 +35,7 @@ async function bootstrap() {
   let requestCount = 0;
   app.use((request: RateLimitRequest, response: RateLimitResponse, next: () => void) => {
     const path = request.path || "";
-    if (request.method === "OPTIONS" || path.startsWith("/api/v1/health") || path.startsWith("/api/v1/docs")) {
+    if (request.method === "OPTIONS" || path.startsWith("/api/v1/health") || path.startsWith("/api/v1/docs") || path.startsWith("/api/v1/integrations/viettel-post/webhook")) {
       next();
       return;
     }

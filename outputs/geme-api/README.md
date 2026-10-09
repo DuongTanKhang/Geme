@@ -52,3 +52,9 @@ Chất liệu kim loại và loại đá được lưu trong bảng riêng `mate
 ## Kết nối admin
 
 Admin dùng `NEXT_PUBLIC_API_BASE_URL=http://localhost:4000/api/v1` để đọc và ghi các danh sách nghiệp vụ. Riêng chất liệu/loại đá hỗ trợ tạo, sửa, ẩn và xóa qua `/api/v1/materials`; danh sách cũng được phát qua `/api/v1/materials/events` để cập nhật giao diện đang mở. Secret và thông tin Kiot Việt chỉ được lưu ở backend.
+
+## Viettel Post
+
+Viettel Post dùng API Partner ở backend. Cấu hình `VIETTELPOST_ENABLED=true`, `VIETTELPOST_API_BASE_URL`, token Partner dài hạn, và tên/số điện thoại/địa chỉ người gửi trong `.env` (hoặc `.env.docker`). Tài khoản Viettel Post cần bật quyền API; môi trường phát triển là `https://partnerdev.viettelpost.vn`, production là `https://partner.viettelpost.vn`. Không đưa token vào biến `NEXT_PUBLIC_*`.
+
+Trong admin, mở đơn đang xử lý để lấy dịch vụ/cước và tạo vận đơn. API chỉ gửi thông tin người nhận khi nhân viên chủ động lấy dịch vụ hoặc tạo vận đơn. Mã vận đơn, dịch vụ, phí, bên trả cước, khoản COD và hành trình được gắn vào đơn. Tạo nhãn giữ trạng thái đơn GEME ở `PROCESSING` và trạng thái vận đơn ở `AWAITING_PICKUP`; webhook chuyển đơn sang `SHIPPING` sau khi Viettel Post báo đã lấy/nhận kiện, và chỉ xác nhận `DELIVERED` khi hãng báo giao thành công. Lỗi giao hoặc hoàn hàng chỉ cập nhật trạng thái vận chuyển, không tự hủy đơn GEME. Cước người nhận trả dùng loại vận đơn thu tiền hàng và cước; cước GEME trả dùng loại thu tiền hàng, còn COD theo đúng số tiền tổng đơn còn phải thu. Để tự cập nhật trạng thái, cấu hình URL webhook `https://<GEME-API>/api/v1/integrations/viettel-post/webhook` trong Viettel Post Partner và đặt cùng một bí mật vào `VIETTELPOST_WEBHOOK_TOKEN` ở cả hai phía. Webhook xác thực trường `DATA.TOKEN`; nó chỉ cập nhật trạng thái vận chuyển cho mã vận đơn đã lưu trong GEME.

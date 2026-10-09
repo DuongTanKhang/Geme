@@ -15,6 +15,7 @@ export class CommerceController {
   @Delete("categories/:id") deleteCategory(@Param("id") id: string) { return this.commerce.deleteCategory(id); }
 
   @Get("products") products(@Query() query: Record<string, string>) { return this.commerce.products(query); }
+  @Get("products/:id") adminProduct(@Param("id") id: string) { return this.commerce.adminProduct(id); }
   @Get("products/detail/:slug/related") relatedProducts(@Param("slug") slug: string, @Query("limit") limit?: string) { return this.commerce.relatedProducts(slug, limit); }
   @Get("products/detail/:slug") product(@Param("slug") slug: string) { return this.commerce.product(slug); }
   @Sse("products/events") productEvents() { return this.commerce.catalogEvents(); }
@@ -42,12 +43,12 @@ export class CommerceController {
   @Post("customers") createCustomer(@Body() body: Record<string, any>) { return this.commerce.saveCustomer(body); }
   @Patch("customers/:id") updateCustomer(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.saveCustomer(body, id); }
 
-  @Get("orders") orders() { return this.commerce.orders(); }
+  @Get("orders") orders(@Query() query: Record<string, string>) { return this.commerce.orders(query); }
   @Post("orders") createOrder(@Body() body: Record<string, any>) { return this.commerce.createOrder(body); }
   @Patch("orders/:id/status") orderStatus(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.updateOrderStatus(id, body.status); }
 
   @Get("promotions/storefront") storefrontPromotions() { return this.commerce.storefrontPromotions(); }
-  @Get("promotions") promotions() { return this.commerce.promotions(); }
+  @Get("promotions") promotions(@Query() query: Record<string, string>) { return this.commerce.promotions(query); }
   @Post("promotions") createPromotion(@Body() body: Record<string, any>) { return this.commerce.savePromotion(body); }
   @Patch("promotions/:id") updatePromotion(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.savePromotion(body, id); }
   @Delete("promotions/:id") deletePromotion(@Param("id") id: string) { return this.commerce.deletePromotion(id); }

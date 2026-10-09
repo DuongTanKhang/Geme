@@ -12,10 +12,12 @@ export type OrderReceiptLine = {
   unitPrice: number;
   lineTotal: number;
   image?: string;
+  weightGrams?: number | null;
 };
 
 export type OrderReceiptData = {
   id: string;
+  apiId?: string;
   date: string;
   time: string;
   placedAt?: string;
@@ -28,6 +30,17 @@ export type OrderReceiptData = {
   shipping: string;
   address: string;
   trackingCode: string;
+  shippingProvider?: string | null;
+  shippingServiceCode?: string | null;
+  carrierShipmentStatus?: string | null;
+  carrierShipmentError?: string | null;
+  carrierFreightPayment?: string | null;
+  carrierCodAmount?: number | null;
+  carrierStatusCode?: number | null;
+  carrierStatusName?: string | null;
+  carrierStatusAt?: string | null;
+  carrierLocation?: string | null;
+  carrierFee?: number | null;
   note: string;
   pos365SyncStatus?: string | null;
   pos365SyncError?: string | null;
