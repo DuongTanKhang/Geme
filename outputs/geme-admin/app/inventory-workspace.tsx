@@ -373,8 +373,8 @@ function OutboundIssuePage({ products, onCancel, onComplete, onNotify }: {
 }
 
 type SkuRule = { categoryId: string; prefix: string; materialOptionIds?: string[]; materialPrefixes: Array<{ materialOptionId: string; prefix: string }> };
-type ReceiptVariantDraft = { quality: string; beadSize: string; quantity: number; unitCost: number; skuSuffix: string; sku?: string };
-type ReceiptLine = { key: string; productId?: string; variantId?: string; quantity: number; unitCost: number; newProduct?: { name: string; categoryId: string; materialOptionId?: string; skuSequence?: string; sku: string; variants?: ReceiptVariantDraft[] } };
+type ReceiptVariantDraft = { quality: string; beadSize: string; cutCategoryId?: string; quantity: number; unitCost: number; skuSuffix: string; sku?: string };
+type ReceiptLine = { key: string; productId?: string; variantId?: string; quantity: number; unitCost: number; newProduct?: { name: string; categoryId: string; gemstoneTypeId?: string; materialOptionId?: string; skuSequence?: string; sku: string; variants?: ReceiptVariantDraft[] } };
 type ReceiptDocument = { name: string; url: string; mimeType: string };
 type ReceiptRecord = { receiptNo: string; supplierName?: string | null };
 type NewProductVariantMode = "SIZE" | "QUALITY" | "QUALITY_AND_BEAD_SIZE" | null;
@@ -409,6 +409,14 @@ function variantModeForCategory(category: AdminCategory | undefined, categories:
 
 function categorySlug(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function gemstoneSizeSkuToken(value: string) {
+  return value.trim().toLocaleUpperCase("en").replace(/([0-9])[.,]([0-9])/g, "$1P$2").replace(/[^A-Z0-9]/g, "");
+}
+
+function gemstoneCutSkuToken(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "");
 }
 
 function InboundReceiptPage({ products, categories, materials, onCategoryCreated, onCancel, onComplete, onNotify }: {
@@ -449,6 +457,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const [newProductModal, setNewProductModal] = useState(false);
   const [newProductKind, setNewProductKind] = useState<"Trang sức" | "Đá quý">("Trang sức");
   const [newProductCategoryId, setNewProductCategoryId] = useState("");
+  const [newProductGemstoneTypeId, setNewProductGemstoneTypeId] = useState("");
   const [newProductMaterialId, setNewProductMaterialId] = useState("");
   const [newProductQuantity, setNewProductQuantity] = useState("1");
   const [newProductUnitCost, setNewProductUnitCost] = useState("0");
@@ -456,11 +465,11 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const [newProductVariants, setNewProductVariants] = useState<ReceiptVariantDraft[]>([]);
   const [newVariantQuality, setNewVariantQuality] = useState("A");
   const [newVariantSize, setNewVariantSize] = useState("8mm");
+  const [newVariantCutCategoryId, setNewVariantCutCategoryId] = useState("");
   const [newVariantSkuSuffix, setNewVariantSkuSuffix] = useState("");
   const [newVariantQuantity, setNewVariantQuantity] = useState("1");
   const [newVariantUnitCost, setNewVariantUnitCost] = useState("0");
   const [creatingCategory, setCreatingCategory] = useState(false);
-  const [creatingMaterial, setCreatingMaterial] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newCategoryPrefix, setNewCategoryPrefix] = useState("");
   const [newCategorySlug, setNewCategorySlug] = useState("");
@@ -468,8 +477,6 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const [newCategoryLevel, setNewCategoryLevel] = useState<1 | 2 | 3>(2);
   const [newCategoryParentId, setNewCategoryParentId] = useState("");
   const [newCategoryPricingMode, setNewCategoryPricingMode] = useState<AdminCategory["pricingMode"]>("FIXED");
-  const [newMaterialName, setNewMaterialName] = useState("");
-  const [newMaterialPrefix, setNewMaterialPrefix] = useState("");
   const [creatingOption, setCreatingOption] = useState(false);
   const [newSkuSequence, setNewSkuSequence] = useState("");
   const [newSkuPreview, setNewSkuPreview] = useState("");
@@ -479,17 +486,19 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const ruleCategories = useMemo(() => categoryOptions.filter((category) =>
     Boolean(category.id.trim())
     && category.status === "Hoạt động"
-    && category.usage === "product"
     && category.level !== undefined
     && category.level > 1
+    && (category.kind === "Đá quý" ? category.level === 2 : category.usage === "product" && category.kind === "Trang sức")
     && (category.kind === "Trang sức" || category.kind === "Đá quý")), [categoryOptions]);
-  const newProductCategories = ruleCategories.filter((category) => category.kind === newProductKind);
-  const newCategoryParents = newCategoryLevel > 1 ? categoryOptions.filter((category) => category.status === "Hoạt động" && category.kind === newProductKind && category.usage !== "stone" && category.level === newCategoryLevel - 1) : [];
+  const gemstoneTypeOptions = categoryOptions.filter((category) => category.kind === "Đá quý" && category.level === 2 && category.status === "Hoạt động");
+  const gemstoneCutOptions = categoryOptions.filter((category) => category.kind === "Đá quý" && category.usage === "product" && category.level === 3 && category.parentId === newProductGemstoneTypeId && category.status === "Hoạt động");
+  const newProductCategories = newProductKind === "Đá quý" ? gemstoneTypeOptions : ruleCategories.filter((category) => category.kind === "Trang sức");
+  const newCategoryParents = newCategoryLevel > 1 ? categoryOptions.filter((category) => category.status === "Hoạt động" && category.kind === newProductKind && category.level === newCategoryLevel - 1 && (newProductKind === "Đá quý" && newCategoryLevel === 3 ? category.level === 2 : category.usage !== "stone")) : [];
   const selectedNewCategoryParent = newCategoryParents.find((category) => category.id === newCategoryParentId) || newCategoryParents[0];
   const newProductCategory = newProductCategories.find((category) => category.id === newProductCategoryId);
-  const newProductVariantMode: NewProductVariantMode = newProductVariantChoice === "SINGLE" ? null : newProductVariantChoice;
+  const newProductVariantMode: NewProductVariantMode = newProductKind === "Đá quý" ? "QUALITY_AND_BEAD_SIZE" : newProductVariantChoice === "SINGLE" ? null : newProductVariantChoice;
   const newProductScopeMaterials = materialOptions.filter((material) => material.active && material.kind === "STONE" && material.scope === (newProductKind === "Đá quý" ? "Đá quý" : "Trang sức") && (!Array.isArray(material.appliedCategoryIds) || material.appliedCategoryIds.includes(newProductCategoryId)));
-  const newProductRule = skuRules.find((rule) => rule.categoryId === newProductCategoryId);
+  const newProductRule = skuRules.find((rule) => rule.categoryId === (newProductKind === "Đá quý" ? newProductGemstoneTypeId : newProductCategoryId));
   const newProductAllowedMaterialIds = newProductRule
     ? new Set(Array.isArray(newProductRule.materialOptionIds) ? newProductRule.materialOptionIds : newProductScopeMaterials.map((material) => material.id))
     : new Set<string>();
@@ -569,15 +578,16 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   useEffect(() => {
     let alive = true;
     setNewSkuPreview(""); setNewSkuError(""); setNewSkuLookup(null);
-    if (!newProductCategoryId || (!newProductVariantMode && !newSkuSequence)) return () => { alive = false; };
+    const needsSequence = !newProductVariantMode || newProductKind === "Đá quý";
+    if (!newProductCategoryId || (needsSequence && !newSkuSequence)) return () => { alive = false; };
     const query = new URLSearchParams({ categoryId: newProductCategoryId });
     if (newProductMaterialId) query.set("materialOptionId", newProductMaterialId);
-    if (!newProductVariantMode && newSkuSequence) query.set("sequence", newSkuSequence);
+    if (needsSequence && newSkuSequence) query.set("sequence", newSkuSequence);
     void request<InventorySkuLookup & { prefix?: string }>(`inventory/sku-next?${query.toString()}`)
       .then((result) => { if (alive) { setNewSkuPreview(result.sku || (newProductVariantMode ? result.prefix || "" : "")); setNewSkuLookup(result); } })
       .catch((cause) => { if (alive) { setNewSkuPreview(""); setNewSkuError(cause instanceof Error ? cause.message : "Chưa có quy tắc mã hàng."); } });
     return () => { alive = false; };
-  }, [newProductCategoryId, newProductMaterialId, newSkuSequence, newProductVariantMode, skuRules]);
+  }, [newProductCategoryId, newProductMaterialId, newSkuSequence, newProductVariantMode, newProductKind, skuRules]);
 
   const updateLine = (key: string, update: Partial<ReceiptLine>) => setLines((current) => current.map((line) => line.key === key ? { ...line, ...update } : line));
   const addEmptyLine = () => setLines((current) => [...current, { key: crypto.randomUUID(), quantity: 1, unitCost: 0 }]);
@@ -586,7 +596,9 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
     const prefix = newCategoryPrefix.trim().toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "");
     let parentCategory = selectedNewCategoryParent;
     if (!name) { onNotify("Nhập tên danh mục trước khi lưu."); return; }
+    if (newProductKind === "Đá quý" && newCategoryLevel !== 2) { onNotify("Dạng cắt được tạo trong Sản phẩm → Loại đá → Mặt đá quý."); return; }
     if (newCategoryLevel > 1 && !parentCategory && newCategoryLevel !== 2) { onNotify(`Hãy tạo danh mục cấp ${newCategoryLevel - 1} trước.`); return; }
+    const isGemstoneTypeCategory = newProductKind === "Đá quý" && newCategoryLevel === 2;
     if (newCategoryLevel > 1 && !prefix) { onNotify("Nhập tiền tố mã hàng cho danh mục cấp dưới."); return; }
     setCreatingOption(true);
     try {
@@ -615,7 +627,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
         name,
         slug: newCategorySlug.trim() || categorySlug(name),
         kind: apiKind,
-        usage: "PRODUCT_CATEGORY",
+        usage: isGemstoneTypeCategory ? "GEMSTONE_TYPE" : "PRODUCT_CATEGORY",
         level: newCategoryLevel,
         parentId: parentCategory?.id || null,
         pricingMode: newCategoryLevel === 1 ? "FIXED" : newCategoryPricingMode || (newProductKind === "Đá quý" ? "QUALITY" : "FIXED"),
@@ -634,7 +646,30 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
         return;
       }
 
+      if (isGemstoneTypeCategory) {
+        setNewProductGemstoneTypeId(category.id);
+        setNewProductCategoryId(category.id);
+        setNewProductMaterialId("");
+        setNewProductVariants([]);
+        setNewVariantSkuSuffix("");
+        setNewVariantCutCategoryId("");
+        setCreatingCategory(false);
+        const rule: SkuRule = { categoryId: category.id, prefix, materialOptionIds: [], materialPrefixes: [] };
+        setRuleCategoryId(category.id);
+        setRulePrefix(prefix);
+        try {
+          const rules = await request<{ rules: SkuRule[] }>("inventory/sku-rules", { method: "PATCH", body: JSON.stringify({ rules: [...skuRules.filter((item) => item.categoryId !== category.id), rule] }) });
+          setSkuRules(rules.rules || []);
+          onNotify(`Đã tạo loại đá “${category.name}” và lưu quy tắc SKU. Chọn mã thứ tự rồi chọn dạng cắt cho từng biến thể.`);
+        } catch (cause) {
+          setRuleModal(true);
+          onNotify(`Đã tạo loại đá “${category.name}”. Chưa lưu được quy tắc SKU: ${cause instanceof Error ? cause.message : "hãy thử lưu quy tắc lại."}`);
+        }
+        return;
+      }
+
       setNewProductCategoryId(category.id);
+      if (newProductKind === "Đá quý" && parentCategory) setNewProductGemstoneTypeId(parentCategory.id);
       setNewProductMaterialId("");
       setNewProductVariantChoice(variantModeForCategory(category, [...categoryOptions, category]) || "SINGLE");
       setNewProductVariants([]);
@@ -652,52 +687,6 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
         onNotify(`Danh mục “${category.name}” đã được tạo. Chưa lưu được quy tắc SKU: ${cause instanceof Error ? cause.message : "hãy thử lưu quy tắc lại."}`);
       }
     } catch (cause) { onNotify(cause instanceof Error ? cause.message : "Không tạo được danh mục mới."); }
-    finally { setCreatingOption(false); }
-  };
-  const createInventoryMaterial = async () => {
-    const name = newMaterialName.trim();
-    const prefix = newMaterialPrefix.trim().toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "");
-    if (!name) { onNotify("Nhập tên loại đá trước khi lưu."); return; }
-    if (!newProductCategoryId) { onNotify("Chọn danh mục cấp dưới trước khi tạo loại đá."); return; }
-    setCreatingOption(true);
-    try {
-      const ruleData = await request<{ rules: SkuRule[] }>("inventory/sku-rules");
-      const currentRules = (ruleData.rules || []).filter((rule) => ruleCategories.some((category) => category.id === rule.categoryId));
-      setSkuRules(currentRules);
-      const categoryRule = currentRules.find((rule) => rule.categoryId === newProductCategoryId);
-      if (!categoryRule) {
-        setRuleCategoryId(newProductCategoryId);
-        setRuleModal(true);
-        onNotify("Danh mục này chưa có quy tắc mã hàng. Hãy lưu quy tắc danh mục trước khi thêm loại đá.");
-        return;
-      }
-      const scope = newProductKind === "Đá quý" ? "Đá quý" : "Trang sức";
-      const previouslyAllowed = Array.isArray(categoryRule.materialOptionIds)
-        ? categoryRule.materialOptionIds
-        : materialOptions.filter((material) => material.active && material.kind === "STONE" && material.scope === scope).map((material) => material.id);
-      const record = await request<Record<string, any>>("materials", { method: "POST", body: JSON.stringify({ name, scope: newProductKind === "Đá quý" ? "GEMSTONE" : "JEWELRY", kind: "STONE", active: true, appliedCategoryIds: [newProductCategoryId] }) });
-      const material: MaterialOption = { id: String(record.id), name: String(record.name), scope: record.scope === "GEMSTONE" ? "Đá quý" : "Trang sức", kind: "STONE", active: record.active !== false, ...(record.imageUrl ? { imageUrl: record.imageUrl } : {}), appliedCategoryIds: Array.isArray(record.appliedCategoryIds) ? record.appliedCategoryIds : [newProductCategoryId], sortOrder: Number(record.sortOrder || 0) };
-      const nextRule: SkuRule = {
-        ...categoryRule,
-        materialOptionIds: [...new Set([...previouslyAllowed, material.id])],
-        materialPrefixes: prefix
-          ? [...categoryRule.materialPrefixes.filter((entry) => entry.materialOptionId !== material.id), { materialOptionId: material.id, prefix }]
-          : categoryRule.materialPrefixes,
-      };
-      try {
-        const updated = await request<{ rules: SkuRule[] }>("inventory/sku-rules", { method: "PATCH", body: JSON.stringify({ rules: currentRules.map((rule) => rule.categoryId === categoryRule.categoryId ? nextRule : rule) }) });
-        setSkuRules(updated.rules || []);
-      } catch (cause) {
-        await request(`materials/${encodeURIComponent(material.id)}`, { method: "DELETE" }).catch(() => undefined);
-        throw cause;
-      }
-      setMaterialOptions((current) => current.some((item) => item.id === material.id) ? current : [...current, material]);
-      setNewProductMaterialId(material.id);
-      setNewMaterialName(""); setNewMaterialPrefix(""); setCreatingMaterial(false);
-      onNotify(prefix
-        ? `Đã thêm loại đá ${material.name} riêng cho ${newProductCategory?.name || "danh mục"} và lưu tiền tố ${prefix}.`
-        : `Đã thêm loại đá ${material.name} riêng cho ${newProductCategory?.name || "danh mục"}.`);
-    } catch (cause) { onNotify(cause instanceof Error ? cause.message : "Không tạo được loại đá mới."); }
     finally { setCreatingOption(false); }
   };
   const createRuleMaterial = async () => {
@@ -727,42 +716,45 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const addNewProductLine = () => {
     const quantity = Number(newProductQuantity);
     const unitCost = Number(newProductUnitCost);
-    if (!newProductCategoryId || !newProductMaterialId || !newSkuPreview) return;
-    if (!newProductVariantMode && (!/^\d+$/.test(newSkuSequence) || Number(newSkuSequence) <= 0)) return;
+    if (!newProductCategoryId || (newProductKind === "Đá quý" ? !newProductGemstoneTypeId : !newProductMaterialId) || !newSkuPreview) return;
+    if ((!newProductVariantMode || newProductKind === "Đá quý") && (!/^\d+$/.test(newSkuSequence) || Number(newSkuSequence) <= 0)) return;
     if (lines.some((line) => line.newProduct?.sku === newSkuPreview)) { onNotify(`Mã ${newSkuPreview} đã có trong phiếu nhập. Hãy chọn số khác.`); return; }
     if (newProductVariantMode && (!newProductVariants.length || newProductVariants.some((variant) => !Number.isInteger(variant.quantity) || variant.quantity < 1 || !Number.isInteger(variant.unitCost) || variant.unitCost < 0))) return;
     if (!newProductVariantMode && (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000 || !Number.isInteger(unitCost) || unitCost < 0)) return;
     const variants = newProductVariantMode ? newProductVariants.map((variant) => {
-      const quality = newProductVariantMode === "SIZE" ? "Kích thước" : variant.quality;
+      const quality = newProductKind === "Đá quý" ? variant.quality : newProductVariantMode === "SIZE" ? "Kích thước" : variant.quality;
       return { ...variant, quality, sku: newSkuPreview + variant.skuSuffix };
     }) : undefined;
     const itemQuantity = variants?.reduce((sum, variant) => sum + variant.quantity, 0) ?? quantity;
     const weightedUnitCost = variants?.length ? Math.round(variants.reduce((sum, variant) => sum + variant.quantity * variant.unitCost, 0) / itemQuantity) : unitCost;
-    const generatedName = newSkuLookup?.existingProduct?.name || [newProductCategory?.name, newProductMaterials.find((material) => material.id === newProductMaterialId)?.name].filter(Boolean).join(" ") || `Mặt hàng ${newSkuPreview}`;
-    const newProduct = { name: generatedName, categoryId: newProductCategoryId, ...(newProductMaterialId ? { materialOptionId: newProductMaterialId } : {}), ...(!variants ? { skuSequence: newSkuSequence } : {}), sku: newSkuPreview, ...(variants ? { variants } : {}) };
+    const gemstoneType = gemstoneTypeOptions.find((category) => category.id === newProductGemstoneTypeId);
+    const generatedName = newSkuLookup?.existingProduct?.name || (newProductKind === "Đá quý" ? gemstoneType?.name : [newProductCategory?.name, newProductMaterials.find((material) => material.id === newProductMaterialId)?.name].filter(Boolean).join(" ")) || `Mặt hàng ${newSkuPreview}`;
+    const newProduct = { name: generatedName, categoryId: newProductCategoryId, ...(newProductKind === "Đá quý" ? { gemstoneTypeId: newProductGemstoneTypeId, skuSequence: newSkuSequence } : newProductMaterialId ? { materialOptionId: newProductMaterialId, ...(!variants ? { skuSequence: newSkuSequence } : {}) } : {}), ...(!variants && newProductKind !== "Đá quý" ? { skuSequence: newSkuSequence } : {}), sku: newSkuPreview, ...(variants ? { variants } : {}) };
     setLines((current) => [...current, { key: crypto.randomUUID(), quantity: itemQuantity, unitCost: weightedUnitCost, newProduct }]);
     setNewProductModal(false);
-    setNewProductQuantity("1"); setNewProductUnitCost("0"); setNewProductVariants([]); setNewSkuSequence(""); setNewSkuLookup(null);
+    setNewProductQuantity("1"); setNewProductUnitCost("0"); setNewProductVariants([]); setNewSkuSequence(""); setNewSkuLookup(null); setNewVariantCutCategoryId("");
     onNotify(newSkuLookup?.existingProduct
       ? `Đã thêm dòng nhập cho SKU ${newSkuPreview}; tồn kho của sản phẩm sẽ được cộng dồn khi lưu phiếu.`
       : `Đã thêm dòng nhập cho SKU ${newSkuPreview}. Sản phẩm mới sẽ được tạo nháp nếu mã chưa có.`);
   };
 
   const addNewProductVariant = () => {
-    const quality = newProductVariantMode === "SIZE" ? "Kích thước" : newVariantQuality.trim();
+    const cutCategory = gemstoneCutOptions.find((category) => category.id === newVariantCutCategoryId);
+    const quality = newProductKind === "Đá quý" ? cutCategory?.name || "" : newProductVariantMode === "SIZE" ? "Kích thước" : newVariantQuality.trim();
     const beadSize = newProductVariantMode === "QUALITY" ? "" : newVariantSize.trim();
-    const skuSuffix = newVariantSkuSuffix.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "");
+    const cutToken = cutCategory ? gemstoneCutSkuToken(cutCategory.name) : "";
+    const skuSuffix = newProductKind === "Đá quý" ? `C${cutToken}S${gemstoneSizeSkuToken(beadSize)}` : newVariantSkuSuffix.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "");
     const quantity = Number(newVariantQuantity);
     const unitCost = Number(newVariantUnitCost);
     if (!quality || (newProductVariantMode !== "QUALITY" && !beadSize) || !skuSuffix || (newSkuPreview + skuSuffix).length > 64 || !Number.isInteger(quantity) || quantity < 1 || quantity > 100000 || !Number.isInteger(unitCost) || unitCost < 0) {
-      onNotify("Nhập đủ phân loại, SKU con, số lượng và đơn giá nhập hợp lệ cho biến thể.");
+      onNotify(newProductKind === "Đá quý" ? "Chọn dạng cắt cấp 3, nhập size mặt đá, số lượng và đơn giá nhập hợp lệ." : "Nhập đủ phân loại, SKU con, số lượng và đơn giá nhập hợp lệ cho biến thể.");
       return;
     }
     if (newProductVariants.some((variant) => variant.quality === quality && variant.beadSize === beadSize || variant.skuSuffix.toLocaleUpperCase("en") === skuSuffix)) {
       onNotify("SKU con hoặc tổ hợp biến thể này đã có trong danh sách nhập.");
       return;
     }
-    setNewProductVariants((current) => [...current, { quality, beadSize, quantity, unitCost, skuSuffix }]);
+    setNewProductVariants((current) => [...current, { quality, beadSize, ...(cutCategory ? { cutCategoryId: cutCategory.id } : {}), quantity, unitCost, skuSuffix }]);
     setNewVariantSkuSuffix("");
   };
 
@@ -795,7 +787,8 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
     setRuleNotice(null);
     const eligibleCategoryIds = new Set(ruleCategories.map((category) => category.id));
     const current = skuRules.filter((rule) => rule.categoryId !== ruleCategoryId && eligibleCategoryIds.has(rule.categoryId));
-    const rule: SkuRule = { categoryId: ruleCategoryId, prefix: rulePrefix.trim(), materialOptionIds: [...new Set(stoneMaterialIdsDraft)], materialPrefixes: Object.entries(stonePrefixDraft).filter(([materialOptionId, prefix]) => stoneMaterialIdsDraft.includes(materialOptionId) && prefix.trim()).map(([materialOptionId, prefix]) => ({ materialOptionId, prefix: prefix.trim() })) };
+    const isGemstoneTypeRule = ruleCategory?.kind === "Đá quý";
+    const rule: SkuRule = { categoryId: ruleCategoryId, prefix: rulePrefix.trim(), materialOptionIds: isGemstoneTypeRule ? [] : [...new Set(stoneMaterialIdsDraft)], materialPrefixes: isGemstoneTypeRule ? [] : Object.entries(stonePrefixDraft).filter(([materialOptionId, prefix]) => stoneMaterialIdsDraft.includes(materialOptionId) && prefix.trim()).map(([materialOptionId, prefix]) => ({ materialOptionId, prefix: prefix.trim() })) };
     try {
       const response = await request<{ rules: SkuRule[] }>("inventory/sku-rules", { method: "PATCH", body: JSON.stringify({ rules: [...current, rule] }) });
       setSkuRules(response.rules || []);
@@ -876,30 +869,33 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
       </aside>
     </div>
 
-    {ruleModal && <div className="inventory-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setRuleModal(false); }}><section className="inventory-modal receipt-rule-modal" role="dialog" aria-modal="true" aria-labelledby="skuRuleTitle"><header><div><span className="inventory-eyebrow">THIẾT LẬP KHO</span><h2 id="skuRuleTitle">Quy tắc mã hàng</h2></div><button onClick={() => setRuleModal(false)} aria-label="Đóng">×</button></header><p className="receipt-rule-intro">Tạo tiền tố theo danh mục và loại đá. Ví dụ <b>NSSR</b> + <b>EM</b> sẽ tạo mã dạng <b>NSSREM0001</b>.</p>{savedSkuRules.length > 0 ? <div className="receipt-saved-rules"><div className="receipt-saved-rules-heading"><strong>Quy tắc đã tạo</strong><span>{savedSkuRules.length}</span></div><div className="receipt-saved-rules-list">{savedSkuRules.map((rule) => <button key={rule.categoryId} type="button" className={`receipt-saved-rule${rule.categoryId === ruleCategoryId ? " active" : ""}`} onClick={() => { setRuleCategoryId(rule.categoryId); setRuleNotice(null); }}><span className="receipt-saved-rule-copy"><b>{rule.category ? categoryPath(rule.category, categoryOptions) : "Danh mục không còn hoạt động"}</b><small>{rule.prefix}{rule.materialSummary ? ` + ${rule.materialSummary}` : ""}</small></span><span className="receipt-saved-rule-action">{rule.categoryId === ruleCategoryId ? "Đang chọn" : "Chỉnh sửa →"}</span></button>)}</div></div> : <div className="receipt-saved-rules empty"><strong>Quy tắc đã tạo</strong><p>Chưa có quy tắc nào. Tạo tiền tố bên dưới rồi bấm “Lưu quy tắc”.</p></div>}<label>Danh mục đã tạo<select disabled={!ruleCategories.length} value={ruleCategoryId} onChange={(event) => setRuleCategoryId(event.target.value)}><option value="">{ruleCategories.length ? "Chọn danh mục" : "Chưa có danh mục sản phẩm đang hoạt động"}</option>{ruleCategories.map((category) => <option key={category.id} value={category.id}>{categoryLabel(category)}</option>)}</select></label><label>Tiền tố danh mục<input value={rulePrefix} onChange={(event) => setRulePrefix(event.target.value.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, ""))} placeholder="Ví dụ: NSSR" maxLength={16}/><small>Chỉ chữ và số, tối đa 16 ký tự.</small></label>{ruleCategory && <div className="receipt-stone-prefixes"><strong>Loại đá áp dụng cho {ruleCategory.name}</strong><small>Chọn riêng loại đá được dùng cho danh mục này. Các danh mục cấp 3 khác có thể có danh sách riêng.</small>{ruleScopeMaterials.length ? ruleScopeMaterials.map((material) => <div className="receipt-stone-choice" key={material.id}><label><input type="checkbox" checked={stoneMaterialIdsDraft.includes(material.id)} onChange={(event) => setStoneMaterialIdsDraft((current) => event.target.checked ? [...new Set([...current, material.id])] : current.filter((id) => id !== material.id))}/><span>{material.name}</span></label>{stoneMaterialIdsDraft.includes(material.id) && <label className="receipt-stone-prefix-input"><span>Tiền tố SKU (không bắt buộc)</span><input value={stonePrefixDraft[material.id] || ""} maxLength={16} placeholder="Ví dụ: EM" onChange={(event) => setStonePrefixDraft((current) => ({ ...current, [material.id]: event.target.value.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "") }))}/></label>}</div>) : <small>Chưa có loại đá hoạt động trong nhóm này. Bạn có thể thêm một loại bên dưới.</small>}{addingRuleMaterial ? <div className="receipt-rule-material-form"><input autoFocus value={ruleMaterialName} onChange={(event) => setRuleMaterialName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void createRuleMaterial(); } }} placeholder="Tên loại đá mới" maxLength={120}/><div><button type="button" className="button button-quiet" onClick={() => { setAddingRuleMaterial(false); setRuleMaterialName(""); }}>Hủy</button><button type="button" className="button button-primary" onClick={() => void createRuleMaterial()} disabled={savingRuleMaterial || !ruleMaterialName.trim()}>{savingRuleMaterial ? "Đang lưu…" : "Lưu loại đá"}</button></div></div> : <button type="button" className="receipt-add-rule-material" onClick={() => { setRuleNotice(null); setAddingRuleMaterial(true); }}>＋ Thêm loại đá</button>}</div>}<div className="receipt-rule-preview">Mã sẽ có dạng <b>{rulePrefix || "MÃ DANH MỤC"}{ruleCategory && ruleMaterials.find((material) => stonePrefixDraft[material.id]) ? stonePrefixDraft[ruleMaterials.find((material) => stonePrefixDraft[material.id])!.id] : ""}0001</b></div>{ruleNotice && <div className={`receipt-rule-notice ${ruleNotice.kind}`} role={ruleNotice.kind === "error" ? "alert" : "status"}>{ruleNotice.text}</div>}<footer><button className="button button-quiet" onClick={() => void removeSkuRule()} disabled={ruleSaving || !skuRules.some((rule) => rule.categoryId === ruleCategoryId)}>Xóa quy tắc</button><button type="button" className="button button-quiet" onClick={() => setRuleModal(false)}>Đóng</button><button type="button" className="button button-primary" onClick={() => void saveSkuRule()} disabled={ruleSaving || !ruleCategoryId}>{ruleSaving ? "Đang lưu…" : "Lưu quy tắc"}</button></footer></section></div>}
+    {ruleModal && <div className="inventory-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setRuleModal(false); }}><section className="inventory-modal receipt-rule-modal" role="dialog" aria-modal="true" aria-labelledby="skuRuleTitle"><header><div><span className="inventory-eyebrow">THIẾT LẬP KHO</span><h2 id="skuRuleTitle">Quy tắc mã hàng</h2></div><button onClick={() => setRuleModal(false)} aria-label="Đóng">×</button></header><p className="receipt-rule-intro">Tạo tiền tố SKU theo danh mục Trang sức hoặc loại đá. Với đá quý, mã SKU con sẽ nối tiếp mã dạng cắt và size.</p>{savedSkuRules.length > 0 ? <div className="receipt-saved-rules"><div className="receipt-saved-rules-heading"><strong>Quy tắc đã tạo</strong><span>{savedSkuRules.length}</span></div><div className="receipt-saved-rules-list">{savedSkuRules.map((rule) => <button key={rule.categoryId} type="button" className={`receipt-saved-rule${rule.categoryId === ruleCategoryId ? " active" : ""}`} onClick={() => { setRuleCategoryId(rule.categoryId); setRuleNotice(null); }}><span className="receipt-saved-rule-copy"><b>{rule.category ? categoryPath(rule.category, categoryOptions) : "Danh mục không còn hoạt động"}</b><small>{rule.prefix}{rule.materialSummary ? ` + ${rule.materialSummary}` : ""}</small></span><span className="receipt-saved-rule-action">{rule.categoryId === ruleCategoryId ? "Đang chọn" : "Chỉnh sửa →"}</span></button>)}</div></div> : <div className="receipt-saved-rules empty"><strong>Quy tắc đã tạo</strong><p>Chưa có quy tắc nào. Tạo tiền tố bên dưới rồi bấm “Lưu quy tắc”.</p></div>}<label>Danh mục đã tạo<select disabled={!ruleCategories.length} value={ruleCategoryId} onChange={(event) => setRuleCategoryId(event.target.value)}><option value="">{ruleCategories.length ? "Chọn danh mục" : "Chưa có danh mục sản phẩm đang hoạt động"}</option>{ruleCategories.map((category) => <option key={category.id} value={category.id}>{categoryLabel(category)}</option>)}</select></label><label>{ruleCategory?.kind === "Đá quý" ? "Tiền tố loại đá" : "Tiền tố danh mục"}<input value={rulePrefix} onChange={(event) => setRulePrefix(event.target.value.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, ""))} placeholder="Ví dụ: NSSR" maxLength={16}/><small>Chỉ chữ và số, tối đa 16 ký tự.</small></label>{ruleCategory?.kind === "Đá quý" && <div className="receipt-stone-prefixes"><strong>Quy tắc SKU cho loại đá</strong><small>Quy tắc này áp dụng cho loại đá {ruleCategory.name}. SKU cha thêm số thứ tự; SKU con nối thêm mã dạng cắt và size.</small></div>}{ruleCategory?.kind !== "Đá quý" && ruleCategory && <div className="receipt-stone-prefixes"><strong>Loại đá áp dụng cho {ruleCategory.name}</strong><small>Chọn riêng loại đá được dùng cho danh mục này. Các danh mục cấp 3 khác có thể có danh sách riêng.</small>{ruleScopeMaterials.length ? ruleScopeMaterials.map((material) => <div className="receipt-stone-choice" key={material.id}><label><input type="checkbox" checked={stoneMaterialIdsDraft.includes(material.id)} onChange={(event) => setStoneMaterialIdsDraft((current) => event.target.checked ? [...new Set([...current, material.id])] : current.filter((id) => id !== material.id))}/><span>{material.name}</span></label>{stoneMaterialIdsDraft.includes(material.id) && <label className="receipt-stone-prefix-input"><span>Tiền tố SKU (không bắt buộc)</span><input value={stonePrefixDraft[material.id] || ""} maxLength={16} placeholder="Ví dụ: EM" onChange={(event) => setStonePrefixDraft((current) => ({ ...current, [material.id]: event.target.value.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "") }))}/></label>}</div>) : <small>Chưa có loại đá hoạt động trong nhóm này. Bạn có thể thêm một loại bên dưới.</small>}{addingRuleMaterial ? <div className="receipt-rule-material-form"><input autoFocus value={ruleMaterialName} onChange={(event) => setRuleMaterialName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void createRuleMaterial(); } }} placeholder="Tên loại đá mới" maxLength={120}/><div><button type="button" className="button button-quiet" onClick={() => { setAddingRuleMaterial(false); setRuleMaterialName(""); }}>Hủy</button><button type="button" className="button button-primary" onClick={() => void createRuleMaterial()} disabled={savingRuleMaterial || !ruleMaterialName.trim()}>{savingRuleMaterial ? "Đang lưu…" : "Lưu loại đá"}</button></div></div> : <button type="button" className="receipt-add-rule-material" onClick={() => { setRuleNotice(null); setAddingRuleMaterial(true); }}>＋ Thêm loại đá</button>}</div>}<div className="receipt-rule-preview">Mã sẽ có dạng <b>{rulePrefix || "MÃ DANH MỤC"}{ruleCategory?.kind !== "Đá quý" && ruleCategory && ruleMaterials.find((material) => stonePrefixDraft[material.id]) ? stonePrefixDraft[ruleMaterials.find((material) => stonePrefixDraft[material.id])!.id] : ""}0001</b></div>{ruleNotice && <div className={`receipt-rule-notice ${ruleNotice.kind}`} role={ruleNotice.kind === "error" ? "alert" : "status"}>{ruleNotice.text}</div>}<footer><button className="button button-quiet" onClick={() => void removeSkuRule()} disabled={ruleSaving || !skuRules.some((rule) => rule.categoryId === ruleCategoryId)}>Xóa quy tắc</button><button type="button" className="button button-quiet" onClick={() => setRuleModal(false)}>Đóng</button><button type="button" className="button button-primary" onClick={() => void saveSkuRule()} disabled={ruleSaving || !ruleCategoryId}>{ruleSaving ? "Đang lưu…" : "Lưu quy tắc"}</button></footer></section></div>}
 
     {newProductModal && <div className="inventory-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !creatingOption) setNewProductModal(false); }}><section className="inventory-modal receipt-new-product-modal receipt-new-product-flow" role="dialog" aria-modal="true" aria-labelledby="newInventoryProductTitle"><header><div><span className="inventory-eyebrow">TẠO MẶT HÀNG NHẬP KHO</span><h2 id="newInventoryProductTitle">Thêm sản phẩm mới</h2></div><button type="button" onClick={() => setNewProductModal(false)} aria-label="Đóng">×</button></header>
-      <label>Danh mục chính <b>*</b><select value={newProductKind} onChange={(event) => { const kind = event.target.value as "Trang sức" | "Đá quý"; setNewProductKind(kind); setNewProductCategoryId(""); setNewProductMaterialId(""); setNewProductVariants([]); setNewVariantSkuSuffix(""); setNewProductVariantChoice("SINGLE"); setCreatingCategory(false); setCreatingMaterial(false); setNewCategoryLevel(2); setNewCategoryParentId(categoryOptions.find((category) => category.kind === kind && category.level === 1 && category.status === "Hoạt động")?.id || ""); setNewCategoryPricingMode(kind === "Đá quý" ? "QUALITY" : "FIXED"); }}><option>Trang sức</option><option>Đá quý</option></select></label>
-      <label>Danh mục sản phẩm <b>*</b><select value={newProductCategoryId} onChange={(event) => { if (event.target.value === "__create") { setCreatingCategory(true); setCreatingMaterial(false); setNewCategoryLevel(2); setNewCategoryParentId(categoryOptions.find((category) => category.kind === newProductKind && category.level === 1 && category.status === "Hoạt động")?.id || ""); setNewCategoryPricingMode(newProductKind === "Đá quý" ? "QUALITY" : "FIXED"); } else { setNewProductCategoryId(event.target.value); setNewProductMaterialId(""); setNewProductVariants([]); setNewVariantSkuSuffix(""); setNewProductVariantChoice(variantModeForCategory(newProductCategories.find((category) => category.id === event.target.value), categoryOptions) || "SINGLE"); setCreatingCategory(false); } }}><option value="">Chọn danh mục {newProductKind.toLocaleLowerCase("vi")}</option>{newProductCategories.map((category) => <option key={category.id} value={category.id}>{categoryPath(category, categoryOptions)}</option>)}<option value="__create">＋ Tạo danh mục mới</option></select></label>
+      <label>Danh mục chính <b>*</b><select value={newProductKind} onChange={(event) => { const kind = event.target.value as "Trang sức" | "Đá quý"; setNewProductKind(kind); setNewProductCategoryId(""); setNewProductGemstoneTypeId(""); setNewProductMaterialId(""); setNewProductVariants([]); setNewVariantSkuSuffix(""); setNewVariantCutCategoryId(""); setNewProductVariantChoice(kind === "Đá quý" ? "QUALITY_AND_BEAD_SIZE" : "SINGLE"); setNewSkuSequence(""); setCreatingCategory(false); setNewCategoryLevel(2); setNewCategoryParentId(categoryOptions.find((category) => category.kind === kind && category.level === 1 && category.status === "Hoạt động")?.id || ""); setNewCategoryPricingMode(kind === "Đá quý" ? "QUALITY" : "FIXED"); }}><option>Trang sức</option><option>Đá quý</option></select></label>
+      {newProductKind === "Đá quý" ? <>
+        <label>Loại đá / danh mục cấp 2 <b>*</b><select value={newProductGemstoneTypeId} onChange={(event) => { if (event.target.value === "__create") { setCreatingCategory(true); setNewCategoryLevel(2); setNewCategoryParentId(categoryOptions.find((category) => category.kind === "Đá quý" && category.level === 1 && category.status === "Hoạt động")?.id || ""); setNewCategoryPricingMode("QUALITY"); return; } setNewProductGemstoneTypeId(event.target.value); setNewProductCategoryId(event.target.value); setNewProductVariants([]); setNewVariantCutCategoryId(""); setNewVariantSkuSuffix(""); setNewSkuSequence(""); setCreatingCategory(false); }}><option value="">Chọn loại đá cấp 2</option>{gemstoneTypeOptions.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}<option value="__create">＋ Tạo loại đá cấp 2</option></select><small>SKU mẹ lấy tiền tố theo loại đá cộng số thứ tự. Dạng cắt được chọn riêng cho từng biến thể.</small></label>
+      </> : <label>Danh mục sản phẩm <b>*</b><select value={newProductCategoryId} onChange={(event) => { if (event.target.value === "__create") { setCreatingCategory(true); setNewCategoryLevel(2); setNewCategoryParentId(categoryOptions.find((category) => category.kind === newProductKind && category.level === 1 && category.status === "Hoạt động")?.id || ""); setNewCategoryPricingMode("FIXED"); } else { setNewProductCategoryId(event.target.value); setNewProductMaterialId(""); setNewProductVariants([]); setNewVariantSkuSuffix(""); setNewProductVariantChoice(variantModeForCategory(newProductCategories.find((category) => category.id === event.target.value), categoryOptions) || "SINGLE"); setCreatingCategory(false); } }}><option value="">Chọn danh mục trang sức</option>{newProductCategories.map((category) => <option key={category.id} value={category.id}>{categoryPath(category, categoryOptions)}</option>)}<option value="__create">＋ Tạo danh mục mới</option></select></label>}
       {creatingCategory && <div className="receipt-inline-option"><strong>Tạo danh mục {newProductKind.toLocaleLowerCase("vi")}</strong>
-        <label>Cấp danh mục<select value={newCategoryLevel} onChange={(event) => { const level = Number(event.target.value) as 1 | 2 | 3; setNewCategoryLevel(level); const parent = level > 1 ? categoryOptions.find((category) => category.kind === newProductKind && category.level === level - 1 && category.status === "Hoạt động" && category.usage !== "stone") : undefined; setNewCategoryParentId(parent?.id || ""); if (level === 1) setNewCategoryPrefix(""); }}>{[1, 2, ...(newProductKind === "Trang sức" ? [3] : [])].map((level) => <option key={level} value={level}>Cấp {level} · {level === 1 ? "Nhóm chính" : level === 2 ? "Danh mục" : "Danh mục con"}</option>)}</select></label>
+        <label>Cấp danh mục<select value={newCategoryLevel} onChange={(event) => { const level = Number(event.target.value) as 1 | 2 | 3; setNewCategoryLevel(level); const parent = level > 1 ? categoryOptions.find((category) => category.kind === newProductKind && category.level === level - 1 && category.status === "Hoạt động" && category.usage !== "stone") : undefined; setNewCategoryParentId(parent?.id || ""); if (level === 1) setNewCategoryPrefix(""); }}>{(newProductKind === "Đá quý" ? [2] : [1, 2, 3]).map((level) => <option key={level} value={level}>Cấp {level} · {level === 1 ? "Nhóm chính" : newProductKind === "Đá quý" ? "Loại đá" : level === 2 ? "Danh mục" : "Danh mục con"}</option>)}</select></label>
         {newCategoryLevel > 1 && <label>Danh mục cha cấp {newCategoryLevel - 1}<select value={newCategoryParents.some((category) => category.id === newCategoryParentId) ? newCategoryParentId : ""} onChange={(event) => setNewCategoryParentId(event.target.value)}><option value="">Chọn danh mục cha</option>{newCategoryParents.map((category) => <option key={category.id} value={category.id}>{categoryPath(category, categoryOptions)}</option>)}</select>{!newCategoryParents.length && <small>{newCategoryLevel === 2 ? `Chưa có nhóm cấp 1 “${newProductKind}”. Khi lưu, hệ thống sẽ tạo nhóm này cùng danh mục.` : `Chưa có danh mục cấp ${newCategoryLevel - 1}. Hãy tạo cấp đó trước.`}</small>}</label>}
         <label>Tên danh mục<input value={newCategoryName} onChange={(event) => { setNewCategoryName(event.target.value); if (!newCategorySlugEdited) setNewCategorySlug(categorySlug(event.target.value)); }} placeholder="Tên danh mục mới" maxLength={120}/></label>
         <label>Slug<input value={newCategorySlug} onChange={(event) => { setNewCategorySlugEdited(true); setNewCategorySlug(categorySlug(event.target.value)); }} placeholder="ten-danh-muc" maxLength={160}/><small>Slug tự tạo từ tên; có thể chỉnh lại.</small></label>
         {newCategoryLevel > 1 && <label>Cách định giá<select value={newCategoryPricingMode || "FIXED"} onChange={(event) => setNewCategoryPricingMode(event.target.value as AdminCategory["pricingMode"])}><option value="FIXED">Giá cố định</option><option value="QUALITY">Giá theo chất lượng</option><option value="QUALITY_AND_BEAD_SIZE">Giá theo chất lượng và size hạt</option></select></label>}
-        {newCategoryLevel > 1 && <label>Mã nhận diện danh mục<input value={newCategoryPrefix} onChange={(event) => setNewCategoryPrefix(event.target.value.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, ""))} placeholder="Ví dụ: NSSR" maxLength={16}/></label>}
-        <small>{newCategoryLevel === 1 ? "Danh mục cấp 1 sẽ lưu làm nhóm chính. Sau đó có thể thêm cấp 2 và cấp 3 bên dưới để hiện các mục con trên menu." : "Danh mục được lưu vào database, xuất hiện trong trang Danh mục và menu website. Tiền tố sẽ lưu cùng quy tắc SKU."}</small>
-        <button type="button" className="button button-primary" onClick={() => void createInventoryCategory()} disabled={creatingOption || !newCategoryName.trim() || (newCategoryLevel > 1 && (!newCategoryPrefix.trim() || (newCategoryLevel > 2 && !selectedNewCategoryParent)))}>{creatingOption ? "Đang lưu…" : newCategoryLevel === 1 ? "Lưu nhóm cấp 1" : newCategoryLevel === 2 && !selectedNewCategoryParent ? `Tạo nhóm ${newProductKind} & lưu danh mục` : "Lưu danh mục"}</button></div>}
-      <label>Loại đá <b>*</b><select value={newProductMaterialId} disabled={!newProductCategoryId} onChange={(event) => { if (event.target.value === "__create") { setCreatingMaterial(true); setCreatingCategory(false); } else { setNewProductMaterialId(event.target.value); setCreatingMaterial(false); } }}><option value="">Chọn loại đá</option>{newProductMaterials.map((material) => <option key={material.id} value={material.id}>{material.name}</option>)}<option value="__create">＋ Tạo loại đá mới</option></select><small>{newProductCategory ? newProductMaterials.length ? `Danh sách loại đá được giới hạn theo danh mục ${newProductCategory.name}.` : `Danh mục ${newProductCategory.name} chưa có loại đá áp dụng. Hãy thêm loại đá trong quy tắc mã hàng.` : "Chọn danh mục trước để tải đúng loại đá."}</small></label>
-      {creatingMaterial && <div className="receipt-inline-option"><strong>Tạo loại đá mới</strong><label>Tên loại đá<input value={newMaterialName} onChange={(event) => setNewMaterialName(event.target.value)} placeholder="Tên loại đá" maxLength={120}/></label><label>Mã nhận diện (không bắt buộc)<input value={newMaterialPrefix} onChange={(event) => setNewMaterialPrefix(event.target.value.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, ""))} placeholder="Ví dụ: OP" maxLength={16}/></label><small>Nếu nhập mã, mã sẽ được lưu ngay vào quy tắc của danh mục đang chọn. Có thể để trống và thêm sau trong Quy tắc mã hàng.</small><button type="button" className="button button-primary" onClick={() => void createInventoryMaterial()} disabled={creatingOption || !newMaterialName.trim() || !newProductCategoryId}>{creatingOption ? "Đang lưu…" : "Lưu loại đá"}</button></div>}
-      {!newProductVariantMode && <label className="receipt-sku-sequence-field">Số thứ tự mã hàng <b>*</b><input type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="off" maxLength={64} value={newSkuSequence} onChange={(event) => setNewSkuSequence(event.target.value.replace(/[^0-9]/g, ""))} placeholder="Nhập số nguyên dương, ví dụ: 1"/><small>Dùng để xác định SKU. Nếu SKU đã có, phiếu nhập sẽ cộng dồn tồn kho.</small></label>}
-      <div className={`receipt-sku-preview${newSkuError ? " error" : ""}`}><span>{newProductVariantMode ? "Mã sản phẩm mẹ" : "Mã sản phẩm xem trước"}</span><strong>{newSkuPreview || newSkuError || (newProductVariantMode ? "Đang tạo mã mẹ…" : newSkuSequence ? "Đang kiểm tra mã…" : "Nhập số thứ tự để xem mã")}</strong><small>{newProductVariantMode ? "Mã mẹ lấy từ quy tắc danh mục và loại đá. SKU con đã có sẽ cộng dồn; SKU con mới sẽ được tạo." : "Mã giữ nguyên số đã nhập: 1 thành hậu tố 1, 001 thành hậu tố 001. Hệ thống không tự đệm hoặc tự tăng."}</small>{newSkuLookup?.existingProduct && <small className="receipt-sku-match" role="status">SKU đã tồn tại: {newSkuLookup.existingProduct.name}{newSkuLookup.existingProduct.variantCount ? ` · ${newSkuLookup.existingProduct.variantCount} biến thể · tổng tồn ${money(newSkuLookup.existingProduct.stock || 0)}` : ` · tồn hiện tại ${money(newSkuLookup.existingProduct.stock || 0)}`}. Phiếu sẽ cộng vào sản phẩm này.{newSkuLookup.existingProduct.variantCount && !newProductVariantMode ? " Hãy chọn quản lý theo biến thể." : !newSkuLookup.existingProduct.variantCount && newProductVariantMode ? " Sản phẩm hiện là một SKU duy nhất; hãy chọn một SKU duy nhất." : ""}</small>}{newSkuLookup?.existingVariant && <small className="receipt-sku-match error" role="status">Mã này đang là SKU con của {newSkuLookup.existingVariant.productName} ({newSkuLookup.existingVariant.productSku}); hãy dùng SKU mẹ để nhập biến thể.</small>}</div><label>Kiểu quản lý tồn<select value={newProductVariantChoice} onChange={(event) => { setNewProductVariantChoice(event.target.value as "SINGLE" | "SIZE" | "QUALITY" | "QUALITY_AND_BEAD_SIZE"); setNewProductVariants([]); setNewVariantSkuSuffix(""); setNewSkuSequence(""); }}><option value="SINGLE">Một SKU duy nhất</option><option value="SIZE">Nhiều size</option><option value="QUALITY">Nhiều chất lượng</option><option value="QUALITY_AND_BEAD_SIZE">Chất lượng và kích thước hạt</option></select><small>{newProductVariantMode ? `Mã mẹ là ${newSkuPreview || "đang tải"}; nhập hậu tố riêng để tạo mã cho từng biến thể.` : `Mã SKU là ${newSkuPreview || "mã sản phẩm"}.`}</small></label>
-      {newProductVariantMode ? <section className="receipt-new-variants"><div><strong>{newProductVariantMode === "SIZE" ? "Biến thể theo size" : newProductVariantMode === "QUALITY" ? "Biến thể theo chất lượng" : "Biến thể chất lượng · kích thước hạt"}</strong><small>Nhập SKU con riêng bằng chữ/số và số lượng thực nhập. Giá bán được thiết lập sau ở trang Sản phẩm.</small></div><div className="receipt-new-variant-entry">
-        {(newProductVariantMode === "QUALITY" || newProductVariantMode === "QUALITY_AND_BEAD_SIZE") && <label>Chất lượng<input list="receipt-quality-options" value={newVariantQuality} onChange={(event) => setNewVariantQuality(event.target.value)} placeholder="Chọn hoặc nhập chất lượng"/><datalist id="receipt-quality-options"><option value="A"/><option value="AA"/><option value="AAA"/><option value="AAAA"/><option value="A+"/><option value="Sưu tầm"/></datalist></label>}
-        {newProductVariantMode !== "QUALITY" && <label>{newProductVariantMode === "SIZE" ? "Size vòng" : "Kích thước hạt"}<input list="receipt-size-options" value={newVariantSize} onChange={(event) => setNewVariantSize(event.target.value)} placeholder={newProductVariantMode === "SIZE" ? "Ví dụ: 16cm" : "Ví dụ: 8mm"}/><datalist id="receipt-size-options">{(newProductVariantMode === "SIZE" ? ["14cm", "15cm", "16cm", "17cm", "18cm", "19cm", "20cm"] : ["4mm", "6mm", "8mm", "10mm", "12mm"]).map((size) => <option value={size} key={size}/>)}</datalist></label>}
-        <label>Mã SKU con<input value={newVariantSkuSuffix} onChange={(event) => setNewVariantSkuSuffix(event.target.value.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "").slice(0, 48))} placeholder="Ví dụ: 105" maxLength={48}/><small>SKU hoàn chỉnh: {newSkuPreview}{newVariantSkuSuffix || "[mã phân biệt]"}</small></label>
+        {newProductKind === "Trang sức" && newCategoryLevel > 1 && <label>Mã nhận diện danh mục<input value={newCategoryPrefix} onChange={(event) => setNewCategoryPrefix(event.target.value.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, ""))} placeholder="Ví dụ: NSSR" maxLength={16}/></label>}
+        {newProductKind === "Đá quý" && newCategoryLevel === 2 && <label>Tiền tố SKU cho loại đá<input value={newCategoryPrefix} onChange={(event) => setNewCategoryPrefix(event.target.value.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, ""))} placeholder="Ví dụ: OP" maxLength={16}/><small>Mã loại đá + số thứ tự tạo SKU mẹ; mã dạng cắt và size được nối ở SKU từng biến thể.</small></label>}
+        <small>{newCategoryLevel === 1 ? "Danh mục cấp 1 sẽ lưu làm nhóm chính. Sau đó có thể thêm cấp 2 và cấp 3 bên dưới để hiện các mục con trên menu." : newProductKind === "Đá quý" && newCategoryLevel === 2 ? "Loại đá cấp 2 được dùng làm danh mục cha cho các dạng cắt cấp 3." : "Danh mục được lưu vào database, xuất hiện trong trang Danh mục và menu website. Tiền tố sẽ lưu cùng quy tắc SKU."}</small>
+        <button type="button" className="button button-primary" onClick={() => void createInventoryCategory()} disabled={creatingOption || !newCategoryName.trim() || (newCategoryLevel > 1 && !(newProductKind === "Đá quý" && newCategoryLevel === 3) && !newCategoryPrefix.trim()) || (newCategoryLevel > 1 && !selectedNewCategoryParent)}>{creatingOption ? "Đang lưu…" : newProductKind === "Đá quý" && newCategoryLevel === 2 ? "Lưu loại đá & quy tắc SKU" : newCategoryLevel === 1 ? "Lưu nhóm cấp 1" : newProductKind === "Đá quý" ? "Lưu dạng cắt" : "Lưu danh mục & quy tắc SKU"}</button></div>}
+      {newProductKind === "Trang sức" && <label>Loại đá <b>*</b><select value={newProductMaterialId} disabled={!newProductCategoryId} onChange={(event) => setNewProductMaterialId(event.target.value)}><option value="">Chọn loại đá</option>{newProductMaterials.map((material) => <option key={material.id} value={material.id}>{material.name}</option>)}</select><small>{newProductCategory ? newProductMaterials.length ? `Danh sách loại đá được giới hạn theo danh mục ${newProductCategory.name}.` : `Danh mục ${newProductCategory.name} chưa có loại đá áp dụng. Hãy thêm loại đá trong quy tắc mã hàng.` : "Chọn danh mục trước để tải đúng loại đá."}</small></label>}
+      {(!newProductVariantMode || newProductKind === "Đá quý") && <label className="receipt-sku-sequence-field">Số thứ tự mã hàng <b>*</b><input type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="off" maxLength={64} value={newSkuSequence} onChange={(event) => setNewSkuSequence(event.target.value.replace(/[^0-9]/g, ""))} placeholder="Nhập số nguyên dương, ví dụ: 1"/><small>{newProductKind === "Đá quý" ? "Mỗi loại đá có nhiều sản phẩm; số thứ tự tạo SKU mẹ riêng. Nhập lại SKU mẹ sẽ cộng dồn đúng các biến thể." : "Dùng để xác định SKU. Nếu SKU đã có, phiếu nhập sẽ cộng dồn tồn kho."}</small></label>}
+      <div className={`receipt-sku-preview${newSkuError ? " error" : ""}`}><span>{newProductVariantMode ? "Mã sản phẩm mẹ" : "Mã sản phẩm xem trước"}</span><strong>{newSkuPreview || newSkuError || (newProductVariantMode ? "Đang tạo mã mẹ…" : newSkuSequence ? "Đang kiểm tra mã…" : "Nhập số thứ tự để xem mã")}</strong><small>{newProductKind === "Đá quý" ? "SKU mẹ = tiền tố loại đá + số thứ tự. SKU con = SKU mẹ + mã dạng cắt + size; nhập lại đúng SKU con sẽ cộng dồn." : newProductVariantMode ? "Mã mẹ lấy từ quy tắc danh mục và loại đá. SKU con đã có sẽ cộng dồn; SKU con mới sẽ được tạo." : "Mã giữ nguyên số đã nhập: 1 thành hậu tố 1, 001 thành hậu tố 001. Hệ thống không tự đệm hoặc tự tăng."}</small>{newSkuLookup?.existingProduct && <small className="receipt-sku-match" role="status">SKU đã tồn tại: {newSkuLookup.existingProduct.name}{newSkuLookup.existingProduct.variantCount ? ` · ${newSkuLookup.existingProduct.variantCount} biến thể · tổng tồn ${money(newSkuLookup.existingProduct.stock || 0)}` : ` · tồn hiện tại ${money(newSkuLookup.existingProduct.stock || 0)}`}. Phiếu sẽ cộng vào sản phẩm này.{newSkuLookup.existingProduct.variantCount && !newProductVariantMode ? " Hãy chọn quản lý theo biến thể." : !newSkuLookup.existingProduct.variantCount && newProductVariantMode ? " Sản phẩm hiện là một SKU duy nhất; hãy chọn một SKU duy nhất." : ""}</small>}{newSkuLookup?.existingVariant && <small className="receipt-sku-match error" role="status">Mã này đang là SKU con của {newSkuLookup.existingVariant.productName} ({newSkuLookup.existingVariant.productSku}); hãy dùng SKU mẹ để nhập biến thể.</small>}</div>{newProductKind === "Đá quý" ? <div className="receipt-fixed-variant-mode"><strong>Quản lý đá quý theo dạng cắt + size</strong><small>SKU mẹ: {newSkuPreview || "nhập số thứ tự"}. Chọn dạng cắt cấp 3 và size riêng cho từng SKU con.</small></div> : <label>Kiểu quản lý tồn<select value={newProductVariantChoice} onChange={(event) => { setNewProductVariantChoice(event.target.value as "SINGLE" | "SIZE" | "QUALITY" | "QUALITY_AND_BEAD_SIZE"); setNewProductVariants([]); setNewVariantSkuSuffix(""); setNewSkuSequence(""); }}><option value="SINGLE">Một SKU duy nhất</option><option value="SIZE">Nhiều size</option><option value="QUALITY">Nhiều chất lượng</option><option value="QUALITY_AND_BEAD_SIZE">Chất lượng và kích thước hạt</option></select><small>{newProductVariantMode ? `Mã mẹ là ${newSkuPreview || "đang tải"}; nhập hậu tố riêng để tạo mã cho từng biến thể.` : `Mã SKU là ${newSkuPreview || "mã sản phẩm"}.`}</small></label>}
+      {newProductVariantMode ? <section className="receipt-new-variants"><div><strong>{newProductKind === "Đá quý" ? "Biến thể theo dạng cắt · size mặt đá" : newProductVariantMode === "SIZE" ? "Biến thể theo size" : newProductVariantMode === "QUALITY" ? "Biến thể theo chất lượng" : "Biến thể chất lượng · kích thước hạt"}</strong><small>{newProductKind === "Đá quý" ? "Dạng cắt được lấy từ danh mục cấp 3; SKU con tự sinh theo size. Giá bán thiết lập sau ở trang Sản phẩm." : "Nhập SKU con riêng bằng chữ/số và số lượng thực nhập. Giá bán được thiết lập sau ở trang Sản phẩm."}</small></div><div className="receipt-new-variant-entry">
+        {newProductKind !== "Đá quý" && (newProductVariantMode === "QUALITY" || newProductVariantMode === "QUALITY_AND_BEAD_SIZE") && <label>Chất lượng<input list="receipt-quality-options" value={newVariantQuality} onChange={(event) => setNewVariantQuality(event.target.value)} placeholder="Chọn hoặc nhập chất lượng"/><datalist id="receipt-quality-options"><option value="A"/><option value="AA"/><option value="AAA"/><option value="AAAA"/><option value="A+"/><option value="Sưu tầm"/></datalist></label>}
+        {newProductKind === "Đá quý" && <label>Dạng cắt <b>*</b><select value={newVariantCutCategoryId} disabled={!newProductGemstoneTypeId} onChange={(event) => setNewVariantCutCategoryId(event.target.value)}><option value="">Chọn dạng cắt cấp 3</option>{gemstoneCutOptions.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select><small>Nếu chưa có dạng cắt, tạo tại Sản phẩm → Loại đá → Mặt đá quý.</small></label>}
+        {newProductVariantMode !== "QUALITY" && <label>{newProductKind === "Đá quý" ? "Size mặt đá" : newProductVariantMode === "SIZE" ? "Size vòng" : "Kích thước hạt"}<input list="receipt-size-options" value={newVariantSize} onChange={(event) => setNewVariantSize(event.target.value)} placeholder={newProductVariantMode === "SIZE" ? "Ví dụ: 16cm" : "Ví dụ: 8mm"}/><datalist id="receipt-size-options">{(newProductKind === "Đá quý" ? ["3mm", "4mm", "5mm", "6mm", "7mm", "8mm", "10mm"] : newProductVariantMode === "SIZE" ? ["14cm", "15cm", "16cm", "17cm", "18cm", "19cm", "20cm"] : ["4mm", "6mm", "8mm", "10mm", "12mm"]).map((size) => <option value={size} key={size}/>)}</datalist></label>}
+        {newProductKind === "Đá quý" ? <label>SKU con tự tạo<input readOnly value={newSkuPreview && newVariantCutCategoryId && gemstoneSizeSkuToken(newVariantSize) ? newSkuPreview + "C" + gemstoneCutSkuToken(gemstoneCutOptions.find((category) => category.id === newVariantCutCategoryId)?.name || "") + "S" + gemstoneSizeSkuToken(newVariantSize) : ""}/><small>Mã gồm SKU mẹ, mã dạng cắt và size mặt đá.</small></label> : <label>Mã SKU con<input value={newVariantSkuSuffix} onChange={(event) => setNewVariantSkuSuffix(event.target.value.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "").slice(0, 48))} placeholder="Ví dụ: 105" maxLength={48}/><small>SKU hoàn chỉnh: {newSkuPreview}{newVariantSkuSuffix || "[mã phân biệt]"}</small></label>}
         <label>Số lượng nhập<input type="number" min="1" max="100000" step="1" value={newVariantQuantity} onChange={(event) => setNewVariantQuantity(event.target.value)}/></label><label>Đơn giá nhập (VND)<input type="text" inputMode="numeric" pattern="[0-9]*" value={newVariantUnitCost} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setNewVariantUnitCost(event.target.value.replace(/\D/g, ""))}/></label><button type="button" className="button button-quiet" onClick={addNewProductVariant}>＋ Thêm biến thể</button>
       </div>{newProductVariants.length > 0 ? <div className="receipt-new-variant-list">{newProductVariants.map((variant, index) => <div key={`${variant.quality}:${variant.beadSize}`}><span><b>{[variant.quality !== "Kích thước" ? variant.quality : "", variant.beadSize].filter(Boolean).join(" · ")}</b><small>{money(variant.quantity)} cái · {money(variant.unitCost)} ₫ nhập/cái · SKU {newSkuPreview}{variant.skuSuffix}</small></span><button type="button" aria-label="Xóa biến thể" onClick={() => setNewProductVariants((current) => current.filter((_, rowIndex) => rowIndex !== index))}>×</button></div>)}</div> : <p className="receipt-new-variant-empty">Thêm ít nhất một biến thể để ghi tồn kho theo từng lựa chọn.</p>}<div className="receipt-new-variant-total"><span>Tổng số lượng nhập của sản phẩm</span><strong>{money(newProductVariants.reduce((sum, variant) => sum + variant.quantity, 0))} cái</strong></div></section> : <div className="receipt-new-product-pricing"><label>Số lượng nhập <b>*</b><input type="number" min="1" max="100000" step="1" value={newProductQuantity} onChange={(event) => setNewProductQuantity(event.target.value)}/></label><label>Đơn giá nhập (VND) <b>*</b><input type="text" inputMode="numeric" pattern="[0-9]*" value={newProductUnitCost} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setNewProductUnitCost(event.target.value.replace(/\D/g, ""))}/></label></div>}
-      <footer><button type="button" className="button button-quiet" onClick={() => setNewProductModal(false)}>Hủy</button><button type="button" className="button button-primary" onClick={addNewProductLine} disabled={creatingOption || !newProductCategory || !newProductMaterialId || !newSkuPreview || Boolean(newSkuLookup?.existingVariant) || Boolean(newSkuLookup?.existingProduct && (newProductVariantMode ? !newSkuLookup.existingProduct.variantCount : newSkuLookup.existingProduct.variantCount > 0)) || (!newProductVariantMode && (!/^\d+$/.test(newSkuSequence) || Number(newSkuSequence) <= 0)) || (newProductVariantMode ? !newProductVariants.length : !Number.isInteger(Number(newProductQuantity)) || Number(newProductQuantity) < 1 || !Number.isInteger(Number(newProductUnitCost)) || Number(newProductUnitCost) < 0)}>Thêm vào phiếu</button></footer></section></div>}
+      <footer><button type="button" className="button button-quiet" onClick={() => setNewProductModal(false)}>Hủy</button><button type="button" className="button button-primary" onClick={addNewProductLine} disabled={creatingOption || !newProductCategory || (newProductKind === "Đá quý" ? !newProductGemstoneTypeId : !newProductMaterialId) || !newSkuPreview || Boolean(newSkuLookup?.existingVariant) || Boolean(newSkuLookup?.existingProduct && (newProductVariantMode ? !newSkuLookup.existingProduct.variantCount : newSkuLookup.existingProduct.variantCount > 0)) || (!newProductVariantMode && (!/^\d+$/.test(newSkuSequence) || Number(newSkuSequence) <= 0)) || (newProductVariantMode ? !newProductVariants.length : !Number.isInteger(Number(newProductQuantity)) || Number(newProductQuantity) < 1 || !Number.isInteger(Number(newProductUnitCost)) || Number(newProductUnitCost) < 0)}>Thêm vào phiếu</button></footer></section></div>}
   </div>;
 }

@@ -20,6 +20,7 @@ export type AdminProduct = {
   category?: string;
   categoryId?: string;
   materialOptionId?: string;
+  gemstoneTypeId?: string;
   categoryPricingMode?: "FIXED" | "QUALITY" | "QUALITY_AND_BEAD_SIZE";
   subcategory?: string;
   qualityGrades?: string[];
@@ -113,12 +114,12 @@ const tabs = [
 ];
 
 export default function ProductsWorkspace({ products, categories: categoryRecords, materials, onSave, onDelete, onAdd, onNotify }: Props) {
-  const [selectedId, setSelectedId] = useState(products[0]?.id ?? "");
+  const [catalogKind, setCatalogKind] = useState<"Trang sức" | "Đá quý">(products.some((item) => item.productType === "Trang sức") ? "Trang sức" : "Đá quý");
+  const [selectedId, setSelectedId] = useState(products.find((item) => item.productType === "Trang sức")?.id ?? products[0]?.id ?? "");
   const [activeTab, setActiveTab] = useState("basic");
   const [imageIndex, setImageIndex] = useState(0);
   const [draft, setDraft] = useState<Partial<AdminProduct>>({});
   const [search, setSearch] = useState("");
-  const [productTypeFilter, setProductTypeFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -144,22 +145,26 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   const selected = products.find((product) => product.id === selectedId);
   const product = selected ? { ...selected, ...draft } : undefined;
   const isGemstone = product?.productType === "Đá quý";
-  const selectedCategory = product && (categoryRecords.find((item) => item.id === product.categoryId) ?? categoryRecords.find((item) => item.kind === product.productType && item.name === product.category));
+  const selectedCategory = product && (product.productType === "Đá quý"
+    ? categoryRecords.find((item) => item.id === product.gemstoneTypeId) ?? categoryRecords.find((item) => item.id === product.categoryId)
+    : categoryRecords.find((item) => item.id === product.categoryId) ?? categoryRecords.find((item) => item.kind === product.productType && item.name === product.category));
+  const gemstoneTypes = categoryRecords.filter((item) => item.kind === "Đá quý" && item.level === 2 && item.status === "Hoạt động");
   const pricingMode = product?.categoryPricingMode ?? selectedCategory?.pricingMode ?? (isGemstone ? (product?.category?.toLocaleLowerCase("vi").includes("vòng") ? "QUALITY_AND_BEAD_SIZE" : "QUALITY") : "FIXED");
   const usesQualityPricing = qualityPricing(pricingMode);
   const productRoot = categoryRecords.find((item) => !item.parentId && item.kind === product?.productType);
-  const productCategories = categoryRecords.filter((item) => item.kind === product?.productType && item.parentId && item.status === "Hoạt động" && item.usage !== "stone" && (item.level ?? 2) > 1);
+  const productCategories = isGemstone
+    ? gemstoneTypes
+    : categoryRecords.filter((item) => item.kind === product?.productType && item.parentId && item.status === "Hoạt động" && item.usage !== "stone" && (item.level ?? 2) > 1);
   const materialCategoryId = product?.categoryId || selectedCategory?.id;
   const isApplicableMaterial = (item: MaterialOption) => item.id === product?.materialOptionId || !Array.isArray(item.appliedCategoryIds) || !materialCategoryId || item.appliedCategoryIds.includes(materialCategoryId);
-  const stoneOptions = materials.filter((item) => item.scope === "Đá quý" && item.active && item.kind === "STONE" && isApplicableMaterial(item));
   const materialOptions = materials.filter((item) => item.scope === "Trang sức" && item.active && isApplicableMaterial(item));
-  const categories = useMemo(() => [...new Set(products.filter((item) => !productTypeFilter || item.productType === productTypeFilter).map((item) => item.category).filter(Boolean))] as string[], [products, productTypeFilter]);
-  const types = useMemo(() => [...new Set(products.filter((item) => (!productTypeFilter || item.productType === productTypeFilter) && (!categoryFilter || item.category === categoryFilter)).map((item) => item.subcategory).filter(Boolean))] as string[], [products, productTypeFilter, categoryFilter]);
+  const categories = useMemo(() => [...new Set(products.filter((item) => item.productType === catalogKind).map((item) => item.category).filter(Boolean))] as string[], [products, catalogKind]);
+  const types = useMemo(() => [...new Set(products.filter((item) => item.productType === catalogKind && (!categoryFilter || item.category === categoryFilter)).map((item) => item.subcategory).filter(Boolean))] as string[], [products, catalogKind, categoryFilter]);
   const rows = useMemo(() => products.filter((item) => {
     const query = search.trim().toLocaleLowerCase("vi");
     const matchesText = !query || `${item.id} ${item.name} ${item.category ?? ""} ${item.subcategory ?? ""}`.toLocaleLowerCase("vi").includes(query);
-    return matchesText && (!productTypeFilter || item.productType === productTypeFilter) && (!categoryFilter || item.category === categoryFilter) && (!typeFilter || item.subcategory === typeFilter) && (!statusFilter || item.status === statusFilter);
-  }), [products, search, productTypeFilter, categoryFilter, typeFilter, statusFilter]);
+    return matchesText && item.productType === catalogKind && (!categoryFilter || item.category === categoryFilter) && (!typeFilter || item.subcategory === typeFilter) && (!statusFilter || item.status === statusFilter);
+  }), [products, search, catalogKind, categoryFilter, typeFilter, statusFilter]);
   const gallery = product?.gallery?.length ? product.gallery : product?.image ? [product.image] : [];
 
   const selectProduct = (id: string) => {
@@ -175,14 +180,26 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     update("category", "");
     update("categoryId", "");
     update("materialOptionId", "");
+    update("gemstoneTypeId", "");
     update("categoryPricingMode", value === "Đá quý" ? "QUALITY" : "FIXED");
     update("subcategory", "");
     update("qualityGrades", value === "Đá quý" ? ["A", "AA", "AAA"] : []);
     update("beadSizes", []);
   };
+  const gemstoneTypeChanged = (typeId: string) => {
+    const type = gemstoneTypes.find((item) => item.id === typeId);
+    update("gemstoneTypeId", type?.id ?? "");
+    update("subcategory", "");
+    update("categoryId", type?.id ?? "");
+    update("category", type?.name ?? "");
+    update("materialOptionId", "");
+    update("priceVariants", []);
+    update("categoryPricingMode", type?.pricingMode ?? "QUALITY");
+  };
   const categoryChanged = (categoryId: string) => {
     const record = productCategories.find((item) => item.id === categoryId);
-    const mode = record?.pricingMode ?? (product?.productType === "Đá quý" ? "QUALITY" : "FIXED");
+    if (product?.productType === "Đá quý") { gemstoneTypeChanged(categoryId); return; }
+    const mode = record?.pricingMode ?? "FIXED";
     update("categoryId", record?.id ?? "");
     update("category", record?.name ?? "");
     update("materialOptionId", "");
@@ -250,12 +267,17 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       setActiveTab("basic");
       return;
     }
+    if (product.productType === "Đá quý" && (!selectedCategory || selectedCategory.kind !== "Đá quý" || selectedCategory.level !== 2 || selectedCategory.id !== product.gemstoneTypeId)) {
+      onNotify("Chọn đúng danh mục loại đá cấp 2 cho hồ sơ đá quý.");
+      setActiveTab("basic");
+      return;
+    }
     if (usesQualityPricing && !combinationRows(product).length && product.status === "Đang hoạt động") {
       onNotify("Danh mục này cần biến thể được tạo từ phiếu nhập kho trước khi đăng bán.");
       setActiveTab("variants");
       return;
     }
-    const saved = { ...product, ...draft, categoryId: product.categoryId ?? selectedCategory?.id, categoryPricingMode: pricingMode };
+    const saved = { ...product, ...draft, category: isGemstone ? selectedCategory?.name ?? product.category : product.category, categoryId: isGemstone ? product.gemstoneTypeId ?? selectedCategory?.id : product.categoryId ?? selectedCategory?.id, gemstoneTypeId: isGemstone ? product.gemstoneTypeId ?? selectedCategory?.id : product.gemstoneTypeId, categoryPricingMode: pricingMode };
     if (combinationRows(saved).length) {
       saved.priceVariants = combinationRows(saved);
       if (saved.priceVariants.some((variant) => variant.price <= 0)) {
@@ -401,7 +423,16 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     link.click();
     URL.revokeObjectURL(url);
   };
-  const clearFilters = () => { setSearch(""); setProductTypeFilter(""); setCategoryFilter(""); setTypeFilter(""); setStatusFilter(""); };
+  const clearFilters = () => { setSearch(""); setCategoryFilter(""); setTypeFilter(""); setStatusFilter(""); };
+  const changeCatalogKind = (kind: "Trang sức" | "Đá quý") => {
+    setCatalogKind(kind);
+    setCategoryFilter("");
+    setTypeFilter("");
+    setDraft({});
+    setActiveTab("basic");
+    setImageIndex(0);
+    setSelectedId(products.find((item) => item.productType === kind)?.id ?? "");
+  };
 
   return <div className="products-workspace">
     <main className="products-main">
@@ -422,9 +453,11 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       </section>
 
       <section className="products-table-panel">
+        <div className="product-kind-tabs" role="tablist" aria-label="Nhóm hồ sơ sản phẩm">
+          {(["Trang sức", "Đá quý"] as const).map((kind) => <button key={kind} type="button" role="tab" aria-selected={catalogKind === kind} className={catalogKind === kind ? "active" : ""} onClick={() => changeCatalogKind(kind)}>{kind}<span>{products.filter((item) => item.productType === kind).length}</span></button>)}
+        </div>
         <div className="product-filterbar">
           <label className="product-search"><Icon name="search"/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tìm kiếm sản phẩm, mã SKU, tên sản phẩm..." aria-label="Tìm sản phẩm"/></label>
-          <select value={productTypeFilter} onChange={(event) => { setProductTypeFilter(event.target.value); setCategoryFilter(""); setTypeFilter(""); }} aria-label="Lọc nhóm sản phẩm"><option value="">Trang sức &amp; đá quý</option><option>Trang sức</option><option>Đá quý</option></select>
           <select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setTypeFilter(""); }} aria-label="Lọc danh mục"><option value="">Tất cả danh mục</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select>
           <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} aria-label="Lọc loại"><option value="">Tất cả loại</option>{types.map((item) => <option key={item} value={item}>{item}</option>)}</select>
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Lọc trạng thái"><option value="">Tất cả trạng thái</option><option>Đang hoạt động</option><option>Tạm ẩn</option><option>Bản nháp</option><option>Hết hàng</option></select>
@@ -460,8 +493,8 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
 
       {activeTab === "basic" && <section className="product-editor" aria-label="Thông tin cơ bản">
         <label className="product-field"><span>Tên sản phẩm <b>*</b></span><input value={product.name} onChange={(event) => update("name", event.target.value)} /></label>
-        <div className="product-field-grid"><label className="product-field"><span>Danh mục cấp 1 <b>*</b></span><select value={product.productType ?? "Trang sức"} onChange={(event) => categoryTypeChanged(event.target.value as "Trang sức" | "Đá quý")}><option>Trang sức</option><option>Đá quý</option></select></label><label className="product-field"><span>Danh mục cấp 2 / 3 <b>*</b></span><select value={product.categoryId ?? selectedCategory?.id ?? ""} onChange={(event) => categoryChanged(event.target.value)}><option value="">Chọn danh mục</option>{productCategories.map((category) => {const parent = categoryRecords.find((item) => item.id === category.parentId);return <option key={category.id} value={category.id}>{parent && parent.id !== productRoot?.id ? parent.name + " / " + category.name : category.name}</option>;})}</select></label></div>
-        <label className="product-field"><span>{isGemstone ? "Loại đá" : "Đá gắn / Chất liệu"}</span><select value={product.materialOptionId ?? ""} onChange={(event) => { const option = materials.find((item) => item.id === event.target.value); update("materialOptionId", option?.id ?? ""); update("subcategory", option?.name ?? ""); }}><option value="">Chọn {isGemstone ? "loại đá" : "đá gắn hoặc chất liệu"}</option>{(isGemstone ? stoneOptions : materialOptions).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>
+        <div className="product-field-grid"><label className="product-field"><span>Nhóm sản phẩm <b>*</b></span><select value={product.productType ?? "Trang sức"} onChange={(event) => categoryTypeChanged(event.target.value as "Trang sức" | "Đá quý")}><option>Trang sức</option><option>Đá quý</option></select></label><label className="product-field"><span>{isGemstone ? "Loại đá / danh mục cấp 2" : "Danh mục sản phẩm"} <b>*</b></span><select value={isGemstone ? product.gemstoneTypeId ?? product.categoryId ?? "" : product.categoryId ?? selectedCategory?.id ?? ""} onChange={(event) => categoryChanged(event.target.value)}><option value="">{isGemstone ? "Chọn loại đá" : "Chọn danh mục"}</option>{productCategories.map((category) => {const parent = categoryRecords.find((item) => item.id === category.parentId);return <option key={category.id} value={category.id}>{!isGemstone && parent && parent.id !== productRoot?.id ? parent.name + " / " + category.name : category.name}</option>;})}</select>{isGemstone && <small>Chọn loại đá. Dạng cắt và size được quản lý ở từng biến thể.</small>}</label></div>
+        {isGemstone ? <div className="product-variant-note">Mỗi biến thể đá quý dùng một dạng cắt cấp 3 và size mặt đá. Có thể quản lý nhiều tổ hợp trong tab <b>Biến thể &amp; Giá</b>.</div> : <label className="product-field"><span>Đá gắn / Chất liệu</span><select value={product.materialOptionId ?? ""} onChange={(event) => { const option = materials.find((item) => item.id === event.target.value); update("materialOptionId", option?.id ?? ""); update("subcategory", option?.name ?? ""); }}><option value="">Chọn đá gắn hoặc chất liệu</option>{materialOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>}
         <label className="product-field"><span>Khối lượng</span><div className="price-input"><input aria-label="Khối lượng (gram)" type="number" min="0" step="0.01" value={product.weightGrams ?? ""} onChange={(event) => update("weightGrams", event.target.value === "" ? undefined : Number(event.target.value))}/><i>g</i></div></label>
         <div className="product-field"><span>Kích thước (dài × rộng × cao, cm)</span><div className="product-dimension-fields"><input aria-label="Dài (cm)" type="number" min="0" step="0.01" value={product.lengthCm ?? ""} onChange={(event) => update("lengthCm", event.target.value === "" ? undefined : Number(event.target.value))}/><b>×</b><input aria-label="Rộng (cm)" type="number" min="0" step="0.01" value={product.widthCm ?? ""} onChange={(event) => update("widthCm", event.target.value === "" ? undefined : Number(event.target.value))}/><b>×</b><input aria-label="Cao (cm)" type="number" min="0" step="0.01" value={product.heightCm ?? ""} onChange={(event) => update("heightCm", event.target.value === "" ? undefined : Number(event.target.value))}/></div></div>
         <label className="product-field"><span>Mô tả ngắn</span><textarea rows={2} maxLength={160} value={product.description ?? ""} onChange={(event) => update("description", event.target.value)}/><small className="field-counter">{(product.description ?? "").length}/160</small></label>

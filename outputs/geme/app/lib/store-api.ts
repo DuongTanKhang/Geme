@@ -106,6 +106,7 @@ const STOREFRONT_REVALIDATE_SECONDS = (() => {
   const configured = Number(process.env.STOREFRONT_API_REVALIDATE_SECONDS);
   return Number.isInteger(configured) && configured >= 1 && configured <= 60 ? configured : 5;
 })();
+const STOREFRONT_CACHE_TAG = "storefront-catalog";
 
 const requestApi = cache(async (path: string, revalidateSeconds = 0, cacheTag = ""): Promise<{ data: unknown | null; connected: boolean }> => {
   try {
@@ -231,7 +232,7 @@ export function getStoreCatalogEditorialPromos(settings: StoreSiteSettings): Sto
 export async function getStoreSiteSettings() {
   // Settings are edited in the admin and should be consistent on both local
   // host aliases as soon as the next page request reaches the shared server.
-  const result = await readApi<StoreSiteSettings>("/settings");
+  const result = await readApi<StoreSiteSettings>("/settings", { cacheTag: STOREFRONT_CACHE_TAG });
   return { settings: result.data ?? {}, connected: result.connected };
 }
 
@@ -362,7 +363,7 @@ export async function getStoreProducts(options: {
   if (options.gemstoneTypeId) params.set("gemstoneTypeId", options.gemstoneTypeId);
   if (options.materialOptionId) params.set("materialOptionId", options.materialOptionId);
   if (options.search?.trim()) params.set("search", options.search.trim());
-  const result = await readApi<any[]>(`/products?${params.toString()}`);
+  const result = await readApi<any[]>(`/products?${params.toString()}`, { cacheTag: STOREFRONT_CACHE_TAG });
   return { products: (result.data ?? []).map(asStoreProduct), connected: result.connected };
 }
 
@@ -401,14 +402,14 @@ export function selectHomeBestSellers(products: StoreProduct[], featuredProducts
 }
 
 export async function getStorePromotions() {
-  const result = await readApi<StorePromotion[]>("/promotions/storefront");
+  const result = await readApi<StorePromotion[]>("/promotions/storefront", { cacheTag: STOREFRONT_CACHE_TAG });
   return { promotions: result.data ?? [], connected: result.connected };
 }
 
 export async function getStoreFacets() {
   const [categories, materials] = await Promise.all([
-    readApi<any[]>("/categories"),
-    readApi<any[]>("/materials"),
+    readApi<any[]>("/categories?public=true", { cacheTag: STOREFRONT_CACHE_TAG }),
+    readApi<any[]>("/materials", { cacheTag: STOREFRONT_CACHE_TAG }),
   ]);
   return {
     categories: (categories.data ?? []).map((item: any) => ({ id: item.id, name: item.name, slug: item.slug, kind: item.kind, usage: item.usage, level: Number(item.level) || 1, parentId: item.parentId ?? null, description: item.description ?? null, bannerUrl: item.bannerUrl ?? null, status: item.status, sortOrder: Number(item.sortOrder) || 0 })) as StoreCategory[],
@@ -423,12 +424,12 @@ export async function getStoreCatalog() {
 }
 
 export async function getStoreProduct(slug: string) {
-  const result = await readApi<any>(`/products/detail/${encodeURIComponent(slug)}`);
+  const result = await readApi<any>(`/products/detail/${encodeURIComponent(slug)}`, { cacheTag: STOREFRONT_CACHE_TAG });
   return { product: result.data ? asStoreProduct(result.data) : null, connected: result.connected };
 }
 
 export async function getStoreRelatedProducts(slug: string, limit = 6) {
-  const result = await readApi<any[]>(`/products/detail/${encodeURIComponent(slug)}/related?limit=${limit}`);
+  const result = await readApi<any[]>(`/products/detail/${encodeURIComponent(slug)}/related?limit=${limit}`, { cacheTag: STOREFRONT_CACHE_TAG });
   return { products: (result.data ?? []).map(asStoreProduct), connected: result.connected };
 }
 

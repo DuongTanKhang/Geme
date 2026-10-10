@@ -13,6 +13,7 @@ type Props = {
   onConfirm: () => void;
   onDispatch: () => void;
   onDelivered: () => void;
+  onMarkPaid: () => Promise<void>;
   onShowBill: () => void;
   onCustomerHistory: () => void;
   onGetViettelPostStatus: () => Promise<VtpStatus>;
@@ -55,7 +56,7 @@ function posSyncName(status?: string | null) {
   return ({ PENDING: "Đang chờ gửi", SYNCING: "Đang đồng bộ", RETRYING: "Sẽ tự thử lại", SYNCED: "Đã đồng bộ", BLOCKED: "Cần cấu hình thanh toán" } as Record<string, string>)[status || ""] || "Chưa gửi lên POS365";
 }
 
-export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch, onDelivered, onShowBill, onCustomerHistory, onGetViettelPostStatus, onGetViettelPostPrintUrl, onQuoteViettelPost, onCreateViettelPostShipment, onRefreshOrders }: Props) {
+export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch, onDelivered, onMarkPaid, onShowBill, onCustomerHistory, onGetViettelPostStatus, onGetViettelPostPrintUrl, onQuoteViettelPost, onCreateViettelPostShipment, onRefreshOrders }: Props) {
   const defaultWeight = Math.round(order.items.reduce((sum, item) => sum + (Number(item.weightGrams) || 0) * item.quantity, 0));
   const [shipmentOpen, setShipmentOpen] = useState(false);
   const [shipmentStatus, setShipmentStatus] = useState<VtpStatus | null>(null);
@@ -76,6 +77,8 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
   const [services, setServices] = useState<VtpService[]>([]);
   const [serviceCode, setServiceCode] = useState("");
   const [refreshError, setRefreshError] = useState("");
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
 
   useEffect(() => {
     setShipmentOpen(false);
@@ -87,6 +90,7 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
     setFreightPayment(order.shippingFee > 0 ? "SENDER" : "RECEIVER");
     setShippingNote(order.note || "");
     setRefreshError("");
+    setPaymentError("");
     setPrintError("");
     setPrintUrl("");
   }, [order.id, defaultWeight, order.note]);
@@ -137,6 +141,13 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
     try { setPrintUrl((await onGetViettelPostPrintUrl()).url); }
     catch (error) { setPrintError(error instanceof Error ? error.message : "Không tạo được link in vận đơn."); }
     finally { setPrintLoading(false); }
+  };
+  const markPaymentAsPaid = async () => {
+    setPaymentLoading(true);
+    setPaymentError("");
+    try { await onMarkPaid(); }
+    catch (error) { setPaymentError(error instanceof Error ? error.message : "Không thể ghi nhận thanh toán."); }
+    finally { setPaymentLoading(false); }
   };
 
   const statusSteps = ["Đặt hàng", "Chờ xác nhận", "Đang xử lý", "Đang giao", "Đã giao", "Đã hủy"];
@@ -193,6 +204,8 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
 
     {order.note && <section className="drawer-note"><h3><SectionIcon name="note"/>Ghi chú đơn hàng</h3><p>{order.note}</p></section>}
     <div className="drawer-actions">
+      {order.paymentStatus !== "PAID" && !order.payment.includes("COD") && order.status !== "Đã hủy" && <button className="button button-primary" type="button" onClick={() => void markPaymentAsPaid()} disabled={paymentLoading}>{paymentLoading ? "Đang lưu thanh toán…" : "✓ Ghi nhận đã thanh toán"}</button>}
+      {paymentError && <small className="vtp-error" role="alert">{paymentError}</small>}
       {order.status === "Chờ xác nhận"
         ? <button className="button button-primary" type="button" onClick={onConfirm}>✓ Xác nhận đơn</button>
         : order.status === "Đang xử lý"

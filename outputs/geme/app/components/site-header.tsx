@@ -5,7 +5,7 @@ import { normalizeApiBaseUrl } from "../lib/api-base";
 
 type MenuId = "trang-suc" | "da-quy" | "san-pham";
 
-type MenuStone = { id: string; name: string; slug: string; imageUrl?: string; appliedCategoryIds?: string[] };
+type MenuStone = { id: string; name: string; slug: string; imageUrl?: string; appliedCategoryIds?: string[]; sortOrder?: number };
 type MenuCategory = { id: string; name: string; slug: string; kind: "JEWELRY" | "GEMSTONE"; usage: "PRODUCT_CATEGORY" | "GEMSTONE_TYPE"; level: number; parentId?: string | null; status: "ACTIVE" | "INACTIVE"; imageUrl?: string | null; sortOrder?: number };
 type ApiMaterialOption = { id: string; name: string; scope: "JEWELRY" | "GEMSTONE"; kind: "MATERIAL" | "STONE"; active: boolean; imageUrl?: string | null; slug?: string; sortOrder?: number; appliedCategoryIds?: string[] };
 type StoreCartLine = { key: string; productId: string; variantId: string | null; slug: string; name: string; sku: string; price: number; quality: string | null; beadSize: string | null; quantity: number; stock: number };
@@ -73,29 +73,37 @@ function BraceletCategoryColumn({ categories, activeCategory, onSelect }: { cate
   </div>;
 }
 
-function GemstoneListColumn({ stones, categories = [], showHeading = true }: { stones: Array<Pick<MenuCategory, "id" | "name" | "slug" | "imageUrl">>; categories?: MenuCategory[]; showHeading?: boolean }) {
-  const categoryTrail = (category: MenuCategory) => {
-    const parts = [category.name];
-    let parentId = category.parentId;
-    while (parentId) {
-      const parent = categories.find((item) => item.id === parentId);
-      if (!parent || parent.level <= 1) break;
-      parts.unshift(parent.name);
-      parentId = parent.parentId;
-    }
-    return parts.join(" / ");
-  };
-  return <>
-    {categories.length > 0 && <div className="mega-column"><h3 className="mega-column-title">Danh mục sản phẩm</h3><div className="mega-category-list">{categories.map((category) => <a href={`/san-pham?danh-muc=${encodeURIComponent(category.slug)}`} className="mega-category-link" key={category.id}>{category.imageUrl ? <img className="mega-category-thumbnail" src={category.imageUrl} alt=""/> : <CategoryGlyph shape={categoryShape(category.name)}/>}<span>{categoryTrail(category)}</span></a>)}</div></div>}
-    <div className="mega-column" id="gemstone-stone-list">
-      {showHeading && <><h3 className="mega-column-title">Mặt đá quý theo loại đá</h3><p className="mega-column-description">Chọn loại đá để xem các mặt đá đang có.</p></>}
-      <div className="mega-gem-list mega-gem-list-dense">
-        {stones.map((stone) => <a href={`/da-quy?loai=${encodeURIComponent(stone.slug)}`} className="mega-gem-link" key={stone.id}>{stone.imageUrl ? <img src={stone.imageUrl} alt="" /> : <span className="mega-gem-placeholder" aria-hidden="true">◇</span>}<span>{stone.name}</span></a>)}
-        {!stones.length && <span className="mega-gem-empty">Chưa có loại đá</span>}
-        <a className="mega-view-all" href="/da-quy">Xem tất cả mặt đá quý <span>›</span></a>
-      </div>
+function GemstoneListColumn({ stones, types, categories, activeStoneId, onSelect, showAll = false }: { stones: Array<Pick<MenuCategory, "id" | "name" | "slug" | "imageUrl">>; types: MenuCategory[]; categories: MenuCategory[]; activeStoneId: string | null; onSelect: (id: string) => void; showAll?: boolean }) {
+  const productCategories = categories.filter((item) => item.status === "ACTIVE" && item.kind === "GEMSTONE" && item.level === 2 && item.usage === "PRODUCT_CATEGORY" && !categories.some((cut) => cut.status === "ACTIVE" && cut.kind === "GEMSTONE" && cut.level === 3 && cut.parentId === item.id)).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  const cutsFor = (stoneId: string) => categories.filter((item) => item.status === "ACTIVE" && item.kind === "GEMSTONE" && item.usage === "PRODUCT_CATEGORY" && item.level === 3 && item.parentId === stoneId).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name, "vi"));
+  return <div className="mega-column" id="gemstone-stone-list">
+    {productCategories.length > 0 && <><h3 className="mega-column-title">Danh mục sản phẩm</h3><div className="mega-category-list">{productCategories.map((category) => <a href="/da-quy" className="mega-category-link" key={category.id}>{category.imageUrl ? <img className="mega-category-thumbnail" src={category.imageUrl} alt=""/> : <CategoryGlyph shape="diamond"/>}<span>{category.name}</span><span className="mega-sub-chevron">→</span></a>)}</div></>}
+    <h3 className="mega-column-title">Loại đá quý</h3>
+    <div className="mega-gem-list mega-gem-list-dense">
+      {stones.map((stone) => {
+        const cuts = types.some((item) => item.id === stone.id) ? cutsFor(stone.id) : [];
+        return <div className="mega-gem-menu-group" key={stone.id}>
+          <a href={`/da-quy?loai=${encodeURIComponent(stone.slug)}`} className={`mega-gem-link${activeStoneId === stone.id ? " is-selected" : ""}`} aria-controls={activeStoneId === stone.id ? "gemstone-cut-list" : undefined} aria-expanded={activeStoneId === stone.id} onMouseEnter={() => onSelect(stone.id)} onFocus={() => onSelect(stone.id)}>{stone.imageUrl ? <img src={stone.imageUrl} alt=""/> : <span className="mega-gem-placeholder" aria-hidden="true">◇</span>}<span>{stone.name}</span><span className="mega-sub-chevron">›</span></a>
+          {showAll && cuts.length > 0 && <div className="mega-gem-mobile-cuts" aria-label={`Dạng cắt ${stone.name}`}>{cuts.map((cut) => <a href={`/da-quy?loai=${encodeURIComponent(stone.slug)}&cut=${encodeURIComponent(cut.slug)}`} key={cut.id}>{cut.name}</a>)}</div>}
+        </div>;
+      })}
+      {!stones.length && <span className="mega-gem-empty">Chưa có loại đá</span>}
+      <a className="mega-view-all" href="/da-quy">Xem tất cả đá quý <span>›</span></a>
     </div>
-  </>;
+  </div>;
+}
+
+function GemstoneCutColumn({ stone, categories }: { stone?: Pick<MenuCategory, "id" | "name" | "slug">; categories: MenuCategory[] }) {
+  const cuts = stone ? categories.filter((item) => item.status === "ACTIVE" && item.kind === "GEMSTONE" && item.usage === "PRODUCT_CATEGORY" && item.level === 3 && item.parentId === stone.id).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name, "vi")) : [];
+  return <div className="mega-column" id="gemstone-cut-list">
+    <h3 className="mega-column-title">{stone ? `Dạng cắt · ${stone.name}` : "Dạng cắt"}</h3>
+    {stone && <p className="mega-column-description">Chọn kiểu cắt để lọc mặt đá {stone.name}.</p>}
+    <div className="mega-category-list">
+      {cuts.map((cut) => <a className="mega-category-link" href={`/da-quy?loai=${encodeURIComponent(stone!.slug)}&cut=${encodeURIComponent(cut.slug)}`} key={cut.id}><CategoryGlyph shape="diamond"/><span>{cut.name}</span></a>)}
+      {!cuts.length && <span className="mega-gem-empty">{stone ? "Chưa có dạng cắt cho loại đá này" : "Di chuột vào một loại đá để xem dạng cắt"}</span>}
+      {stone && <a className="mega-view-all" href={`/da-quy?loai=${encodeURIComponent(stone.slug)}`}>Xem tất cả {stone.name} <span>›</span></a>}
+    </div>
+  </div>;
 }
 
 function JewelLinks({ showAll = false, categories, stones }: { showAll?: boolean; categories: MenuCategory[]; stones: MenuStone[] }) {
@@ -129,10 +137,16 @@ function JewelLinks({ showAll = false, categories, stones }: { showAll?: boolean
 }
 
 function GemLinks({ showAll = false, stones, types, categories }: { showAll?: boolean; stones: MenuStone[]; types: MenuCategory[]; categories: MenuCategory[] }) {
-  const combinedStones = [...types, ...stones].reduce<Array<Pick<MenuCategory, "id" | "name" | "slug" | "imageUrl">>>((all, item) => all.some((stone) => stone.slug === item.slug) ? all : [...all, item], []);
-  const productCategories = categories.filter((item) => item.status === "ACTIVE" && item.usage === "PRODUCT_CATEGORY" && item.level > 1).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
-  if (showAll) return <div className="mega-columns mega-gemstone-columns"><GemstoneListColumn stones={combinedStones} categories={productCategories}/></div>;
-  return <MenuCard id="da-quy" title="MẶT ĐÁ QUÝ"><div className="mega-columns"><GemstoneListColumn stones={combinedStones} categories={productCategories}/></div></MenuCard>;
+  const [activeStoneId, setActiveStoneId] = useState<string | null>(null);
+  const combinedStones = [...types.map((item) => ({ id: item.id, name: item.name, slug: item.slug, imageUrl: item.imageUrl || undefined })), ...stones.map((item) => ({ id: item.id, name: item.name, slug: item.slug, imageUrl: item.imageUrl }))]
+    .reduce<Array<Pick<MenuCategory, "id" | "name" | "slug" | "imageUrl">>>((all, item) => all.some((stone) => stone.slug === item.slug) ? all : [...all, item], [])
+    .sort((a, b) => (types.find((item) => item.id === a.id)?.sortOrder ?? stones.find((item) => item.id === a.id)?.sortOrder ?? 0) - (types.find((item) => item.id === b.id)?.sortOrder ?? stones.find((item) => item.id === b.id)?.sortOrder ?? 0) || a.name.localeCompare(b.name, "vi"));
+  const activeType = types.find((item) => item.id === activeStoneId) ?? combinedStones.find((item) => item.id === activeStoneId);
+  if (showAll) return <div className="mega-columns mega-gemstone-columns"><GemstoneListColumn stones={combinedStones} types={types} categories={categories} activeStoneId={activeStoneId} onSelect={setActiveStoneId} showAll /></div>;
+  return <div className="mega-selection-layout gemstone-mega-selection">
+    <MenuCard id="da-quy" title="ĐÁ QUÝ"><div className="mega-columns"><GemstoneListColumn stones={combinedStones} types={types} categories={categories} activeStoneId={activeStoneId} onSelect={setActiveStoneId}/></div></MenuCard>
+    {activeType && <MenuCard id="da-quy" title="DẠNG CẮT" className="mega-card-stone-panel"><div className="mega-columns"><GemstoneCutColumn stone={activeType} categories={categories}/></div></MenuCard>}
+  </div>;
 }
 
 function MenuCard({ id, title, children, className = "" }: { id: MenuId; title: string; children: ReactNode; className?: string }) {
@@ -178,14 +192,14 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
       if (!active) return;
       const enabled = records.filter((item) => item.status === "ACTIVE");
       setJewelryCategories(enabled.filter((item) => item.kind === "JEWELRY" && item.usage === "PRODUCT_CATEGORY"));
-      setGemstoneTypes(enabled.filter((item) => item.kind === "GEMSTONE" && item.usage === "GEMSTONE_TYPE"));
+      setGemstoneTypes(enabled.filter((item) => item.kind === "GEMSTONE" && item.level === 2 && (item.usage === "GEMSTONE_TYPE" || enabled.some((cut) => cut.kind === "GEMSTONE" && cut.level === 3 && cut.parentId === item.id))));
       setGemstoneCategories(enabled.filter((item) => item.kind === "GEMSTONE" && item.usage === "PRODUCT_CATEGORY"));
     };
     let categoriesRequestId = 0;
     const fetchCategories = async (fresh = false) => {
       const requestId = ++categoriesRequestId;
       try {
-        const response = await fetch(`${materialsApiBase}/categories`, { cache: fresh ? "no-store" : "default" });
+        const response = await fetch(`${materialsApiBase}/categories?public=true`, { cache: fresh ? "no-store" : "default" });
         if (response.ok) {
           const records = await response.json() as MenuCategory[];
           if (requestId === categoriesRequestId) applyCategories(records);
@@ -198,8 +212,16 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
     void fetchCategories(true);
     window.addEventListener("geme:categories-changed", refreshCategories);
     const events = new EventSource(`${materialsApiBase}/materials/events`);
+    let hasInitialMaterialSnapshot = false;
     events.onmessage = (event) => {
-      try { applyMaterials(JSON.parse(event.data) as ApiMaterialOption[]); } catch { /* Ignore malformed event payloads. */ }
+      try {
+        applyMaterials(JSON.parse(event.data) as ApiMaterialOption[]);
+        if (!hasInitialMaterialSnapshot) {
+          hasInitialMaterialSnapshot = true;
+          return;
+        }
+        window.dispatchEvent(new Event("geme:catalog-changed"));
+      } catch { /* Ignore malformed event payloads. */ }
     };
     return () => { active = false; window.removeEventListener("geme:categories-changed", refreshCategories); events.close(); };
   }, []);

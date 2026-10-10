@@ -66,6 +66,7 @@ export class MaterialsService implements OnModuleInit {
     const [records, map] = await Promise.all([
       this.prisma.materialOption.findMany({
         ...(scope ? { where: { scope } } : {}),
+        include: { _count: { select: { products: true } } },
         orderBy: [{ scope: "asc" }, { sortOrder: "asc" }, { name: "asc" }],
       }),
       this.applicabilityMap(),
@@ -136,12 +137,10 @@ export class MaterialsService implements OnModuleInit {
 
   async remove(id: string) {
     await this.prisma.$transaction(async (tx) => {
-      const exists = await tx.materialOption.findUnique({ where: { id }, select: { id: true } });
+      const exists = await tx.materialOption.findUnique({ where: { id }, select: { id: true, name: true } });
       if (!exists) throw new NotFoundException("Không tìm thấy mục chất liệu / loại đá.");
-
-      // Detach the option from products and SKU rules before deleting it. This also
-      // keeps databases whose FK has not yet applied ON DELETE SET NULL usable.
-      await tx.product.updateMany({ where: { materialOptionId: id }, data: { materialOptionId: null } });
+      const linkedProducts = await tx.product.count({ where: { materialOptionId: id } });
+      if (linkedProducts) throw new BadRequestException(`Không thể xóa “${exists.name}” vì đang có ${linkedProducts} sản phẩm phụ thuộc. Hãy ẩn loại đá hoặc chuyển sản phẩm trước.`);
       const setting = await tx.siteSetting.findUnique({ where: { key: "inventory.skuRules" }, select: { value: true } });
       if (Array.isArray(setting?.value)) {
         const rules = (setting.value as Array<Record<string, unknown>>).map((rule) => ({

@@ -164,6 +164,7 @@ model Customer {
   name           String           @db.VarChar(160)
   email          String?          @unique @db.VarChar(320)
   phone          String?          @unique @db.VarChar(32)
+  pos365PartnerId String?         @unique @map("pos365_partner_id") @db.VarChar(80)
   defaultAddress String?          @map("default_address") @db.Text
   status         CustomerStatus   @default(ACTIVE)
   segment        String?          @db.VarChar(40)

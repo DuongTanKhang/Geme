@@ -65,12 +65,12 @@ export default function PriceProfileWorkspace({ products, onSave, onNotify, onSy
   };
 
   const updateDraft = (product: AdminProduct, update: (draft: ProductDraft) => ProductDraft) => {
-    const key = product.apiId || product.id;
+    const key = product.id;
     setDrafts((current) => ({ ...current, [key]: update(current[key] || makeDraft(product)) }));
   };
 
   const save = async (product: AdminProduct) => {
-    const key = product.apiId || product.id;
+    const key = product.id;
     const draft = drafts[key] || makeDraft(product);
     const priceVariants = (product.priceVariants || []).map((variant, index) => {
       const next = draft.variants[variantKey(variant, index)] || { price: "", originalPrice: "" };
@@ -130,7 +130,7 @@ export default function PriceProfileWorkspace({ products, onSave, onNotify, onSy
     <div className="price-profile-toolbar"><label className="price-profile-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm SKU, tên hoặc danh mục…"/></label><select aria-label="Lọc loại sản phẩm" value={kind} onChange={(event) => setKind(event.target.value)}><option>Tất cả loại</option><option>Trang sức</option><option>Đá quý</option></select><label className="price-profile-missing"><input type="checkbox" checked={missingOnly} onChange={(event) => setMissingOnly(event.target.checked)}/> Chỉ xem thiếu giá</label><span>{filtered.length} / {products.length} hồ sơ</span></div>
 
     <div className="price-profile-list">{filtered.map((product) => {
-      const key = product.apiId || product.id;
+      const key = product.id;
       const draft = drafts[key] || makeDraft(product);
       const changed = dirty(product, draft);
       const status = syncLabel(product.pos365PriceSyncStatus);

@@ -146,9 +146,8 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
           const sku = String(variant.sku || (variants.length === 1 ? product.sku : "")).trim();
           if (!sku) throw new Error(`Sản phẩm ${product.name} có biến thể thiếu SKU riêng; chưa thể đồng bộ tồn an toàn.`);
           const key = normalizedCode(sku);
-          const label = [variant.quality, variant.beadSize].filter(Boolean).join(" · ");
           if (linesBySku.has(key)) throw new Error(`SKU ${sku} bị lặp giữa nhiều biến thể hoặc sản phẩm; chưa thể đồng bộ tồn an toàn.`);
-          linesBySku.set(key, { sku, name: label ? `${product.name} · ${label}` : product.name, price: Number(variant.price) || 0, stock: variant.stock });
+          linesBySku.set(key, { sku, name: product.name, price: Number(variant.price) || 0, stock: variant.stock });
         }
       } else {
         const key = normalizedCode(product.sku);
@@ -292,7 +291,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     const product = await this.prisma.product.findUnique({ where: { id: productId }, include: { variants: { orderBy: { sortOrder: "asc" } } } });
     if (!product) return;
     const targetLines = product.variants.length
-      ? product.variants.map((variant) => ({ sku: String(variant.sku || "").trim(), name: `${product.name}${[variant.quality, variant.beadSize].filter(Boolean).length ? ` · ${[variant.quality, variant.beadSize].filter(Boolean).join(" · ")}` : ""}`, price: Number(variant.price) || 0, stock: variant.stock }))
+      ? product.variants.map((variant) => ({ sku: String(variant.sku || "").trim(), name: product.name, price: Number(variant.price) || 0, stock: variant.stock }))
       : [{ sku: String(product.sku || "").trim(), name: product.name, price: Number(product.price) || 0, stock: product.stock }];
     const seen = new Set<string>();
     for (const line of targetLines) {
@@ -478,7 +477,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
           data: { pos365SyncStatus: "SYNCING", pos365SyncAttempts: { increment: 1 }, pos365SyncLastAttemptAt: claimedAt, pos365SyncNextAttemptAt: null },
         });
         if (!claim.count) continue;
-        const order = await this.prisma.order.findUnique({ where: { id: row.id }, include: { items: true, payments: { orderBy: { createdAt: "asc" } } } });
+        const order = await this.prisma.order.findUnique({ where: { id: row.id }, include: { items: true, payments: { orderBy: { createdAt: "asc" } }, customer: true } });
         if (!order) continue;
         try {
           const posOrderId = await this.sendOrder(order);
@@ -525,6 +524,9 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
 
     const payment = order.payments?.[0];
     const isPaid = payment?.status === "PAID";
+    const partnerId = isPaid && order.customer
+      ? await this.upsertPartner(config, sessionId, order.customer)
+      : null;
     let accountId: number | null = null;
     if (isPaid && payment.method !== "COD") {
       const configured = Number(process.env[`POS365_ACCOUNT_ID_${String(payment.method || "").toUpperCase()}`]);
@@ -555,6 +557,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
         PurchaseDate: new Date(order.placedAt).toISOString().slice(0, 19).replace("T", " "),
         Status: status,
         BranchId: config.branchId,
+        ...(partnerId ? { PartnerId: partnerId } : {}),
         Discount: Math.round(Number(order.discountAmount) || 0),
         ExcessCash: 0,
         VAT: 0,
@@ -570,7 +573,78 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     const acceptedId = asNumber(accepted?.Id);
     if (!accepted || acceptedId === null) throw new Error(`POS365 chưa xác nhận đơn ${order.code} sau khi ghi.`);
     if (Number(accepted.Status) !== status) throw new Error(`POS365 nhận đơn ${order.code} nhưng trạng thái chưa khớp.`);
+    if (partnerId && asNumber(accepted.PartnerId) !== partnerId) throw new Error(`POS365 chưa gắn đúng hồ sơ khách cho đơn ${order.code}.`);
     return String(acceptedId);
+  }
+
+  private async upsertPartner(config: Pos365Config, sessionId: string, customer: Pos365Record) {
+    const name = String(customer.name || "").trim();
+    if (!name) throw new Error(`Hồ sơ khách hàng ${customer.id || ""} thiếu tên nên chưa thể đồng bộ POS365.`);
+    const phone = String(customer.phone || "").trim();
+    const email = String(customer.email || "").trim().toLowerCase();
+    let existingId = asNumber(customer.pos365PartnerId);
+    let existing: Pos365Record | null = null;
+    if (existingId !== null && existingId > 0) {
+      const found = await this.requestJson(new URL(`/api/partners/${existingId}`, config.baseUrl!), sessionId) as Pos365Record;
+      existing = (found?.Partner || found) as Pos365Record;
+      if (asNumber(existing?.Id) !== existingId) throw new Error(`POS365 không xác nhận hồ sơ khách ${name} đã lưu trước đó.`);
+    } else {
+      existing = await this.findPartner(config, sessionId, { phone, email });
+      existingId = asNumber(existing?.Id);
+    }
+
+    const partner: Pos365Record = {
+      Id: existingId ?? 0,
+      Code: String(existing?.Code || ""),
+      Type: 1,
+      Name: name.slice(0, 160),
+      Phone: phone || null,
+      Email: email || null,
+      Address: String(customer.defaultAddress || "").trim() || null,
+    };
+    let saved: Pos365Record | null = null;
+    try {
+      saved = await this.requestJson(new URL("/api/partners", config.baseUrl!), sessionId, {
+        method: "POST",
+        body: JSON.stringify({ Partner: partner }),
+      }) as Pos365Record;
+    } catch (error) {
+      // If POS365 created the partner but the response was lost, find it by contact before retrying.
+      if (existingId) throw error;
+      existing = await this.findPartner(config, sessionId, { phone, email }).catch(() => null);
+      if (!existing) throw error;
+    }
+
+    let partnerId = asNumber(saved?.Id ?? saved?.Partner?.Id ?? existing?.Id ?? existingId);
+    if (partnerId === null || partnerId <= 0) {
+      existing = await this.findPartner(config, sessionId, { phone, email });
+      partnerId = asNumber(existing?.Id);
+    }
+    if (!Number.isSafeInteger(partnerId) || partnerId === null || partnerId <= 0) throw new Error(`POS365 chưa trả mã hồ sơ khách hàng ${name} sau khi lưu.`);
+    const partnerIdText = String(partnerId);
+    if (String(customer.pos365PartnerId || "") !== partnerIdText) {
+      await this.prisma.customer.update({ where: { id: String(customer.id) }, data: { pos365PartnerId: partnerIdText } });
+    }
+    return partnerId;
+  }
+
+  private async findPartner(config: Pos365Config, sessionId: string, contact: { phone: string; email: string }) {
+    const normalizePhone = (value: unknown) => {
+      const digits = String(value || "").replace(/\D/g, "");
+      return digits.startsWith("84") && digits.length >= 10 ? `0${digits.slice(2)}` : digits;
+    };
+    const searches: Array<{ field: "Phone" | "Email"; value: string; matches: (row: Pos365Record) => boolean }> = [];
+    if (contact.phone) searches.push({ field: "Phone", value: contact.phone, matches: (row) => normalizePhone(row.Phone) === normalizePhone(contact.phone) });
+    if (contact.email) searches.push({ field: "Email", value: contact.email, matches: (row) => String(row.Email || "").trim().toLowerCase() === contact.email.toLowerCase() });
+    for (const search of searches) {
+      const escaped = search.value.replace(/'/g, "''");
+      const filter = encodeURIComponent(`Type eq 1 and ${search.field} eq '${escaped}'`);
+      const page = await this.requestJson(new URL(`/api/partners?format=json&$top=100&$skip=0&$filter=${filter}`, config.baseUrl!), sessionId);
+      const matches = this.rows(page).filter((row) => Number(row.Type) === 1 && search.matches(row));
+      if (matches.length > 1) throw new Error(`POS365 có nhiều hồ sơ khách trùng ${search.field === "Phone" ? "số điện thoại" : "email"}; dừng để tránh gắn nhầm đơn.`);
+      if (matches.length === 1) return matches[0];
+    }
+    return null;
   }
 
   private async findOrder(config: Pos365Config, sessionId: string, code: string) {
@@ -712,14 +786,14 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     const lines = product.variants?.length
       ? product.variants.map((variant: Pos365Record) => ({
           sku: String(variant.sku || (product.variants.length === 1 ? product.sku : "")).trim(),
-          name: `${product.name}${[variant.quality, variant.beadSize].filter(Boolean).length ? ` · ${[variant.quality, variant.beadSize].filter(Boolean).join(" · ")}` : ""}`,
+          name: String(product.name || product.sku).slice(0, 180),
           price: Math.round(Number(variant.price) || 0),
         }))
-      : [{ sku: String(product.sku || "").trim(), name: String(product.name || product.sku), price: Math.round(Number(product.price) || 0) }];
+      : [{ sku: String(product.sku || "").trim(), name: String(product.name || product.sku).slice(0, 180), price: Math.round(Number(product.price) || 0) }];
+    for (const line of lines) line.name = line.name.slice(0, 180);
     const uniqueLines = new Map<string, { sku: string; name: string; price: number }>();
     for (const line of lines) {
       if (!line.sku) throw new Error(`Biến thể của ${product.sku} chưa có SKU riêng; chưa thể đồng bộ giá theo từng biến thể.`);
-      if (line.price <= 0) throw new Error(`SKU ${line.sku} chưa có giá bán dương trong Hồ sơ giá.`);
       const key = normalizedCode(line.sku);
       const current = uniqueLines.get(key);
       if (current && current.price !== line.price) throw new Error(`SKU ${line.sku} đang gắn nhiều mức giá; cần cấp SKU riêng cho từng biến thể.`);
@@ -732,7 +806,11 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       if (!existing) {
         const created = await this.createProduct(config, sessionId, line.sku, line.name, line.price);
         catalog.push(created);
-      } else if (Math.round(Number(existing.Price) || 0) !== line.price) {
+      } else {
+        const targetPrice = line.price > 0 ? line.price : Math.round(Number(existing.Price) || 0);
+        const currentName = String(existing.Name || "").trim();
+        if (currentName === line.name && Math.round(Number(existing.Price) || 0) === targetPrice) continue;
+        if (normalizedCode(existing.Code) !== normalizedCode(line.sku)) throw new Error(`SKU POS365 của mặt hàng ${line.sku} không khớp; dừng để tránh sửa nhầm mã.`);
         const saved = await this.requestJson(new URL("/api/products", config.baseUrl), sessionId, {
           method: "POST",
           body: JSON.stringify({
@@ -741,7 +819,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
               Code: String(existing.Code || line.sku),
               Name: String(line.name || existing.Name || line.sku).slice(0, 180),
               ProductType: asNumber(existing.ProductType) ?? 1,
-              Price: line.price,
+              Price: targetPrice,
               Unit: String(existing.Unit || "Cái"),
               CategoryId: existing.CategoryId ?? null,
             },
@@ -755,9 +833,11 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     const verified = await this.readProducts(config, sessionId);
     const mismatches = [...uniqueLines.values()].flatMap((line) => {
       const remote = this.findProductByCode(verified, line.sku);
-      return Math.round(Number(remote?.Price) || 0) === line.price ? [] : [{ sku: line.sku, expected: line.price, actual: remote?.Price ?? null }];
+      const nameMatches = String(remote?.Name || "").trim() === line.name;
+      const priceMatches = line.price <= 0 || Math.round(Number(remote?.Price) || 0) === line.price;
+      return nameMatches && priceMatches ? [] : [{ sku: line.sku, expectedName: line.name, actualName: remote?.Name ?? null, expectedPrice: line.price || null, actualPrice: remote?.Price ?? null }];
     });
-    if (mismatches.length) throw new Error(`POS365 chưa lưu đúng giá cho: ${mismatches.map((row) => row.sku).join(", ")}.`);
+    if (mismatches.length) throw new Error(`POS365 chưa lưu đúng tên hoặc giá cho SKU: ${mismatches.map((row) => row.sku).join(", ")}.`);
   }
 
   private async sendPurchaseReceipt(receipt: Pos365Record) {
@@ -769,8 +849,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     for (const item of receipt.items || []) {
       const sku = String(item.productSku || item.variant?.sku || "").trim();
       if (!sku) throw new Error(`Dòng hàng ${item.productName || "không tên"} thiếu SKU để ghép POS365.`);
-      const variantLabel = [item.variant?.quality, item.variant?.beadSize].filter(Boolean).join(" · ");
-      const productName = variantLabel ? `${item.productName} · ${variantLabel}` : item.productName;
+      const productName = String(item.product?.name || item.productName || sku);
       const salePrice = Number(item.variant?.price ?? item.product?.price) || 0;
       const remote = this.findProductByCode(catalog, sku) || await this.createProduct(config, sessionId, sku, productName, salePrice);
       if (!this.findProductByCode(catalog, sku)) catalog.push(remote);

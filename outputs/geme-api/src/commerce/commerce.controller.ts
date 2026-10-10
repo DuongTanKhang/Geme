@@ -9,7 +9,7 @@ export class CommerceController {
 
   @Get("categories")
   @Header("Cache-Control", "no-store")
-  categories() { return this.commerce.categories(); }
+  categories(@Query("public") publicOnly?: string) { return this.commerce.categories(publicOnly === "true"); }
   @Post("categories") createCategory(@Body() body: Record<string, any>) { return this.commerce.createCategory(body); }
   @Patch("categories/:id") updateCategory(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.updateCategory(id, body); }
   @Delete("categories/:id") deleteCategory(@Param("id") id: string) { return this.commerce.deleteCategory(id); }
@@ -20,6 +20,7 @@ export class CommerceController {
   @Get("products/detail/:slug") product(@Param("slug") slug: string) { return this.commerce.product(slug); }
   @Sse("products/events") productEvents() { return this.commerce.catalogEvents(); }
   @Post("products") createProduct(@Body() body: Record<string, any>) { return this.commerce.saveProduct(body); }
+  @Patch("products/by-sku/:sku") updateProductBySku(@Param("sku") sku: string, @Body() body: Record<string, any>) { return this.commerce.saveProductBySku(body, sku); }
   @Patch("products/:id") updateProduct(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.saveProduct(body, id); }
   @Delete("products/:id") deleteProduct(@Param("id") id: string, @Body() body?: Record<string, any>) { return this.commerce.deleteProduct(id, body); }
   @Patch("products/:id/unpublish") unpublishProduct(@Param("id") id: string) { return this.commerce.unpublishProduct(id); }
@@ -46,6 +47,7 @@ export class CommerceController {
   @Get("orders") orders(@Query() query: Record<string, string>) { return this.commerce.orders(query); }
   @Post("orders") createOrder(@Body() body: Record<string, any>) { return this.commerce.createOrder(body); }
   @Patch("orders/:id/status") orderStatus(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.updateOrderStatus(id, body.status); }
+  @Patch("orders/:id/payment") orderPayment(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.markOrderPaid(id, body.status); }
 
   @Get("promotions/storefront") storefrontPromotions() { return this.commerce.storefrontPromotions(); }
   @Get("promotions") promotions(@Query() query: Record<string, string>) { return this.commerce.promotions(query); }

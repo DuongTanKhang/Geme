@@ -28,7 +28,33 @@ function parseAvatarDataUrl(value: unknown) {
 
 @Injectable()
 export class AccountService {
+  private storefrontVisibilityCache: { expiresAt: number; where: Record<string, unknown> } | null = null;
+
   constructor(private readonly prisma: PrismaService) {}
+
+  private async storefrontProductVisibilityWhere() {
+    if (this.storefrontVisibilityCache && this.storefrontVisibilityCache.expiresAt > Date.now()) return this.storefrontVisibilityCache.where;
+    const categories = await this.prisma.category.findMany({ select: { id: true, parentId: true, name: true, kind: true, usage: true, level: true, status: true } });
+    const byId = new Map(categories.map((category) => [category.id, category]));
+    const visibleIds = new Set<string>();
+    const isVisible = (category: typeof categories[number] | undefined, path = new Set<string>()): boolean => {
+      if (!category || category.status !== "ACTIVE" || path.has(category.id)) return false;
+      if (!category.parentId) return true;
+      return isVisible(byId.get(category.parentId), new Set(path).add(category.id));
+    };
+    categories.forEach((category) => { if (isVisible(category)) visibleIds.add(category.id); });
+    const hiddenCuts = categories.filter((category) => category.kind === "GEMSTONE" && category.usage === "PRODUCT_CATEGORY" && category.level === 3 && category.parentId && !visibleIds.has(category.id));
+    const where = {
+      AND: [
+        { OR: [{ categoryId: null }, { categoryId: { in: [...visibleIds] } }] },
+        { OR: [{ gemstoneTypeId: null }, { gemstoneTypeId: { in: [...visibleIds] } }] },
+        { OR: [{ materialOptionId: null }, { materialOption: { active: true } }] },
+        ...hiddenCuts.map((cut) => ({ NOT: { kind: "GEMSTONE", gemstoneTypeId: cut.parentId, variants: { some: { quality: cut.name } } } })),
+      ],
+    };
+    this.storefrontVisibilityCache = { where, expiresAt: Date.now() + 2_000 };
+    return where;
+  }
 
   private async attachVerifiedEmailOrders(customerId: string, verifiedEmail: string) {
     const email = verifiedEmail.trim().toLowerCase();
@@ -50,10 +76,11 @@ export class AccountService {
   async profile(identity: AegisCustomerIdentity) {
     const customer = await this.ensureCustomer(identity);
     await this.attachVerifiedEmailOrders(customer.id, identity.email);
+    const visibility = await this.storefrontProductVisibilityWhere();
     const [orderCount, reviewCount, favoriteCount] = await Promise.all([
       this.prisma.order.count({ where: { customerId: customer.id } }),
       this.prisma.productReview.count({ where: { customerId: customer.id } }),
-      this.prisma.customerFavorite.count({ where: { customerId: customer.id, product: { status: "ACTIVE" } } }),
+      this.prisma.customerFavorite.count({ where: { customerId: customer.id, product: { status: "ACTIVE", ...(visibility as any) } as any } }),
     ]);
     return {
       id: customer.id,
@@ -169,8 +196,9 @@ export class AccountService {
 
   async favorites(identity: AegisCustomerIdentity) {
     const customer = await this.ensureCustomer(identity);
+    const visibility = await this.storefrontProductVisibilityWhere();
     const saved = await this.prisma.customerFavorite.findMany({
-      where: { customerId: customer.id, product: { status: "ACTIVE" } },
+      where: { customerId: customer.id, product: { status: "ACTIVE", ...(visibility as any) } as any },
       orderBy: { createdAt: "desc" },
       include: {
         product: {
@@ -189,7 +217,8 @@ export class AccountService {
 
   async addFavorite(identity: AegisCustomerIdentity, productId: string) {
     const customer = await this.ensureCustomer(identity);
-    const product = await this.prisma.product.findFirst({ where: { id: productId, status: "ACTIVE" }, select: { id: true } });
+    const visibility = await this.storefrontProductVisibilityWhere();
+    const product = await this.prisma.product.findFirst({ where: { id: productId, status: "ACTIVE", ...(visibility as any) } as any, select: { id: true } });
     if (!product) throw new NotFoundException("Không tìm thấy sản phẩm đang bán.");
     await this.prisma.customerFavorite.upsert({
       where: { customerId_productId: { customerId: customer.id, productId } },

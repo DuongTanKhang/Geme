@@ -195,7 +195,7 @@ export default async function Home() {
 
     <section className="home-products home-best-sellers content-width" aria-labelledby="home-featured-title">
       <div className="section-heading home-section-heading"><h2 id="home-featured-title">Được yêu thích tại GEME</h2><a href="/san-pham?sort=best-selling">Xem tất cả <Icon name="arrow" /></a></div>
-      <StoreProductGrid products={bestSellerProducts} promotions={promotionsResult.promotions} connected={catalogProducts.connected} compact emptyMessage="Chưa có sản phẩm để hiển thị." />
+      <StoreProductGrid products={bestSellerProducts} promotions={promotionsResult.promotions} connected={catalogProducts.connected} emptyMessage="Chưa có sản phẩm để hiển thị." />
     </section>
 
     <Gemstones items={gemstones} connected={facets.catalogConnected} />

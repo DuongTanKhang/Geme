@@ -4,9 +4,12 @@ import { Observable, Subject, interval, merge, map } from "rxjs";
 import { PrismaService } from "../prisma/prisma.service.js";
 import type { Prisma } from "../generated/prisma/client.js";
 import { Pos365Service } from "../pos365/pos365.service.js";
+import { ensureCustomerForPaidOrder } from "./customer-profile.js";
 
 type Input = Record<string, any>;
 const slugify = (value: string) => String(value || "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `item-${Date.now()}`;
+const gemstoneSizeSkuToken = (value: string) => value.trim().toLocaleUpperCase("en").replace(/([0-9])[.,]([0-9])/g, "$1P$2").replace(/[^A-Z0-9]/g, "");
+const gemstoneCutSkuToken = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "");
 const parseDate = (value: unknown, fallback = new Date()) => {
   if (value instanceof Date) return value;
   if (typeof value !== "string" || !value.trim()) return fallback;
@@ -73,7 +76,7 @@ const selectStorefrontListing = {
   gemstoneType: { select: { id: true, name: true, slug: true } },
   materialOption: { select: { id: true, name: true, slug: true, scope: true, kind: true, active: true, sortOrder: true } },
   images: { orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }], take: 2, select: { url: true, alt: true, sortOrder: true, isPrimary: true } },
-  variants: { select: { beadSize: true, price: true } },
+  variants: { select: { quality: true, beadSize: true, price: true } },
 } satisfies Prisma.ProductSelect;
 const includeStorefrontProductDetail = {
   category: { select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true, status: true, sortOrder: true } },
@@ -324,20 +327,69 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (variants.length) this.logger.log(`Đã rà soát ${variants.length} biến thể trang sức còn thiếu SKU.`);
   }
 
-  async categories() {
-    if (this.categoryCache && this.categoryCache.expiresAt > Date.now()) return this.categoryCache.records;
-    if (this.categoryLoad) return this.categoryLoad;
+  async categories(publicOnly = false) {
+    let records: any[];
+    if (this.categoryCache && this.categoryCache.expiresAt > Date.now()) records = this.categoryCache.records;
+    else if (this.categoryLoad) records = await this.categoryLoad;
+    else {
+      const version = this.categoryCacheVersion;
+      const load = this.prisma.category.findMany({ include: { _count: { select: { products: true, gemstoneProducts: true } } }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }).then((rows) => {
+        const mapped = rows.map((category) => ({ ...category, _count: { ...category._count, products: Math.max(category._count.products, category._count.gemstoneProducts) } }));
+        if (version === this.categoryCacheVersion) this.categoryCache = { records: mapped, expiresAt: Date.now() + 2_000 };
+        return mapped;
+      });
+      this.categoryLoad = load;
+      try {
+        records = await load;
+      } finally {
+        if (this.categoryLoad === load) this.categoryLoad = null;
+      }
+    }
+    if (!publicOnly) return records;
+    const visibleIds = this.activeCategoryTreeIds(records);
+    return records.filter((category) => visibleIds.has(category.id));
+  }
 
-    const version = this.categoryCacheVersion;
-    const load = this.prisma.category.findMany({ include: { _count: { select: { products: true } } }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }).then((records) => {
-      if (version === this.categoryCacheVersion) this.categoryCache = { records, expiresAt: Date.now() + 2_000 };
-      return records;
-    });
-    this.categoryLoad = load;
-    try {
-      return await load;
-    } finally {
-      if (this.categoryLoad === load) this.categoryLoad = null;
+  private activeCategoryTreeIds(records: any[]) {
+    const byId = new Map(records.map((category) => [category.id, category]));
+    const visible = new Set<string>();
+    const isVisible = (category: any, path = new Set<string>()): boolean => {
+      if (!category || category.status !== "ACTIVE" || path.has(category.id)) return false;
+      if (!category.parentId) return true;
+      const nextPath = new Set(path).add(category.id);
+      return isVisible(byId.get(category.parentId), nextPath);
+    };
+    for (const category of records) if (isVisible(category)) visible.add(category.id);
+    return visible;
+  }
+
+  private async storefrontProductVisibilityWhere(): Promise<Input> {
+    const records = await this.categories();
+    const visibleCategoryIds = this.activeCategoryTreeIds(records);
+    const visibleCutKeys = new Set(records
+      .filter((category) => category.kind === "GEMSTONE" && category.usage === "PRODUCT_CATEGORY" && category.level === 3 && category.parentId && visibleCategoryIds.has(category.id))
+      .map((category) => `${category.parentId}::${category.name}`));
+    const hiddenCuts = records.filter((category) => category.kind === "GEMSTONE" && category.usage === "PRODUCT_CATEGORY" && category.level === 3 && category.parentId && !visibleCutKeys.has(`${category.parentId}::${category.name}`));
+    return {
+      AND: [
+        { OR: [{ categoryId: null }, { categoryId: { in: [...visibleCategoryIds] } }] },
+        { OR: [{ gemstoneTypeId: null }, { gemstoneTypeId: { in: [...visibleCategoryIds] } }] },
+        { OR: [{ materialOptionId: null }, { materialOption: { active: true } }] },
+        ...hiddenCuts.map((cut) => ({ NOT: { kind: "GEMSTONE", gemstoneTypeId: cut.parentId, variants: { some: { quality: cut.name } } } })),
+      ],
+    };
+  }
+
+  private async assertActiveCategoryAncestors(categoryId?: string | null) {
+    let currentId = categoryId || null;
+    const seen = new Set<string>();
+    while (currentId) {
+      if (seen.has(currentId)) throw new BadRequestException("Cấu trúc danh mục có vòng lặp, không thể hiện danh mục.");
+      seen.add(currentId);
+      const current = await this.prisma.category.findUnique({ where: { id: currentId }, select: { name: true, status: true, parentId: true } });
+      if (!current) throw new BadRequestException("Danh mục cha không còn tồn tại.");
+      if (current.status !== "ACTIVE") throw new BadRequestException(`Hãy hiện danh mục “${current.name}” trước khi hiện mục con.`);
+      currentId = current.parentId;
     }
   }
 
@@ -389,29 +441,20 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       if (!current) throw new NotFoundException("Không tìm thấy danh mục.");
       if (isRequiredJewelryRoot(current) || isRequiredJewelryChild(current, String(current.parentId || ""))) {
         const status = (input.status === undefined ? current.status : enumValue(input.status, ["ACTIVE", "INACTIVE"], current.status)) as typeof current.status;
-        if (status === "ACTIVE" && current.level === 2 && current.parentId) {
-          const parent = await this.prisma.category.findUnique({ where: { id: current.parentId }, select: { status: true } });
-          if (parent?.status !== "ACTIVE") throw new BadRequestException("Hãy hiện nhóm Trang sức trước khi hiện danh mục con.");
-        }
-        const category = await this.prisma.$transaction(async (tx) => {
-          if (status === "INACTIVE") {
-            const ids = [current.id];
-            for (let index = 0; index < ids.length; index += 1) {
-              const children = await tx.category.findMany({ where: { parentId: ids[index] }, select: { id: true } });
-              ids.push(...children.map((child) => child.id));
-            }
-            await tx.category.updateMany({ where: { id: { in: ids } }, data: { status: "INACTIVE" } });
-          } else {
-            await tx.category.update({ where: { id }, data: { status } });
-          }
-          return tx.category.findUniqueOrThrow({ where: { id } });
-        });
+        if (status === "ACTIVE") await this.assertActiveCategoryAncestors(current.parentId);
+        const category = await this.prisma.category.update({ where: { id }, data: { status } });
         this.invalidateCategoryCache();
         this.publishCatalogChange("category", "updated", category.id);
         return category;
       }
       const data = this.categoryData(input);
-      await this.validateCategoryHierarchy(data, id);
+      if (current.kind === "GEMSTONE" && current.level === 2 && current.usage === "GEMSTONE_TYPE" && (data.kind !== "GEMSTONE" || data.level !== 2 || data.usage !== "GEMSTONE_TYPE")) {
+        const cutCount = await this.prisma.category.count({ where: { parentId: id, kind: "GEMSTONE", level: 3, usage: "PRODUCT_CATEGORY" } });
+        if (cutCount > 0) throw new BadRequestException("Loại đá đang có dạng cắt cấp 3; hãy chuyển hoặc xóa các dạng cắt trước khi đổi cấu trúc.");
+      }
+      const parentUnchanged = data.parentId === current.parentId;
+      if (data.status === "ACTIVE" && (current.status !== "ACTIVE" || !parentUnchanged)) await this.assertActiveCategoryAncestors(data.parentId);
+      await this.validateCategoryHierarchy(data, id, data.status === "INACTIVE" || parentUnchanged);
       const category = await this.prisma.category.update({ where: { id }, data });
       this.invalidateCategoryCache();
       this.publishCatalogChange("category", "updated", category.id);
@@ -422,39 +465,48 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
 
   async deleteCategory(id: string) {
     await this.ensureRequiredJewelryCategories();
-    const root = await this.prisma.category.findUnique({ where: { id }, select: { id: true, name: true, slug: true, kind: true, level: true, parentId: true } });
+    const root = await this.prisma.category.findUnique({ where: { id }, select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true } });
     if (!root) throw new NotFoundException("Không tìm thấy danh mục.");
     if (isRequiredJewelryRoot(root) || (root.parentId && requiredJewelryCategorySlugs.has(root.slug) && root.kind === "JEWELRY" && root.level === 2)) {
       throw new BadRequestException("Danh mục trang sức bắt buộc không được xóa; chỉ có thể ẩn hoặc hiện.");
     }
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      const ids = [id];
-      for (let index = 0; index < ids.length; index += 1) {
-        const children = await tx.category.findMany({ where: { parentId: ids[index] }, select: { id: true } });
-        ids.push(...children.map((child) => child.id));
+    await this.prisma.$transaction(async (tx) => {
+      const children = await tx.category.count({ where: { parentId: id } });
+      if (children) throw new BadRequestException("Danh mục còn danh mục con. Hãy xử lý hoặc xóa danh mục con trước.");
+      const linkedProducts = await tx.product.count({ where: { OR: [{ categoryId: id }, { gemstoneTypeId: id }] } });
+      if (linkedProducts) throw new BadRequestException(`Không thể xóa “${root.name}” vì đang có ${linkedProducts} sản phẩm phụ thuộc. Hãy ẩn danh mục hoặc chuyển sản phẩm sang danh mục khác.`);
+      if (root.kind === "GEMSTONE" && root.level === 3 && root.parentId) {
+        const linkedVariants = await tx.productPriceVariant.count({ where: { quality: root.name, product: { kind: "GEMSTONE", gemstoneTypeId: root.parentId } } });
+        if (linkedVariants) throw new BadRequestException(`Không thể xóa dạng cắt “${root.name}” vì đang có ${linkedVariants} biến thể sản phẩm phụ thuộc. Hãy ẩn dạng cắt hoặc chuyển biến thể trước.`);
       }
-      const hiddenProducts = await tx.product.updateMany({
-        where: { categoryId: { in: ids } },
-        data: { categoryId: null, status: "HIDDEN" },
-      });
-      const deletedCategories = await tx.category.deleteMany({ where: { id: { in: ids } } });
-      return { deleted: true, deletedCategories: deletedCategories.count, hiddenProducts: hiddenProducts.count };
-    });
+      await tx.category.delete({ where: { id } });
+    }, { isolationLevel: "Serializable" });
     this.invalidateCategoryCache();
     this.publishCatalogChange("category", "deleted", id);
-    return result;
+    return { deleted: true, deletedCategories: 1, hiddenProducts: 0 };
   }
 
-  private async validateCategoryHierarchy(data: Input, currentId?: string) {
+  private async validateCategoryHierarchy(data: Input, currentId?: string, allowInactiveParent = false) {
+    if (data.usage === "GEMSTONE_TYPE" && (data.kind !== "GEMSTONE" || data.level !== 2)) {
+      throw new BadRequestException("Loại đá phải là danh mục đá quý cấp 2.");
+    }
+    if (data.kind === "GEMSTONE" && data.level === 3 && data.usage !== "PRODUCT_CATEGORY") {
+      throw new BadRequestException("Dạng cắt cấp 3 phải là danh mục sản phẩm.");
+    }
     if (!data.parentId) {
       if (data.level !== 1) throw new BadRequestException("Danh mục cấp 2 hoặc cấp 3 phải có danh mục cha.");
       if (!currentId && data.kind === "JEWELRY" && data.slug !== "trang-suc") throw new BadRequestException("Nhóm cấp 1 của trang sức đã cố định là Trang sức.");
       return;
     }
     const parent = await this.prisma.category.findUnique({ where: { id: data.parentId }, select: { id: true, slug: true, kind: true, usage: true, level: true, status: true } });
-    if (!parent || parent.status !== "ACTIVE" || parent.usage !== "PRODUCT_CATEGORY") throw new BadRequestException("Chọn danh mục cha đang hoạt động.");
+    const gemstoneCutParent = data.kind === "GEMSTONE" && data.level === 3 && parent?.kind === "GEMSTONE" && parent.level === 2 && (parent.usage === "GEMSTONE_TYPE" || parent.usage === "PRODUCT_CATEGORY");
+    if (!parent || (!allowInactiveParent && parent.status !== "ACTIVE") || (parent.usage !== "PRODUCT_CATEGORY" && !gemstoneCutParent)) throw new BadRequestException("Danh mục cha phải đang hoạt động và đúng loại.");
     if (data.level !== parent.level + 1 || data.kind !== parent.kind) throw new BadRequestException("Cấp và nhóm của danh mục phải khớp với danh mục cha.");
+
+    if (data.kind === "GEMSTONE" && data.level === 3 && !gemstoneCutParent) {
+      throw new BadRequestException("Dạng cắt đá quý cấp 3 phải nằm dưới một loại đá quý cấp 2.");
+    }
 
     if (data.kind === "JEWELRY") {
       const root = parent.level === 1 ? parent : await this.prisma.category.findFirst({ where: { id: parent.id, slug: "trang-suc", kind: "JEWELRY", level: 1 }, select: { id: true } });
@@ -480,7 +532,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return current && isRequiredJewelryRoot(current) ? { id: current.id } : null;
   }
 
-  products(query: Record<string, string>) {
+  async products(query: Record<string, string>) {
     const where: Input = {};
     if (query.all !== "true") where.status = "ACTIVE";
     if (["JEWELRY", "GEMSTONE"].includes(query.kind)) where.kind = query.kind;
@@ -490,6 +542,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (query.new === "true") where.isNew = true;
     if (query.featured === "true") where.isFeatured = true;
     if (query.search) where.OR = [{ name: { contains: query.search, mode: "insensitive" } }, { sku: { contains: query.search, mode: "insensitive" } }];
+    if (query.all !== "true") where.AND = (where.AND || []).concat(await this.storefrontProductVisibilityWhere());
     const orderBy = [{ isNew: "desc" as const }, { createdAt: "desc" as const }];
     const take = Math.min(Math.max(Number(query.limit) || 500, 1), 500);
     const load = () => query.view === "storefront-list"
@@ -507,14 +560,16 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   async product(slug: string) {
-    const record = await this.prisma.product.findFirst({ where: { slug, status: "ACTIVE" }, include: includeStorefrontProductDetail });
+    const visibility = await this.storefrontProductVisibilityWhere();
+    const record = await this.prisma.product.findFirst({ where: { slug, status: "ACTIVE", ...visibility }, include: includeStorefrontProductDetail });
     if (!record) throw new NotFoundException("Không tìm thấy sản phẩm.");
     return record;
   }
 
   async relatedProducts(slug: string, limitInput?: string) {
+    const visibility = await this.storefrontProductVisibilityWhere();
     const source = await this.prisma.product.findFirst({
-      where: { slug, status: "ACTIVE" },
+      where: { slug, status: "ACTIVE", ...visibility },
       select: { id: true, kind: true, categoryId: true, materialOptionId: true },
     });
     if (!source) throw new NotFoundException("Không tìm thấy sản phẩm.");
@@ -524,7 +579,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (!matching.length) return [];
     const limit = Math.min(Math.max(Number(limitInput) || 6, 1), 12);
     return this.prisma.product.findMany({
-      where: { id: { not: source.id }, kind: source.kind, status: "ACTIVE", OR: matching },
+      where: { id: { not: source.id }, kind: source.kind, status: "ACTIVE", OR: matching, ...visibility },
       include: includeStorefrontProduct,
       orderBy: [{ isNew: "desc" }, { createdAt: "desc" }],
       take: limit,
@@ -562,8 +617,34 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  async saveProductBySku(input: Input, skuInput: string) {
+    const sku = String(skuInput || "").trim();
+    if (!sku || String(input.sku || "").trim() !== sku) throw new BadRequestException("SKU trên đường dẫn và hồ sơ sản phẩm không khớp.");
+    const product = await this.prisma.product.findUnique({ where: { sku }, select: { id: true } });
+    if (!product) throw new NotFoundException(`Không tìm thấy sản phẩm có SKU ${sku}.`);
+    return this.saveProduct(input, product.id);
+  }
+
   async saveProduct(input: Input, id?: string) {
     const data = this.productData(input);
+    if (id) {
+      const current = await this.prisma.product.findUnique({ where: { id }, select: { sku: true, slug: true } });
+      if (!current) throw new NotFoundException("Không tìm thấy sản phẩm trong kho.");
+      if (data.sku !== current.sku) throw new BadRequestException("Không được thay đổi SKU trong Hồ sơ sản phẩm.");
+      // Price-profile and admin edits do not carry a slug. Keep the existing
+      // public URL instead of deriving a possibly-colliding slug from the name.
+      if (typeof input.slug !== "string" || !input.slug.trim()) data.slug = current.slug;
+    }
+    if (data.kind === "GEMSTONE" && !data.gemstoneTypeId) throw new BadRequestException("Hồ sơ đá quý cần chọn loại đá cấp 2.");
+    if (data.gemstoneTypeId) {
+      const [category, gemstoneType] = await Promise.all([
+        this.prisma.category.findUnique({ where: { id: data.categoryId }, select: { id: true, kind: true, usage: true, level: true, parentId: true } }),
+        this.prisma.category.findUnique({ where: { id: data.gemstoneTypeId }, select: { kind: true, usage: true, level: true } }),
+      ]);
+      if (data.kind !== "GEMSTONE" || data.materialOptionId || !category || category.kind !== "GEMSTONE" || category.level !== 2 || category.id !== data.gemstoneTypeId || !gemstoneType || gemstoneType.kind !== "GEMSTONE" || gemstoneType.level !== 2 || !["GEMSTONE_TYPE", "PRODUCT_CATEGORY"].includes(gemstoneType.usage)) {
+        throw new BadRequestException("Hồ sơ đá quý cần gắn trực tiếp với danh mục loại đá cấp 2.");
+      }
+    }
     if (data.materialOptionId) {
       const option = await this.prisma.materialOption.findUnique({ where: { id: data.materialOptionId }, select: { scope: true, active: true } });
       const expectedScope = data.kind === "GEMSTONE" ? "GEMSTONE" : "JEWELRY";
@@ -606,7 +687,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("SKU của các biến thể phải khác nhau.");
     }
     try {
-      let priceChanged = !id;
+      let catalogChanged = !id;
       const result = await this.prisma.$transaction(async (tx) => {
         let record: any;
         if (data.status === "ACTIVE") {
@@ -619,20 +700,29 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           if (!prices.length || prices.some((price) => price <= 0)) throw new BadRequestException("Hãy điền giá bán trong Hồ sơ giá trước khi đăng sản phẩm.");
         }
         if (id) {
-          const currentPriceData = await tx.product.findUnique({ where: { id }, select: { price: true, variants: { select: { id: true, optionKey: true, sku: true, price: true } } } });
+          const currentPriceData = await tx.product.findUnique({ where: { id }, select: { sku: true, name: true, price: true, variants: { select: { id: true, optionKey: true, sku: true, price: true } } } });
           if (!currentPriceData) throw new NotFoundException("Không tìm thấy sản phẩm trong kho.");
+          if (data.sku !== currentPriceData.sku) throw new BadRequestException("Không được thay đổi SKU trong Hồ sơ sản phẩm.");
           const currentVariantsByKey = new Map(currentPriceData.variants.map((variant) => [variant.optionKey, variant]));
-          priceChanged = Number(currentPriceData.price ?? 0) !== Number(data.price ?? 0)
-            || variantCreate.some((variant) => Number(currentVariantsByKey.get(variant.optionKey)?.price ?? 0) !== Number(variant.price));
-          const nextPrices = variantCreate.length ? variantCreate.map((variant) => variant.price) : [Number(data.price) || 0];
-          const allPricesConfigured = nextPrices.length > 0 && nextPrices.every((price) => Number.isFinite(price) && price > 0);
-          const posPriceSyncFields = priceChanged ? {
-            pos365PriceSyncStatus: allPricesConfigured ? (this.pos365.isSyncEnabled() ? "PENDING" : "DISABLED") : "NEEDS_PRICE",
+          for (const variant of variantCreate) {
+            const existing = currentVariantsByKey.get(variant.optionKey);
+            if (existing && variant.sku !== existing.sku) {
+              throw new BadRequestException(`Không được thay đổi SKU biến thể ${existing.sku} trong Hồ sơ sản phẩm.`);
+            }
+          }
+          const priceChanged = Number(currentPriceData.price ?? 0) !== Number(data.price ?? 0)
+            || variantCreate.some((variant) => {
+              const existing = currentVariantsByKey.get(variant.optionKey);
+              return existing && Number(existing.price ?? 0) !== Number(variant.price);
+            });
+          catalogChanged = currentPriceData.name !== data.name || priceChanged;
+          const posPriceSyncFields = catalogChanged ? {
+            pos365PriceSyncStatus: this.pos365.isSyncEnabled() ? "PENDING" : "DISABLED",
             pos365PriceSyncAttempts: 0,
             pos365PriceSyncLastAttemptAt: null,
-            pos365PriceSyncNextAttemptAt: allPricesConfigured && this.pos365.isSyncEnabled() ? new Date() : null,
+            pos365PriceSyncNextAttemptAt: this.pos365.isSyncEnabled() ? new Date() : null,
             pos365PriceSyncedAt: null,
-            pos365PriceSyncError: allPricesConfigured ? null : "Cần điền giá bán cho toàn bộ SKU/biến thể trong Hồ sơ giá.",
+            pos365PriceSyncError: null,
           } : {};
           await tx.product.update({ where: { id }, data: { ...data, ...posPriceSyncFields, images: { deleteMany: {}, create: images.map((url: string, index: number) => ({ url, alt: data.name, sortOrder: index, isPrimary: index === 0 })) } } });
           const existingVariants = await tx.productPriceVariant.findMany({ where: { productId: id }, select: { id: true, optionKey: true } });
@@ -654,7 +744,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         }
         return record;
       });
-      if (priceChanged && result.pos365PriceSyncStatus === "PENDING") await this.pos365.syncProductPricesNow(result.id);
+      if (catalogChanged && result.pos365PriceSyncStatus === "PENDING") await this.pos365.syncProductPricesNow(result.id);
       this.publishCatalogChange("product", id ? "updated" : "created", result.id);
       return await this.prisma.product.findUniqueOrThrow({ where: { id: result.id }, include: includeProduct });
     } catch (error: any) {
@@ -771,7 +861,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           gemstoneType: { select: { id: true, name: true } },
           materialOption: { select: { id: true, name: true, kind: true, scope: true } },
           images: { orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }], take: 1, select: { url: true, alt: true } },
-          variants: { orderBy: { sortOrder: "asc" }, select: { id: true, sku: true, quality: true, beadSize: true, stock: true, sortOrder: true } },
+          variants: { orderBy: { sortOrder: "asc" }, select: { id: true, sku: true, quality: true, beadSize: true, price: true, originalPrice: true, stock: true, sortOrder: true } },
         },
         orderBy: [{ updatedAt: "desc" }, { name: "asc" }],
         take: 1000,
@@ -836,7 +926,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const rawRules = Array.isArray(input.rules) ? input.rules : [];
     const categoryIds = [...new Set(rawRules.map((rule: Input) => String(rule.categoryId || "")).filter(Boolean))];
     const categories = categoryIds.length ? await this.prisma.category.findMany({ where: { id: { in: categoryIds }, status: "ACTIVE" }, select: { id: true, kind: true, usage: true, level: true } }) : [];
-    if (categories.length !== categoryIds.length || categories.some((category) => category.usage !== "PRODUCT_CATEGORY" || category.level < 2)) {
+    if (categories.length !== categoryIds.length || categories.some((category) => !(category.usage === "PRODUCT_CATEGORY" && category.level >= 2 || category.kind === "GEMSTONE" && category.usage === "GEMSTONE_TYPE" && category.level === 2))) {
       throw new BadRequestException("Chỉ tạo quy tắc cho danh mục sản phẩm đang hoạt động đã được tạo.");
     }
     const materialIds = [...new Set(rawRules.flatMap((rule: Input) => [
@@ -847,9 +937,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const normalized = rawRules.map((rule: Input) => {
       const category = categories.find((item) => item.id === String(rule.categoryId));
       if (!category) throw new BadRequestException("Danh mục trong quy tắc không hợp lệ.");
+      const isGemstoneTypeRule = category.usage === "GEMSTONE_TYPE";
       const prefix = this.cleanSkuPrefix(rule.prefix);
-      const hasMaterialList = Array.isArray(rule.materialOptionIds);
-      const materialOptionIds = hasMaterialList
+      const hasMaterialList = !isGemstoneTypeRule && Array.isArray(rule.materialOptionIds);
+      const materialOptionIds = isGemstoneTypeRule ? [] : hasMaterialList
         ? [...new Set((rule.materialOptionIds as unknown[]).map((id) => String(id || "")).filter(Boolean))]
         : undefined;
       if (hasMaterialList && materialOptionIds!.length !== (rule.materialOptionIds as unknown[]).length) {
@@ -860,7 +951,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         const material = materials.find((item) => item.id === materialId);
         if (!material || material.scope !== expectedScope) throw new BadRequestException("Loại đá phải đang hoạt động và thuộc đúng nhóm danh mục.");
       }
-      const materialPrefixes = Array.isArray(rule.materialPrefixes) ? rule.materialPrefixes.map((entry: Input) => {
+      const materialPrefixes = isGemstoneTypeRule ? [] : Array.isArray(rule.materialPrefixes) ? rule.materialPrefixes.map((entry: Input) => {
         const material = materials.find((item) => item.id === String(entry.materialOptionId || ""));
         if (!material || material.scope !== expectedScope) throw new BadRequestException("Loại đá phải đang hoạt động và thuộc đúng nhóm danh mục.");
         if (hasMaterialList && !materialOptionIds!.includes(material.id)) throw new BadRequestException("Chỉ cấu hình tiền tố cho loại đá đã chọn áp dụng trong danh mục.");
@@ -1192,14 +1283,16 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async skuPrefixFor(client: any, categoryId: string, materialOptionId?: string) {
-    const category = await client.category.findUnique({ where: { id: categoryId }, select: { status: true, usage: true, level: true } });
-    if (!category || category.status !== "ACTIVE" || category.usage !== "PRODUCT_CATEGORY" || category.level < 2) {
+    const category = await client.category.findUnique({ where: { id: categoryId }, select: { status: true, kind: true, usage: true, level: true } });
+    const isGemstoneType = category?.kind === "GEMSTONE" && category.usage === "GEMSTONE_TYPE" && category.level === 2;
+    if (!category || category.status !== "ACTIVE" || !(category.usage === "PRODUCT_CATEGORY" && category.level >= 2 || isGemstoneType)) {
       throw new BadRequestException("Chỉ tạo quy tắc cho danh mục sản phẩm đang hoạt động đã được tạo.");
     }
     const setting = await client.siteSetting.findUnique({ where: { key: "inventory.skuRules" }, select: { value: true } });
     const rules = Array.isArray(setting?.value) ? setting.value as Input[] : [];
     const rule = rules.find((candidate) => candidate.categoryId === categoryId);
     if (!rule) throw new BadRequestException("Danh mục này chưa có quy tắc mã hàng. Hãy tạo quy tắc trước khi nhập sản phẩm mới.");
+    if (isGemstoneType && materialOptionId) throw new BadRequestException("SKU đá quý được tạo theo loại đá; không gắn tiền tố chất liệu.");
     if (materialOptionId) await this.assertCategoryAllowsMaterial(client, categoryId, materialOptionId);
     if (!materialOptionId) return this.cleanSkuPrefix(rule.prefix);
     const stoneRule = Array.isArray(rule.materialPrefixes) ? rule.materialPrefixes.find((entry: Input) => entry.materialOptionId === materialOptionId) : undefined;
@@ -1272,7 +1365,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           if (seenSkus.has(sku.toLocaleUpperCase("en"))) throw new BadRequestException("Không thể nhập trùng một SKU con trong cùng mặt hàng.");
           seen.add(optionKey);
           seenSkus.add(sku.toLocaleUpperCase("en"));
-            return { quality, beadSize: beadSize || null, sku, quantity, unitCost, optionKey };
+            return { quality, beadSize: beadSize || null, cutCategoryId: String(variant.cutCategoryId || "") || null, sku, quantity, unitCost, optionKey };
         });
         const quantity = variants.reduce((sum, variant) => sum + variant.quantity, 0);
         const lineTotal = variants.reduce((sum, variant) => sum + variant.quantity * variant.unitCost, 0);
@@ -1321,22 +1414,35 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             const categoryId = String(newProduct.categoryId || "");
             const name = String(newProduct.name || "").trim();
             const category = await tx.category.findUnique({ where: { id: categoryId } });
-            if (!category || category.status !== "ACTIVE" || category.usage !== "PRODUCT_CATEGORY" || category.level < 2) throw new BadRequestException("Chọn danh mục sản phẩm cấp dưới đang hoạt động.");
+            const isGemstoneTypeCategory = category?.kind === "GEMSTONE" && category.level === 2;
+            if (!category || category.status !== "ACTIVE" || !(category.usage === "PRODUCT_CATEGORY" && category.level >= 2 || isGemstoneTypeCategory)) throw new BadRequestException("Chọn danh mục sản phẩm hoặc loại đá cấp 2 đang hoạt động.");
+            const gemstoneTypeId = String(newProduct.gemstoneTypeId || "") || null;
             const materialOptionId = String(newProduct.materialOptionId || "") || null;
             let materialName = "";
+            let gemstoneTypeName = "";
+            if (category.kind === "GEMSTONE") {
+              const gemstoneType = gemstoneTypeId ? await tx.category.findUnique({ where: { id: gemstoneTypeId } }) : null;
+              if (!gemstoneType || gemstoneType.kind !== "GEMSTONE" || gemstoneType.level !== 2 || !["GEMSTONE_TYPE", "PRODUCT_CATEGORY"].includes(gemstoneType.usage) || category.id !== gemstoneType.id || category.level !== 2) {
+                throw new BadRequestException("Đá quý cần chọn danh mục loại đá cấp 2.");
+              }
+              if (materialOptionId) throw new BadRequestException("Đá quý dùng danh mục loại đá, không dùng chất liệu dạng MaterialOption.");
+              gemstoneTypeName = gemstoneType.name;
+              if (!newProductVariantDrafts.length) throw new BadRequestException("Đá quý cần ít nhất một biến thể theo dạng cắt và size.");
+            } else if (gemstoneTypeId) {
+              throw new BadRequestException("Chỉ sản phẩm đá quý mới được gắn loại đá cấp 2.");
+            }
             if (materialOptionId) {
               const material = await tx.materialOption.findUnique({ where: { id: materialOptionId } });
               const expectedScope = category.kind === "GEMSTONE" ? "GEMSTONE" : "JEWELRY";
               if (!material || !material.active || material.kind !== "STONE" || material.scope !== expectedScope) throw new BadRequestException("Loại đá không thuộc đúng nhóm sản phẩm.");
               materialName = material.name;
             }
-            const productName = name || [category.name, materialName].filter(Boolean).join(" ").slice(0, 180) || `Mặt hàng ${String(newProduct.sku || "").trim()}`;
+            const productName = name || (category.kind === "GEMSTONE" ? gemstoneTypeName : [category.name, materialName].filter(Boolean).join(" ")).slice(0, 180) || `Mặt hàng ${String(newProduct.sku || "").trim()}`;
             const prefix = await this.skuPrefixFor(tx, category.id, materialOptionId || undefined);
-            // Variant groups use the stable category/material prefix as their parent SKU.
-            // Only a product with one inventory SKU needs a user-supplied sequence.
-            const sku = newProductVariantDrafts.length
-              ? prefix
-              : this.productSkuForSequence(prefix, newProduct.skuSequence);
+            // Gemstone products use a sequenced parent SKU; variants append their cut + size tokens.
+            const sku = category.kind === "GEMSTONE" || !newProductVariantDrafts.length
+              ? this.productSkuForSequence(prefix, newProduct.skuSequence)
+              : prefix;
             if (newProduct.sku && String(newProduct.sku) !== sku) throw new ConflictException("Quy tắc mã hàng vừa thay đổi. Hãy kiểm tra lại mã xem trước rồi thêm sản phẩm.");
             const [existingProduct, existingVariant] = await Promise.all([
               tx.product.findUnique({ where: { sku }, include: { category: true, materialOption: true, gemstoneType: true, variants: true } }),
@@ -1346,6 +1452,16 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
               const variantSku = String(variant.sku || "").trim();
               if (!variantSku.startsWith(sku) || variantSku.length <= sku.length || variantSku.length > 64 || !/^[A-Za-z0-9]+$/.test(variantSku)) {
                 throw new BadRequestException(`SKU con phải bắt đầu bằng SKU mẹ ${sku} và có thêm mã phân biệt chữ/số.`);
+              }
+              if (category.kind === "GEMSTONE") {
+                const cutCategoryId = String(variant.cutCategoryId || "");
+                const cut = cutCategoryId ? await tx.category.findUnique({ where: { id: cutCategoryId }, select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true, status: true } }) : null;
+                const beadSize = String(variant.beadSize || "").trim();
+                const cutToken = cut ? gemstoneCutSkuToken(cut.name) : "";
+                const expectedVariantSku = `${sku}C${cutToken}S${gemstoneSizeSkuToken(beadSize)}`;
+                if (!cut || cut.status !== "ACTIVE" || cut.kind !== "GEMSTONE" || cut.usage !== "PRODUCT_CATEGORY" || cut.level !== 3 || cut.parentId !== gemstoneTypeId || String(variant.quality || "").trim() !== cut.name || !cutToken || !beadSize || variantSku.toLocaleUpperCase("en") !== expectedVariantSku.toLocaleUpperCase("en")) {
+                  throw new BadRequestException("Biến thể đá quý cần chọn dạng cắt cấp 3 thuộc loại đá, size và SKU theo dạng SKU mẹ + mã cắt + size.");
+                }
               }
               const [productCollision, variantCollision] = await Promise.all([
                 tx.product.findUnique({ where: { sku: variantSku }, select: { id: true } }),
@@ -1368,9 +1484,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             if (newProductVariantDrafts.length) {
               if (existingVariant) throw new ConflictException(`Mã mẹ ${sku} đang được dùng làm SKU con của một sản phẩm khác.`);
               if (existingProduct) {
-                if (existingProduct.categoryId !== category.id || existingProduct.materialOptionId !== materialOptionId) {
+                const legacyGemstoneCategory = category.kind === "GEMSTONE" && existingProduct.gemstoneTypeId === gemstoneTypeId;
+                if ((existingProduct.categoryId !== category.id && !legacyGemstoneCategory) || existingProduct.gemstoneTypeId !== gemstoneTypeId || existingProduct.materialOptionId !== materialOptionId) {
                   throw new ConflictException(`Mã mẹ ${sku} đã tồn tại ở danh mục hoặc loại đá khác. Hãy kiểm tra quy tắc mã hàng.`);
                 }
+                if (legacyGemstoneCategory && existingProduct.categoryId !== category.id) await tx.product.update({ where: { id: existingProduct.id }, data: { categoryId: category.id } });
                 if (!existingProduct.variants.length) {
                   throw new ConflictException(`Mã ${sku} đã được dùng cho mặt hàng một SKU; không thể nhập chồng thành nhóm biến thể.`);
                 }
@@ -1381,14 +1499,27 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
                   if (!variantSku.startsWith(sku) || variantSku.length <= sku.length || variantSku.length > 64 || !/^[A-Za-z0-9]+$/.test(variantSku)) {
                     throw new BadRequestException(`SKU con phải bắt đầu bằng SKU mẹ ${sku} và có thêm mã phân biệt chữ/số.`);
                   }
+                  if (category.kind === "GEMSTONE") {
+                    const cutCategoryId = String(draft.cutCategoryId || "");
+                    const cut = cutCategoryId ? await tx.category.findUnique({ where: { id: cutCategoryId }, select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true, status: true } }) : null;
+                    const beadSize = String(draft.beadSize || "").trim();
+                    const cutToken = cut ? gemstoneCutSkuToken(cut.name) : "";
+                    const expectedVariantSku = `${sku}C${cutToken}S${gemstoneSizeSkuToken(beadSize)}`;
+                    if (!cut || cut.status !== "ACTIVE" || cut.kind !== "GEMSTONE" || cut.usage !== "PRODUCT_CATEGORY" || cut.level !== 3 || cut.parentId !== gemstoneTypeId || String(draft.quality || "").trim() !== cut.name || !cutToken || !beadSize || variantSku.toLocaleUpperCase("en") !== expectedVariantSku.toLocaleUpperCase("en")) {
+                      throw new BadRequestException("Biến thể đá quý cần chọn dạng cắt cấp 3 thuộc loại đá, size và SKU theo dạng SKU mẹ + mã cắt + size.");
+                    }
+                  }
                   const sameOption = existingByOption.get(draft.optionKey) as Input | undefined;
                   const sameSku = existingBySku.get(variantSku.toLocaleUpperCase("en")) as Input | undefined;
+                  if (sameSku && !sameOption) {
+                    throw new ConflictException(`SKU ${variantSku} đã được gán cho biến thể ${sameSku.quality}${sameSku.beadSize ? ` · ${sameSku.beadSize}` : ""}; không thể dùng lại cho size hoặc dạng cắt khác.`);
+                  }
                   if (sameSku && sameOption && sameSku.id !== sameOption.id) {
                     throw new ConflictException(`SKU ${variantSku} và phân loại đã nhập đang trỏ tới hai biến thể khác nhau.`);
                   }
                   if (sameOption) {
                     if (sameOption.sku && String(sameOption.sku).toLocaleUpperCase("en") !== variantSku.toLocaleUpperCase("en")) {
-                      throw new ConflictException(`Biến thể ${draft.quality}${draft.beadSize ? ` · ${draft.beadSize}` : ""} đã có SKU ${sameOption.sku}. Hãy dùng lại SKU đó để cộng tồn.`);
+                      if (category.kind !== "GEMSTONE") throw new ConflictException(`Biến thể ${draft.quality}${draft.beadSize ? ` · ${draft.beadSize}` : ""} đã có SKU ${sameOption.sku}. Hãy dùng lại SKU đó để cộng tồn.`);
                     }
                     if (!sameOption.sku) {
                       const [productCollision, variantCollision] = await Promise.all([
@@ -1421,7 +1552,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
                 }));
                 product = await tx.product.create({ data: {
                   sku, name: productName, slug: `${slugify(productName).slice(0, 180)}-${sku.toLocaleLowerCase("en")}`,
-                  kind: category.kind, categoryId: category.id, materialOptionId,
+                  kind: category.kind, categoryId: category.id, gemstoneTypeId, materialOptionId,
                   status: "DRAFT", stock: 0,
                   variants: { create: variantCreate },
                 }, include: { category: true, materialOption: true, gemstoneType: true, variants: true } });
@@ -1429,15 +1560,17 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             } else {
               if (existingVariant) throw new ConflictException(`Mã ${sku} đang là SKU con của sản phẩm ${existingVariant.product.sku}. Hãy nhập theo mã sản phẩm mẹ và chọn biến thể.`);
               if (existingProduct) {
-                if (existingProduct.categoryId !== category.id || existingProduct.materialOptionId !== materialOptionId) {
+                const legacyGemstoneCategory = category.kind === "GEMSTONE" && existingProduct.gemstoneTypeId === gemstoneTypeId;
+                if ((existingProduct.categoryId !== category.id && !legacyGemstoneCategory) || existingProduct.gemstoneTypeId !== gemstoneTypeId || existingProduct.materialOptionId !== materialOptionId) {
                   throw new ConflictException(`Mã ${sku} đã tồn tại ở danh mục hoặc loại đá khác. Hãy kiểm tra quy tắc mã hàng.`);
                 }
+                if (legacyGemstoneCategory && existingProduct.categoryId !== category.id) await tx.product.update({ where: { id: existingProduct.id }, data: { categoryId: category.id } });
                 if (existingProduct.variants.length) throw new BadRequestException(`Mã ${sku} đã có ${existingProduct.variants.length} biến thể. Chọn kiểu quản lý tồn theo biến thể rồi nhập SKU con để cộng hoặc tạo biến thể.`);
                 product = existingProduct;
               } else {
                 product = await tx.product.create({ data: {
                   sku, name: productName, slug: `${slugify(productName).slice(0, 180)}-${sku.toLocaleLowerCase("en")}`,
-                  kind: category.kind, categoryId: category.id, materialOptionId,
+                  kind: category.kind, categoryId: category.id, gemstoneTypeId, materialOptionId,
                   status: "DRAFT", stock: 0,
                 }, include: { category: true, materialOption: true, gemstoneType: true, variants: true } });
               }
@@ -1625,29 +1758,70 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const status = enumValue(statusInput, ["PENDING_CONFIRMATION", "PROCESSING", "SHIPPING", "DELIVERED", "CANCELLED"], "");
     if (!status) throw new BadRequestException("Trạng thái đơn hàng không hợp lệ.");
     try {
-      const current = await this.prisma.order.findUnique({ where: { id }, select: { status: true, shippingProvider: true, trackingCode: true, carrierShipmentStatus: true } });
-      if (!current) throw new NotFoundException("Không tìm thấy đơn hàng.");
-      if (current.shippingProvider === "VIETTEL_POST" && status === "SHIPPING" && current.carrierShipmentStatus !== "IN_TRANSIT") {
-        throw new BadRequestException("Chỉ chuyển đơn Viettel Post sang Đang giao khi hãng đã xác nhận nhận kiện.");
-      }
-      if (current.shippingProvider === "VIETTEL_POST" && status === "DELIVERED" && current.carrierShipmentStatus !== "DELIVERED") {
-        throw new BadRequestException("Viettel Post chưa xác nhận giao thành công cho đơn này.");
-      }
-      if (current.shippingProvider === "VIETTEL_POST" && status === "CANCELLED" && current.trackingCode && !["CANCELLED", "RETURNING", "EXCEPTION"].includes(String(current.carrierShipmentStatus || ""))) {
-        throw new BadRequestException("Vui lòng hủy hoặc xử lý hoàn vận đơn trên Viettel Post trước khi hủy đơn GEME.");
-      }
-      const order = await this.prisma.order.update({
-        where: { id },
-        data: {
-          status: status as any,
-          ...(this.pos365.isSyncEnabled() ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: new Date(), pos365SyncError: null } : {}),
-        },
-        include: { items: true, payments: true },
+      const order = await this.prisma.$transaction(async (tx) => {
+        const current = await tx.order.findUnique({ where: { id }, include: { payments: true } });
+        if (!current) throw new NotFoundException("Không tìm thấy đơn hàng.");
+        if (current.shippingProvider === "VIETTEL_POST" && status === "SHIPPING" && current.carrierShipmentStatus !== "IN_TRANSIT") {
+          throw new BadRequestException("Chỉ chuyển đơn Viettel Post sang Đang giao khi hãng đã xác nhận nhận kiện.");
+        }
+        if (current.shippingProvider === "VIETTEL_POST" && status === "DELIVERED" && current.carrierShipmentStatus !== "DELIVERED") {
+          throw new BadRequestException("Viettel Post chưa xác nhận giao thành công cho đơn này.");
+        }
+        if (current.shippingProvider === "VIETTEL_POST" && status === "CANCELLED" && current.trackingCode && !["CANCELLED", "RETURNING", "EXCEPTION"].includes(String(current.carrierShipmentStatus || ""))) {
+          throw new BadRequestException("Vui lòng hủy hoặc xử lý hoàn vận đơn trên Viettel Post trước khi hủy đơn GEME.");
+        }
+
+        const codPayment = current.payments.find((payment) => payment.method === "COD");
+        const markCodPaid = status === "DELIVERED" && codPayment && ["PENDING", "FAILED"].includes(codPayment.status);
+        let customer: any = null;
+        if (markCodPaid) {
+          customer = await ensureCustomerForPaidOrder(tx, current);
+          await tx.payment.update({ where: { id: codPayment.id }, data: { status: "PAID", paidAt: new Date() } });
+        }
+        return tx.order.update({
+          where: { id },
+          data: {
+            status: status as any,
+            ...(markCodPaid && customer && !current.customerId ? { customer: { connect: { id: customer.id } } } : {}),
+            ...(this.pos365.isSyncEnabled() ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: new Date(), pos365SyncError: null } : {}),
+          },
+          include: { items: true, payments: true, customer: true },
+        });
       });
       if (this.pos365.isSyncEnabled()) void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đánh thức hàng đợi POS365 cho đơn ${order.code}.`, error));
       return order;
     }
     catch (error: any) { if (error?.code === "P2025") throw new NotFoundException("Không tìm thấy đơn hàng."); throw error; }
+  }
+
+  async markOrderPaid(id: string, statusInput: unknown) {
+    if (String(statusInput || "").toUpperCase() !== "PAID") throw new BadRequestException("Chỉ được ghi nhận trạng thái đã thanh toán.");
+    try {
+      const order = await this.prisma.$transaction(async (tx) => {
+        const current = await tx.order.findUnique({ where: { id }, include: { payments: true } });
+        if (!current) throw new NotFoundException("Không tìm thấy đơn hàng.");
+        const payment = current.payments[0];
+        if (!payment) throw new BadRequestException("Đơn hàng chưa có thông tin thanh toán.");
+        if (payment.status === "REFUNDED" || payment.status === "PARTIALLY_REFUNDED") throw new BadRequestException("Không thể ghi nhận đã thanh toán cho giao dịch đã hoàn tiền.");
+        if (current.status === "CANCELLED") throw new BadRequestException("Không thể ghi nhận thanh toán cho đơn đã hủy.");
+        if (payment.method === "COD" && current.status !== "DELIVERED") throw new BadRequestException("Đơn COD chỉ được ghi nhận đã thanh toán sau khi giao thành công.");
+        if (payment.status !== "PAID") await tx.payment.update({ where: { id: payment.id }, data: { status: "PAID", paidAt: new Date() } });
+        const customer = await ensureCustomerForPaidOrder(tx, current);
+        return tx.order.update({
+          where: { id },
+          data: {
+            ...(customer && !current.customerId ? { customer: { connect: { id: customer.id } } } : {}),
+            ...(this.pos365.isSyncEnabled() ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: new Date(), pos365SyncError: null } : {}),
+          },
+          include: { items: true, payments: true, customer: true },
+        });
+      });
+      if (this.pos365.isSyncEnabled()) void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đánh thức hàng đợi POS365 cho đơn ${order.code}.`, error));
+      return order;
+    } catch (error: any) {
+      if (error?.code === "P2025") throw new NotFoundException("Không tìm thấy đơn hàng.");
+      throw error;
+    }
   }
 
   async createOrder(input: Input, authenticatedCustomerId?: string) {
@@ -1741,6 +1915,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       if (!customerName && !storeSale) throw new BadRequestException("Nhập tên khách hàng hoặc chọn hồ sơ khách hàng.");
       const customerPhone = String(input.phone || "").trim() || customer?.phone || null;
       const customerEmail = (input.email ? String(input.email).trim().toLowerCase() : "") || customer?.email || null;
+      const orderCustomer = paid ? await ensureCustomerForPaidOrder(tx, {
+        customerId: customer?.id || null,
+        customerName,
+        customerPhone,
+        customerEmail,
+        shippingAddress: String(input.shippingAddress || input.address || "").trim(),
+      }) : customer;
       if (paid) {
         const issuedAt = new Date();
         const dateKey = `${issuedAt.getUTCFullYear()}${String(issuedAt.getUTCMonth() + 1).padStart(2, "0")}${String(issuedAt.getUTCDate()).padStart(2, "0")}`;
@@ -1763,7 +1944,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         note: input.note || null, subtotal, discountAmount, shippingFee, totalAmount,
         status: paid ? "DELIVERED" as any : "PENDING_CONFIRMATION" as any,
         ...(this.pos365.isSyncEnabled() ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: new Date() } : {}),
-        ...(customerId ? { customer: { connect: { id: customerId } } } : {}),
+        ...(orderCustomer ? { customer: { connect: { id: orderCustomer.id } } } : {}),
         items: { create: placedItems },
         payments: { create: { method: method as any, amount: totalAmount, status: paid ? "PAID" as any : "PENDING" as any, ...(paid ? { paidAt: new Date() } : {}) } },
       }, include: { items: true, payments: true, customer: true } });

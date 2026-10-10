@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { AdminProduct, ProductPriceVariant } from "./products-workspace";
 import type { AdminCategory } from "./categories-workspace";
 import type { MaterialOption } from "./materials-workspace";
-import { uploadProductImage, uploadProductVideo, MAX_PRODUCT_IMAGES, MAX_VARIANT_MEDIA_ITEMS, parsePriceInput } from "./product-images";
+import { uploadProductImage, uploadProductVideo, MAX_PRODUCT_IMAGES, MAX_VARIANT_MEDIA_ITEMS } from "./product-images";
 import { TechnicalImagePicker } from "./technical-image-picker";
 import { apiBaseUrl } from "../lib/api";
 
@@ -52,7 +52,7 @@ function fromInventoryProduct(value: Record<string, any>): AdminProduct {
     sold: Number(value.soldThisMonth) || 0, revenue: 0,
     status: value.status === "ACTIVE" ? "Đang hoạt động" : value.status === "HIDDEN" ? "Tạm ẩn" : "Bản nháp",
     isNew: Boolean(value.isNew), productType: value.kind === "GEMSTONE" ? "Đá quý" : "Trang sức",
-    category: String(category?.name || ""), categoryId: String(value.categoryId || ""), materialOptionId: value.materialOptionId || undefined,
+    category: String(category?.name || ""), categoryId: String(value.categoryId || ""), materialOptionId: value.materialOptionId || undefined, gemstoneTypeId: value.gemstoneTypeId || undefined,
     subcategory: String(material?.name || gemstoneType?.name || ""), categoryPricingMode: category?.pricingMode,
     description: String(value.description || ""), fullDescription: String(value.fullDescription || ""),
     image: gallery[0] || "", gallery, coverVideoUrl: String(value.coverVideoUrl || ""), technicalImage: String(value.technicalImageUrl || ""), technicalVideo: String(value.technicalVideoUrl || ""),
@@ -77,6 +77,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     ? categoryRecords.find((item) => item.kind === "Đá quý" && item.usage === "product" && item.level === 2)
     : initialCategory && (initialCategory.level ?? 1) > 1 ? initialCategory : undefined;
   const initialMaterial = initialCategory?.usage === "stone" ? materials.find((item) => item.scope === "Trang sức" && item.kind === "STONE" && item.name === initialCategory.name) : undefined;
+  const initialGemstoneTypeId = initialCategory?.kind === "Đá quý" && initialCategory.level === 3 ? initialCategory.parentId : initialCategory?.kind === "Đá quý" && initialCategory.level === 2 ? initialCategory.id : undefined;
   const [activeTab, setActiveTab] = useState<TabKey>("basic");
   const [product, setProduct] = useState<AdminProduct>({
     id: `SP${String(Date.now()).slice(-6)}`,
@@ -91,6 +92,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     category: initialProductCategory?.parentId ? initialProductCategory.name : "",
     categoryId: initialProductCategory?.id,
     materialOptionId: initialMaterial?.id,
+    gemstoneTypeId: initialGemstoneTypeId,
     categoryPricingMode: initialProductCategory?.pricingMode ?? (initialType === "Đá quý" ? "QUALITY" : "FIXED"),
     subcategory: initialMaterial?.name ?? "",
     description: "",
@@ -146,6 +148,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
   const productRoot = categoryRecords.find((item) => !item.parentId && item.kind === product.productType);
   const matchingInventoryProducts = inventoryProducts.filter((item) => item.productType === product.productType);
   const availableCategoryRecords = categoryRecords.filter((item) => item.kind === product.productType && item.parentId && item.status === "Hoạt động" && item.usage !== "stone" && (item.level ?? 2) > 1);
+  const gemstoneTypeOptions = categoryRecords.filter((item) => item.kind === "Đá quý" && item.level === 2 && item.status === "Hoạt động");
   const selectedProductCategory = categoryRecords.find((item) => item.id === product.categoryId) ?? availableCategoryRecords.find((item) => item.name === product.category);
   const categoryLabel = (item: AdminCategory) => {
     const path = [item.name];
@@ -157,7 +160,9 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     }
     return path.join(" / ");
   };
-  const categoryInventoryProducts = matchingInventoryProducts.filter((item) => item.categoryId === (product.categoryId || selectedProductCategory?.id) || (!item.categoryId && item.category === product.category));
+  const categoryInventoryProducts = matchingInventoryProducts.filter((item) => isGemstone
+    ? item.gemstoneTypeId === product.gemstoneTypeId || item.categoryId === (product.categoryId || selectedProductCategory?.id)
+    : item.categoryId === (product.categoryId || selectedProductCategory?.id) || (!item.categoryId && item.category === product.category));
   const availableInventoryMaterialIds = new Set(categoryInventoryProducts.map((item) => item.materialOptionId).filter(Boolean));
   const availableInventoryStoneNames = new Set(categoryInventoryProducts.map((item) => item.subcategory).filter(Boolean));
   const selectedCategoryId = product.categoryId || selectedProductCategory?.id;
@@ -169,12 +174,12 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     return availableInventoryMaterialIds.has(item.id) || availableInventoryStoneNames.has(item.name) || skuRuleMaterialIds.has(item.id);
   });
   const availableJewelryMaterials = availableStoneOptions;
-  const categories = availableCategoryRecords;
+  const categories = isGemstone ? gemstoneTypeOptions : availableCategoryRecords;
   const availableInventoryProducts = categoryInventoryProducts.filter((item) => {
     const hasStock = item.priceVariants?.length
       ? item.priceVariants.some((variant) => variant.stock > 0)
       : item.stock > 0;
-    return hasStock && item.status !== "Đang hoạt động" && (!product.materialOptionId || item.materialOptionId === product.materialOptionId || item.subcategory === product.subcategory);
+    return hasStock && item.status !== "Đang hoạt động" && (isGemstone ? !product.gemstoneTypeId || item.gemstoneTypeId === product.gemstoneTypeId : !product.materialOptionId || item.materialOptionId === product.materialOptionId || item.subcategory === product.subcategory);
   });
   const selectedInventoryProduct = inventoryProducts.find((item) => item.apiId === selectedInventoryId);
   const variantRows = useMemo(() => getVariantRows(product), [product]);
@@ -218,6 +223,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
       category: "",
       categoryId: undefined,
       materialOptionId: undefined,
+      gemstoneTypeId: undefined,
       categoryPricingMode: value === "Đá quý" ? "QUALITY" : "FIXED",
       subcategory: "",
       qualityGrades: value === "Đá quý" ? ["A", "AA", "AAA"] : [],
@@ -232,6 +238,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     setSelectedInventoryId("");
     const record = availableCategoryRecords.find((item) => item.id === categoryId) ?? categories.find((item) => item.id === categoryId);
     const mode = record?.pricingMode ?? (product.productType === "Đá quý" ? "QUALITY" : "FIXED");
+    const gemstoneType = isGemstone ? record : undefined;
     setProduct((current) => ({
       ...current,
       id: `SP${String(Date.now()).slice(-6)}`,
@@ -240,6 +247,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
       category: record?.name ?? "",
       categoryId: record?.id,
       materialOptionId: undefined,
+      gemstoneTypeId: gemstoneType?.id ?? (isGemstone ? current.gemstoneTypeId : undefined),
       subcategory: "",
       categoryPricingMode: mode,
       qualityGrades: qualityPricing(mode) ? (current.qualityGrades?.length ? current.qualityGrades : ["A", "AA", "AAA"]) : [],
@@ -379,19 +387,24 @@ export default function ProductCreatePage({ products, categories: categoryRecord
       setActiveTab("basic");
       return;
     }
+    const selectedGemstoneType = categoryRecords.find((item) => item.id === product.gemstoneTypeId);
+    if (isGemstone && (!selectedGemstoneType || selectedGemstoneType.kind !== "Đá quý" || selectedGemstoneType.level !== 2)) {
+      onNotify("Chọn đúng loại đá cấp 2 cho sản phẩm đá quý.");
+      setActiveTab("basic");
+      return;
+    }
     let saved: AdminProduct = { ...product, image: product.gallery?.[0] ?? product.image ?? "", status: publish ? "Đang hoạt động" : "Bản nháp" };
     if (hasInventoryVariants) {
-      saved.priceVariants = variantRows;
-      if (publish && variantRows.some((item) => item.price <= 0)) {
-        onNotify("Nhập giá bán cho từng biến thể trong kho trước khi đăng sản phẩm.");
-        setActiveTab("variants");
-        return;
-      }
-      const prices = variantRows.map((item) => item.price).filter((price) => price > 0);
-      if (prices.length) saved.price = Math.min(...prices);
-    } else if (publish && saved.price <= 0) {
-      onNotify("Nhập giá bán lớn hơn 0 trước khi đăng sản phẩm.");
-      setActiveTab("basic");
+      saved.priceVariants = selectedInventoryProduct!.priceVariants!.map((profileVariant) => {
+        const editedVariant = variantRows.find((item) => item.sku === profileVariant.sku);
+        return { ...profileVariant, imageUrls: editedVariant?.imageUrls ?? profileVariant.imageUrls, videoUrl: editedVariant?.videoUrl ?? profileVariant.videoUrl };
+      });
+    }
+    saved.price = selectedInventoryProduct!.price;
+    saved.originalPrice = selectedInventoryProduct!.originalPrice;
+    if (publish && (hasInventoryVariants ? saved.priceVariants!.some((item) => item.price <= 0) : saved.price <= 0)) {
+      onNotify("SKU chưa có giá trong Hồ sơ sản phẩm. Hãy cập nhật giá theo SKU trước khi đăng.");
+      setActiveTab(hasInventoryVariants ? "variants" : "basic");
       return;
     }
     setSaving(true);
@@ -429,8 +442,10 @@ export default function ProductCreatePage({ products, categories: categoryRecord
               <label className="create-field"><span>Tên sản phẩm <b>*</b></span><input value={product.name} onChange={(event) => update("name", event.target.value)} placeholder="Nhập tên sản phẩm..."/></label>
               <div className="create-field-row">
                 <label className="create-field"><span>Nhóm sản phẩm <b>*</b></span><select disabled={Boolean(selectedInventoryId)} value={product.productType} onChange={(event) => changeProductType(event.target.value as "Trang sức" | "Đá quý")}><option>Trang sức</option><option>Đá quý</option></select></label>
-                <label className="create-field"><span>Danh mục sản phẩm <b>*</b></span><select disabled={Boolean(selectedInventoryId)} value={product.categoryId ?? selectedProductCategory?.id ?? ""} onChange={(event) => changeCategory(event.target.value)}><option value="">{categories.length ? "Chọn danh mục sản phẩm" : "Chưa có danh mục"}</option>{categories.map((category) => <option key={category.id} value={category.id}>{categoryLabel(category as AdminCategory)}</option>)}</select></label>
-                <label className="create-field"><span>{isGemstone ? "Loại đá có trong kho" : "Đá gắn có trong kho"}</span><select disabled={Boolean(selectedInventoryId)} value={product.materialOptionId ?? ""} onChange={(event) => { const option = materials.find((item) => item.id === event.target.value); update("materialOptionId", option?.id); update("subcategory", option?.name ?? ""); }}><option value="">{availableJewelryMaterials.length ? "Tất cả loại đá" : "Chưa có loại đá trong kho"}</option>{(isGemstone ? availableStoneOptions : availableJewelryMaterials).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>
+                {isGemstone ? <label className="create-field"><span>Loại đá / danh mục cấp 2 <b>*</b></span><select disabled={Boolean(selectedInventoryId)} value={product.gemstoneTypeId ?? product.categoryId ?? ""} onChange={(event) => changeCategory(event.target.value)}><option value="">Chọn loại đá</option>{gemstoneTypeOptions.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select><small>Dạng cắt và size được quản lý theo từng SKU biến thể trong kho.</small></label> : <>
+                  <label className="create-field"><span>Danh mục sản phẩm <b>*</b></span><select disabled={Boolean(selectedInventoryId)} value={product.categoryId ?? selectedProductCategory?.id ?? ""} onChange={(event) => changeCategory(event.target.value)}><option value="">{categories.length ? "Chọn danh mục sản phẩm" : "Chưa có danh mục"}</option>{categories.map((category) => <option key={category.id} value={category.id}>{categoryLabel(category as AdminCategory)}</option>)}</select></label>
+                  <label className="create-field"><span>Đá gắn có trong kho</span><select disabled={Boolean(selectedInventoryId)} value={product.materialOptionId ?? ""} onChange={(event) => { const option = materials.find((item) => item.id === event.target.value); update("materialOptionId", option?.id); update("subcategory", option?.name ?? ""); }}><option value="">{availableJewelryMaterials.length ? "Tất cả loại đá" : "Chưa có loại đá trong kho"}</option>{availableJewelryMaterials.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>
+                </>}
               </div>
               <div className="create-inventory-picker"><div><label className="create-field"><span>Chọn mã SKU còn hàng để đăng bán</span><select value={selectedInventoryId} disabled={inventoryLoading || !availableInventoryProducts.length} onChange={(event) => selectInventoryProduct(event.target.value)}><option value="">{inventoryLoading ? "Đang tải tồn kho…" : availableInventoryProducts.length ? "Chọn mã sản phẩm trong kho" : "Không có mã phù hợp đang còn hàng"}</option>{availableInventoryProducts.map((item) => <option key={item.apiId} value={item.apiId}>{item.id} · {item.name} — còn {item.stock}</option>)}</select></label><small>{selectedInventoryProduct ? `Mã ${selectedInventoryProduct.id} còn ${selectedInventoryProduct.stock} sản phẩm trong kho. Số lượng trên website sẽ đồng bộ từ tồn kho.` : "Chỉ hiển thị mã chưa đăng bán và còn hàng. Chọn mã này sẽ dùng chính bản ghi tồn kho, không tạo SKU trùng."}</small>{inventoryError && <small className="create-inventory-error">{inventoryError}</small>}</div><button type="button" className="button button-quiet" onClick={() => void reloadInventory()} disabled={inventoryLoading}>{inventoryLoading ? "Đang tải…" : "↻ Làm mới kho"}</button></div>
               <div className="create-field-row create-brand-row">
@@ -455,8 +470,9 @@ export default function ProductCreatePage({ products, categories: categoryRecord
           <div className="product-create-side-column">
             <section className="create-card">
               <h2>Giá bán</h2>
-              {hasVariantPrices ? <div className="create-price-note"><strong>Giá bán theo biến thể trong kho</strong><span>Nhập giá cho từng lựa chọn đã tạo trong mục Thông số &amp; Biến thể.</span><button type="button" onClick={() => setActiveTab("variants")}>Mở bảng giá →</button></div> : <div className="create-field-row"><label className="create-field"><span>Giá bán <b>*</b></span><div className="create-money-field"><input type="text" inputMode="numeric" value={product.price || ""} onChange={(event) => update("price", parsePriceInput(event.target.value))}/><i>₫</i></div></label><label className="create-field"><span>Giá gốc</span><div className="create-money-field"><input type="text" inputMode="numeric" value={product.originalPrice || ""} onChange={(event) => update("originalPrice", parsePriceInput(event.target.value))}/><i>₫</i></div></label></div>}
-              <div className="create-price-profile-source">Giá được nạp theo SKU từ <strong>Hồ sơ giá GEME</strong>. Khi lưu sản phẩm, giá mới cũng cập nhật lại hồ sơ và gửi sang POS365.</div>
+              <div className="create-price-note"><strong>Giá lấy từ Hồ sơ sản phẩm theo SKU</strong><span>{selectedInventoryProduct ? `SKU ${selectedInventoryProduct.id} · ${hasVariantPrices ? `${variantRows.length} biến thể` : money(selectedInventoryProduct.price)}` : "Chọn SKU trong kho để xem giá đã khai báo trong hồ sơ sản phẩm."}</span>{hasVariantPrices && <button type="button" onClick={() => setActiveTab("variants")}>Xem giá từng SKU con →</button>}</div>
+              {selectedInventoryProduct && !hasVariantPrices && (selectedInventoryProduct.originalPrice ?? 0) > selectedInventoryProduct.price && <small className="create-price-profile-source">Giá gốc: {money(selectedInventoryProduct.originalPrice ?? 0)}</small>}
+              <div className="create-price-profile-source">Muốn đổi giá, hãy cập nhật SKU trong Hồ sơ sản phẩm. Giá trên bài đăng luôn theo hồ sơ này.</div>
               <small className="inventory-management-hint">Số lượng tồn kho được quản lý riêng trong mục Quản lý tồn kho.</small>
               <div className="create-switch-row"><div><strong>Trạng thái hiển thị</strong><small>Cho phép khách xem sản phẩm</small></div><label className="create-switch"><input type="checkbox" checked={product.status === "Đang hoạt động"} onChange={(event) => update("status", event.target.checked ? "Đang hoạt động" : "Tạm ẩn")}/><span/><small>{product.status === "Đang hoạt động" ? "Hiển thị" : "Đang ẩn"}</small></label></div>
               <div className="create-switch-row create-new-switch"><div><strong>Sản phẩm mới</strong><small>Gắn nhãn “Mới” độc lập với trạng thái</small></div><label className="create-switch"><input type="checkbox" checked={Boolean(product.isNew)} onChange={(event) => update("isNew", event.target.checked)}/><span/><small>{product.isNew ? "Có" : "Không"}</small></label></div>
@@ -480,8 +496,8 @@ export default function ProductCreatePage({ products, categories: categoryRecord
         {activeTab === "images" && <section className="create-card create-tab-card"><div className="create-card-title"><div><h2>Hình ảnh &amp; Video</h2><p>Video bìa tự chạy khi khách nhìn thấy sản phẩm, tắt tiếng và lặp liên tục.</p></div><span>{product.gallery?.length ?? 0}/{MAX_PRODUCT_IMAGES} ảnh</span></div><div className="create-cover-video-field"><div><strong>Video bìa (không bắt buộc)</strong><small>MP4/WebM tối đa 8 MB. Khi có video, website ưu tiên phát video thay ảnh bìa.</small></div>{product.coverVideoUrl && <video src={product.coverVideoUrl} muted autoPlay loop playsInline preload="metadata" aria-label={`${product.name} · video bìa`}/>}<label><input type="file" accept="video/mp4,video/webm,.mp4,.webm" disabled={uploadingCoverVideo} onChange={(event) => { void handleCoverVideo(event.target.files?.[0]); event.currentTarget.value = ""; }}/><span>{uploadingCoverVideo ? "Đang tải video…" : product.coverVideoUrl ? "Đổi video bìa" : "Chọn video bìa"}</span></label>{product.coverVideoUrl && <button type="button" onClick={() => update("coverVideoUrl", "")}>Gỡ video</button>}<label className="create-cover-video-url"><span>Hoặc dán đường dẫn video</span><input type="url" value={product.coverVideoUrl || ""} onChange={(event) => update("coverVideoUrl", event.target.value)} placeholder="https://… hoặc /media/…"/></label></div><label className="create-upload-wide"><input type="file" accept="image/*" multiple disabled={uploadingImages || (product.gallery?.length ?? 0) >= MAX_PRODUCT_IMAGES} onChange={(event) => { void handleImages(event.target.files ?? undefined); event.currentTarget.value = ""; }}/><span className="upload-cloud">⇧</span><strong>{uploadingImages ? "Đang tải ảnh lên…" : "Chọn một hoặc nhiều ảnh"}</strong><small>Ảnh được tối ưu và tải lên ngay khi chọn.</small><button type="button" className="button button-quiet">Chọn hình ảnh</button></label><div className="create-image-gallery">{(product.gallery ?? []).map((src, index) => <div className="create-image-thumb large" key={`${src}-${index}`}><img src={src} alt={`Ảnh sản phẩm ${index + 1}`}/><span>{index === 0 && !product.coverVideoUrl ? "Ảnh bìa dự phòng" : `Ảnh ${index + 1}`}</span><button type="button" aria-label={`Xóa ảnh ${index + 1}`} onClick={() => removeImage(index)}>×</button></div>)}</div><TechnicalImagePicker image={product.technicalImage} video={product.technicalVideo} uploading={uploadingTechnicalImage} uploadingVideo={uploadingTechnicalVideo} onSelect={(file) => void handleTechnicalImage(file)} onSelectVideo={(file) => void handleTechnicalVideo(file)} onRemove={() => update("technicalImage", "")} onRemoveVideo={() => update("technicalVideo", "")}/><div className="create-image-info"><strong>Mẹo chụp ảnh sản phẩm</strong><span>Dùng ánh sáng tự nhiên, nền đơn giản và chụp sản phẩm từ nhiều góc để khách dễ quan sát chất liệu.</span></div></section>}
 
         {activeTab === "variants" && <section className="create-card create-tab-card">
-          <div className="create-card-title"><div><h2>Thông số &amp; Biến thể</h2><p>Biến thể và số lượng lấy từ kho. Tại đây chỉ nhập giá bán cho từng lựa chọn, không tạo hay xóa biến thể.</p></div></div>
-          {variantRows.length > 0 ? <div className="create-variant-table-wrap"><table className="create-variant-table"><thead><tr><th>{sizeOnlyVariants ? "Kích thước vòng" : "Chất lượng"}</th>{hasVariantSizes && !sizeOnlyVariants && <th>Kích thước hạt</th>}<th>SKU con</th><th>Tồn kho</th><th>Giá bán <b>*</b></th><th>Ảnh / video biến thể</th></tr></thead><tbody>{variantRows.map((variant) => { const uploadKey = variant.sku || `${variant.quality}-${variant.beadSize || ""}`; const mediaCount = (variant.imageUrls?.length || 0) + (variant.videoUrl ? 1 : 0); return <tr key={`${variant.sku || variant.quality}-${variant.beadSize ?? "standard"}`}><td><strong>{sizeOnlyVariants ? (variant.beadSize || variant.quality) : variant.quality}</strong></td>{hasVariantSizes && !sizeOnlyVariants && <td>{variant.beadSize || "—"}</td>}<td><code>{variant.sku || "—"}</code></td><td>{Number(variant.stock) || 0}</td><td><label className="create-money-field"><input aria-label={`Giá ${variant.quality} ${variant.beadSize ?? ""}`} type="text" inputMode="numeric" value={variant.price || ""} onChange={(event) => updateVariant(variant, { price: parsePriceInput(event.target.value) })}/><i>₫</i></label></td><td><div className="create-variant-media"><div className="create-variant-media-images">{(variant.imageUrls || []).map((url, index) => <span key={`${url.slice(0, 40)}-${index}`}><img src={url} alt={`Ảnh ${variant.sku} ${index + 1}`}/><button type="button" aria-label={`Xóa ảnh biến thể ${index + 1}`} onClick={() => updateVariant(variant, { imageUrls: (variant.imageUrls || []).filter((_, imageIndex) => imageIndex !== index) })}>×</button></span>)}</div><div className="create-variant-media-actions"><label className="create-variant-media-picker"><input type="file" accept="image/*" multiple disabled={Boolean(uploadingVariantMedia[uploadKey]) || mediaCount >= MAX_VARIANT_MEDIA_ITEMS} onChange={(event) => { void handleVariantImages(variant, event.target.files ?? undefined); event.currentTarget.value = ""; }}/><span>{uploadingVariantMedia[uploadKey] ? "Đang xử lý ảnh…" : "＋ Thêm ảnh"}</span></label><label className="create-variant-media-picker"><input type="file" accept="video/mp4,video/webm,.mp4,.webm" disabled={Boolean(uploadingVariantMedia[uploadKey]) || (!variant.videoUrl && mediaCount >= MAX_VARIANT_MEDIA_ITEMS)} onChange={(event) => { void handleVariantVideo(variant, event.target.files?.[0]); event.currentTarget.value = ""; }}/><span>{uploadingVariantMedia[uploadKey] ? "Đang tải video…" : variant.videoUrl ? "＋ Đổi video" : "＋ Tải video"}</span></label></div><small className="create-variant-media-limit">{mediaCount}/{MAX_VARIANT_MEDIA_ITEMS} tệp · tính cả video</small><label className="create-variant-media-url"><span>Đường dẫn video</span><input type="url" value={variant.videoUrl || ""} onChange={(event) => { const value = event.target.value || null; if (value && !variant.videoUrl && (variant.imageUrls?.length || 0) >= MAX_VARIANT_MEDIA_ITEMS) { onNotify(`Mỗi biến thể tối đa ${MAX_VARIANT_MEDIA_ITEMS} tệp, tính cả video.`); return; } updateVariant(variant, { videoUrl: value }); }} placeholder="https://… hoặc /media/…"/></label>{variant.videoUrl && <video className="create-variant-video-preview" src={variant.videoUrl} controls playsInline preload="metadata" aria-label={`Video ${variant.sku || variant.quality}`}/>}</div></td></tr>; })}</tbody></table><small className="create-inventory-variant-help">Biến thể, SKU và tồn chỉ lấy từ kho; không thể tạo/xóa tại đây. Mỗi SKU con lưu tối đa 5 ảnh/video cộng lại; giá bán, ảnh và video được lưu riêng cho lựa chọn đó.</small></div> : <div className="create-empty-variants"><span>◇</span><strong>{usesQualityPricing ? "Chưa có biến thể trong kho" : "Sản phẩm dùng một giá chung"}</strong><p>{usesQualityPricing ? "Hãy tạo chất lượng, size và số lượng biến thể trong phiếu nhập kho trước. Trang sản phẩm chỉ cho nhập giá bán." : "Giá bán được nhập ở mục Giá bán; tồn kho được quản lý riêng trong Quản lý tồn kho."}</p></div>}
+          <div className="create-card-title"><div><h2>Thông số &amp; Biến thể</h2><p>Biến thể, tồn và giá bán lấy theo SKU từ Hồ sơ sản phẩm; tại đây chỉ cập nhật ảnh và video.</p></div></div>
+          {variantRows.length > 0 ? <div className="create-variant-table-wrap"><table className="create-variant-table"><thead><tr><th>{sizeOnlyVariants ? "Kích thước vòng" : "Chất lượng"}</th>{hasVariantSizes && !sizeOnlyVariants && <th>Kích thước hạt</th>}<th>SKU con</th><th>Tồn kho</th><th>Giá theo hồ sơ SKU</th><th>Ảnh / video biến thể</th></tr></thead><tbody>{variantRows.map((variant) => { const uploadKey = variant.sku || `${variant.quality}-${variant.beadSize || ""}`; const mediaCount = (variant.imageUrls?.length || 0) + (variant.videoUrl ? 1 : 0); return <tr key={`${variant.sku || variant.quality}-${variant.beadSize ?? "standard"}`}><td><strong>{sizeOnlyVariants ? (variant.beadSize || variant.quality) : variant.quality}</strong></td>{hasVariantSizes && !sizeOnlyVariants && <td>{variant.beadSize || "—"}</td>}<td><code>{variant.sku || "—"}</code></td><td>{Number(variant.stock) || 0}</td><td>{money(variant.price)}</td><td><div className="create-variant-media"><div className="create-variant-media-images">{(variant.imageUrls || []).map((url, index) => <span key={`${url.slice(0, 40)}-${index}`}><img src={url} alt={`Ảnh ${variant.sku} ${index + 1}`}/><button type="button" aria-label={`Xóa ảnh biến thể ${index + 1}`} onClick={() => updateVariant(variant, { imageUrls: (variant.imageUrls || []).filter((_, imageIndex) => imageIndex !== index) })}>×</button></span>)}</div><div className="create-variant-media-actions"><label className="create-variant-media-picker"><input type="file" accept="image/*" multiple disabled={Boolean(uploadingVariantMedia[uploadKey]) || mediaCount >= MAX_VARIANT_MEDIA_ITEMS} onChange={(event) => { void handleVariantImages(variant, event.target.files ?? undefined); event.currentTarget.value = ""; }}/><span>{uploadingVariantMedia[uploadKey] ? "Đang xử lý ảnh…" : "＋ Thêm ảnh"}</span></label><label className="create-variant-media-picker"><input type="file" accept="video/mp4,video/webm,.mp4,.webm" disabled={Boolean(uploadingVariantMedia[uploadKey]) || (!variant.videoUrl && mediaCount >= MAX_VARIANT_MEDIA_ITEMS)} onChange={(event) => { void handleVariantVideo(variant, event.target.files?.[0]); event.currentTarget.value = ""; }}/><span>{uploadingVariantMedia[uploadKey] ? "Đang tải video…" : variant.videoUrl ? "＋ Đổi video" : "＋ Tải video"}</span></label></div><small className="create-variant-media-limit">{mediaCount}/{MAX_VARIANT_MEDIA_ITEMS} tệp · tính cả video</small><label className="create-variant-media-url"><span>Đường dẫn video</span><input type="url" value={variant.videoUrl || ""} onChange={(event) => { const value = event.target.value || null; if (value && !variant.videoUrl && (variant.imageUrls?.length || 0) >= MAX_VARIANT_MEDIA_ITEMS) { onNotify(`Mỗi biến thể tối đa ${MAX_VARIANT_MEDIA_ITEMS} tệp, tính cả video.`); return; } updateVariant(variant, { videoUrl: value }); }} placeholder="https://… hoặc /media/…"/></label>{variant.videoUrl && <video className="create-variant-video-preview" src={variant.videoUrl} controls playsInline preload="metadata" aria-label={`Video ${variant.sku || variant.quality}`}/>}</div></td></tr>; })}</tbody></table><small className="create-inventory-variant-help">Biến thể, SKU và tồn chỉ lấy từ kho. Mỗi SKU con lưu tối đa 5 ảnh/video cộng lại; giá luôn lấy từ Hồ sơ sản phẩm theo SKU.</small></div> : <div className="create-empty-variants"><span>◇</span><strong>{usesQualityPricing ? "Chưa có biến thể trong kho" : "Sản phẩm dùng một giá chung"}</strong><p>{usesQualityPricing ? "Hãy tạo chất lượng, size và số lượng biến thể trong phiếu nhập kho trước. Giá sẽ lấy từ Hồ sơ sản phẩm." : "Giá bán lấy từ hồ sơ sản phẩm; tồn kho được quản lý riêng trong Quản lý tồn kho."}</p></div>}
         </section>}
 
         {activeTab === "seo" && <section className="create-card create-tab-card"><div className="create-card-title"><div><h2>Tối ưu tìm kiếm (SEO)</h2><p>Thông tin này giúp sản phẩm hiển thị rõ trên công cụ tìm kiếm.</p></div></div><label className="create-field"><span>Tiêu đề SEO</span><input maxLength={70} value={product.seoTitle ?? ""} onChange={(event) => update("seoTitle", event.target.value)} placeholder={product.name || "Tên sản phẩm | GEME"}/><small className="create-counter">{(product.seoTitle ?? "").length}/70</small></label><label className="create-field"><span>Mô tả SEO</span><textarea rows={4} maxLength={160} value={product.seoDescription ?? ""} onChange={(event) => update("seoDescription", event.target.value)} placeholder="Mô tả ngắn gọn về sản phẩm..."/><small className="create-counter">{(product.seoDescription ?? "").length}/160</small></label><div className="create-seo-preview"><small>geme.vn › san-pham › {product.name.toLocaleLowerCase("vi").trim().replaceAll(" ", "-") || "ten-san-pham"}</small><strong>{product.seoTitle || product.name || "Tên sản phẩm | GEME"}</strong><span>{product.seoDescription || product.description || "Mô tả sản phẩm hiển thị trong kết quả tìm kiếm."}</span></div></section>}

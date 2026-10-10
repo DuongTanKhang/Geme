@@ -2,6 +2,7 @@ import { BadGatewayException, BadRequestException, ConflictException, Injectable
 import { timingSafeEqual } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { Pos365Service } from "../pos365/pos365.service.js";
+import { ensureCustomerForPaidOrder } from "../commerce/customer-profile.js";
 
 type Input = Record<string, any>;
 type VtpConfig = { baseUrl: string; token: string; senderName: string; senderPhone: string; senderAddress: string; enabled: boolean };
@@ -194,7 +195,11 @@ export class ViettelPostService {
     const data = payload?.DATA;
     const trackingCode = String(data?.ORDER_NUMBER || "").trim();
     if (!trackingCode) return { accepted: true };
-    const order = await this.prisma.order.findFirst({ where: { trackingCode }, select: { id: true, code: true, status: true, carrierStatusAt: true, carrierShipmentStatus: true } });
+    const order = await this.prisma.order.findFirst({ where: { trackingCode }, select: {
+      id: true, code: true, status: true, carrierStatusAt: true, carrierShipmentStatus: true,
+      customerId: true, customerName: true, customerPhone: true, customerEmail: true, shippingAddress: true,
+      payments: { select: { id: true, method: true, status: true } },
+    } });
     if (!order) return { accepted: true };
     const statusCode = Number(data?.ORDER_STATUS);
     if (!Number.isInteger(statusCode)) return { accepted: true };
@@ -216,19 +221,29 @@ export class ViettelPostService {
         ? ("SHIPPING" as const)
         : order.status;
 
-    const updated = await this.prisma.order.update({
-      where: { id: order.id },
-      data: {
-        ...(orderStatus !== order.status ? { status: orderStatus } : {}),
-        carrierShipmentStatus,
-        carrierStatusCode: Number.isFinite(statusCode) ? statusCode : null,
-        carrierStatusName,
-        carrierStatusAt: occurredAt,
-        carrierLocation: String(data?.LOCALION_CURRENTLY || data?.LOCATION_CURRENTLY || "").slice(0, 255) || null,
-        ...(Number.isFinite(Number(data?.MONEY_TOTALFEE)) ? { carrierFee: Number(data.MONEY_TOTALFEE) } : {}),
-      },
+    const codPayment = order.payments.find((payment) => payment.method === "COD");
+    const paymentChanged = Boolean(delivered && codPayment && ["PENDING", "FAILED"].includes(codPayment.status));
+    const updated = await this.prisma.$transaction(async (tx) => {
+      let customer: any = null;
+      if (paymentChanged && codPayment) {
+        customer = await ensureCustomerForPaidOrder(tx, order);
+        await tx.payment.update({ where: { id: codPayment.id }, data: { status: "PAID", paidAt: new Date() } });
+      }
+      return tx.order.update({
+        where: { id: order.id },
+        data: {
+          ...(orderStatus !== order.status ? { status: orderStatus } : {}),
+          ...(paymentChanged && customer && !order.customerId ? { customer: { connect: { id: customer.id } } } : {}),
+          carrierShipmentStatus,
+          carrierStatusCode: Number.isFinite(statusCode) ? statusCode : null,
+          carrierStatusName,
+          carrierStatusAt: occurredAt,
+          carrierLocation: String(data?.LOCALION_CURRENTLY || data?.LOCATION_CURRENTLY || "").slice(0, 255) || null,
+          ...(Number.isFinite(Number(data?.MONEY_TOTALFEE)) ? { carrierFee: Number(data.MONEY_TOTALFEE) } : {}),
+        },
+      });
     });
-    if (updated.status !== order.status) void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đưa trạng thái đơn ${order.code} vào hàng đợi POS365.`, error));
+    if (updated.status !== order.status || paymentChanged) void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đưa trạng thái đơn ${order.code} vào hàng đợi POS365.`, error));
     return { accepted: true };
   }
 

@@ -194,12 +194,9 @@ export function NewArrivals({
   const activeFilters = activeFilterCount > 0;
   const uniqueProducts = useMemo(() => [...new Map(products.map((product) => [product.id, product] as const)).values()], [products]);
   const visibleProducts = uniqueProducts.slice(0, visibleCount);
-  const featureProducts = !activeFilters
-    ? uniqueProducts.length >= 4 ? visibleProducts.slice(0, 4) : visibleProducts.slice(0, 2)
-    : [];
-  const compactFeature = !activeFilters && uniqueProducts.length > 0 && uniqueProducts.length < 4;
-  const nextRowProducts = !activeFilters && uniqueProducts.length >= 4 ? visibleProducts.slice(4, 8) : [];
-  const remainingProducts = activeFilters ? visibleProducts : compactFeature ? visibleProducts.slice(featureProducts.length) : visibleProducts.slice(8);
+  const featureProducts = activeFilters ? [] : visibleProducts.slice(0, 4);
+  const nextRowProducts = activeFilters ? [] : visibleProducts.slice(4, 8);
+  const remainingProducts = activeFilters ? visibleProducts : visibleProducts.slice(8);
 
   const commitFilters = (next: NewArrivalsFilters) => {
     committedFilters.current = next;
@@ -305,14 +302,13 @@ export function NewArrivals({
               </div>}
             </>
               : <>
-                {featureProducts.length > 0 && <div className={`new-arrivals-feature-grid${compactFeature ? ` is-compact ${featureProducts.length === 1 ? "is-single" : "is-double"}` : ""}`}>
+                {featureProducts.length > 0 && <div className="new-arrivals-feature-grid">
                   <NewArrivalEditorial media={media} />
                   {featureProducts.map((product) => <div className="new-arrivals-feature-product" key={product.id}><StoreProductCard product={product} promotions={promotions} /></div>)}
                 </div>}
                 {nextRowProducts.length > 0 && <div className="new-arrivals-product-grid">{nextRowProducts.map((product) => <StoreProductCard key={product.id} product={product} promotions={promotions} />)}</div>}
-                {!activeFilters && !compactFeature && <NewArrivalsVideo media={media} />}
+                {!activeFilters && <NewArrivalsVideo media={media} />}
                 {remainingProducts.length > 0 && <div className="new-arrivals-product-grid">{remainingProducts.map((product) => <StoreProductCard key={product.id} product={product} promotions={promotions} />)}</div>}
-                {!activeFilters && compactFeature && <NewArrivalsVideo media={media} />}
               </>}
         </div>
         {!isPending && connected && visibleCount < uniqueProducts.length && <button type="button" className="new-arrivals-load-more" onClick={() => setVisibleCount((count) => Math.min(count + PRODUCT_PAGE_SIZE, uniqueProducts.length))}>Xem thêm thiết kế mới <span aria-hidden="true">→</span></button>}

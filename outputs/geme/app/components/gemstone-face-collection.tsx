@@ -6,6 +6,7 @@ import { StoreProductGrid } from "./store-product-grid";
 import type { StoreProduct, StorePromotion, StoreSalesProduct } from "../lib/store-api";
 
 export type StoneChoice = { id: string; name: string; slug: string; sortOrder: number };
+export type CutChoice = { id: string; name: string; slug: string; parentId: string; parentSlug: string };
 
 const priceOptions = [
   ["under2", "Dưới 2.000.000 ₫"],
@@ -14,7 +15,7 @@ const priceOptions = [
   ["over10", "Trên 10.000.000 ₫"],
 ] as const;
 
-type FilterState = { stone?: string; price?: string; sort?: string; page?: number };
+type FilterState = { stone?: string; cut?: string; price?: string; sort?: string; page?: number };
 
 function setParam(params: URLSearchParams, key: string, value: string | number | undefined) {
   if (value === undefined || value === "") params.delete(key);
@@ -57,9 +58,11 @@ function StoneFigure({ stone, index, label, description, image, alt, position, h
   </figure>;
 }
 
-export function GemstoneFaceCollection({ activeStone = "", stones, products, promotions, connected, sales = [], initialPriceRange = "", initialSort = "newest", initialPage = 1 }: {
+export function GemstoneFaceCollection({ activeStone = "", activeCut = "", stones, cuts = [], products, promotions, connected, sales = [], initialPriceRange = "", initialSort = "newest", initialPage = 1 }: {
   activeStone?: string;
+  activeCut?: string;
   stones: StoneChoice[];
+  cuts?: CutChoice[];
   products: StoreProduct[];
   promotions?: StorePromotion[];
   connected: boolean;
@@ -69,7 +72,9 @@ export function GemstoneFaceCollection({ activeStone = "", stones, products, pro
   initialPage?: number;
 }) {
   const validStone = stones.some((stone) => stone.slug === activeStone) ? activeStone : "";
+  const validCut = cuts.some((cut) => cut.slug === activeCut && cut.parentSlug === validStone) ? activeCut : "";
   const [selectedStone, setSelectedStone] = useState(validStone);
+  const [selectedCut, setSelectedCut] = useState(validCut);
   const [priceRange, setPriceRange] = useState(priceOptions.some(([key]) => key === initialPriceRange) ? initialPriceRange : "");
   const [sort, setSort] = useState(["newest", "price-asc", "price-desc", "best-selling"].includes(initialSort) ? initialSort : "newest");
   const [page, setPage] = useState(Math.max(1, Number.isFinite(initialPage) ? initialPage : 1));
@@ -82,6 +87,7 @@ export function GemstoneFaceCollection({ activeStone = "", stones, products, pro
   const writeQuery = (patch: FilterState) => {
     const params = new URLSearchParams(window.location.search);
     if (patch.stone !== undefined) setParam(params, "loai", patch.stone);
+    if (patch.cut !== undefined) setParam(params, "cut", patch.cut);
     if (patch.price !== undefined) setParam(params, "gia", patch.price);
     if (patch.sort !== undefined) setParam(params, "sort", patch.sort === "newest" ? "" : patch.sort);
     if (patch.page !== undefined) setParam(params, "page", patch.page <= 1 ? "" : patch.page);
@@ -92,17 +98,19 @@ export function GemstoneFaceCollection({ activeStone = "", stones, products, pro
     const readQuery = () => {
       const params = new URLSearchParams(window.location.search);
       const nextStone = params.get("loai") || "";
+      const nextCut = params.get("cut") || "";
       const nextPrice = params.get("gia") || "";
       const nextSort = params.get("sort") || "newest";
       const nextPage = Number(params.get("page") || "1");
       setSelectedStone(stones.some((stone) => stone.slug === nextStone) ? nextStone : "");
+      setSelectedCut(cuts.some((cut) => cut.slug === nextCut && cut.parentSlug === nextStone) ? nextCut : "");
       setPriceRange(priceOptions.some(([key]) => key === nextPrice) ? nextPrice : "");
       setSort(["newest", "price-asc", "price-desc", "best-selling"].includes(nextSort) ? nextSort : "newest");
       setPage(Number.isFinite(nextPage) && nextPage > 0 ? Math.floor(nextPage) : 1);
     };
     window.addEventListener("popstate", readQuery);
     return () => window.removeEventListener("popstate", readQuery);
-  }, [stones]);
+  }, [stones, cuts]);
 
   useEffect(() => {
     if (!filtersOpen) return;
@@ -119,13 +127,16 @@ export function GemstoneFaceCollection({ activeStone = "", stones, products, pro
   const filteredProducts = useMemo(() => {
     const filtered = products.filter((product) => {
       const productStones = [product.materialOption?.slug, product.gemstoneType?.slug, product.category?.slug].filter(Boolean);
-      const matchesStone = !selectedStone || productStones.includes(selectedStone);
+      const categoryBelongsToStone = cuts.some((cut) => cut.slug === product.category?.slug && cut.parentSlug === selectedStone);
+      const matchesStone = !selectedStone || productStones.includes(selectedStone) || categoryBelongsToStone;
+      const selectedCutChoice = cuts.find((cut) => cut.slug === selectedCut);
+      const matchesCut = !selectedCut || product.variants.some((variant) => variant.quality === selectedCutChoice?.name) || product.category?.slug === selectedCut;
       const matchesPrice = !priceRange ||
         (priceRange === "under2" ? product.price < 2_000_000 :
           priceRange === "2to5" ? product.price >= 2_000_000 && product.price <= 5_000_000 :
             priceRange === "5to10" ? product.price > 5_000_000 && product.price <= 10_000_000 :
               product.price > 10_000_000);
-      return matchesStone && matchesPrice;
+      return matchesStone && matchesCut && matchesPrice;
     });
 
     return filtered
@@ -137,10 +148,11 @@ export function GemstoneFaceCollection({ activeStone = "", stones, products, pro
         return new Date(b.product.createdAt || 0).getTime() - new Date(a.product.createdAt || 0).getTime() || a.index - b.index;
       })
       .map(({ product }) => product);
-  }, [products, selectedStone, priceRange, sort, salesBySku]);
+  }, [products, selectedStone, selectedCut, cuts, priceRange, sort, salesBySku]);
 
   const clearFilters = () => {
     setSelectedStone("");
+    setSelectedCut("");
     setPriceRange("");
     setSort("newest");
     setPage(1);
@@ -150,8 +162,19 @@ export function GemstoneFaceCollection({ activeStone = "", stones, products, pro
 
   const selectStone = (slug: string) => {
     setSelectedStone(slug);
+    const preservedCut = cuts.some((cut) => cut.slug === selectedCut && cut.parentSlug === slug) ? selectedCut : "";
+    setSelectedCut(preservedCut);
     setPage(1);
-    writeQuery({ stone: slug, page: 1 });
+    writeQuery({ stone: slug, cut: preservedCut, page: 1 });
+  };
+
+  const selectCut = (slug: string) => {
+    const cut = cuts.find((item) => item.slug === slug);
+    const nextStone = slug ? cut?.parentSlug || selectedStone : selectedStone;
+    setSelectedStone(nextStone);
+    setSelectedCut(slug);
+    setPage(1);
+    writeQuery({ stone: nextStone, cut: slug, page: 1 });
   };
 
   const selectPrice = (value: string) => {
@@ -172,9 +195,10 @@ export function GemstoneFaceCollection({ activeStone = "", stones, products, pro
     writeQuery({ page: nextPage });
   };
 
-  const filteredCount = Number(Boolean(selectedStone)) + Number(Boolean(priceRange));
+  const filteredCount = Number(Boolean(selectedStone)) + Number(Boolean(selectedCut)) + Number(Boolean(priceRange));
   const displayProducts = filteredProducts.slice(0, page * 12);
   const stoneHref = (slug: string) => "/da-quy?loai=" + encodeURIComponent(slug);
+  const visibleCuts = selectedStone ? cuts.filter((cut) => cut.parentSlug === selectedStone) : [];
   const emerald = stones.find((stone) => stone.slug === "emerald");
   const opal = stones.find((stone) => stone.slug === "opal");
   const aquamarine = stones.find((stone) => stone.slug === "aquamarine");
@@ -203,14 +227,19 @@ export function GemstoneFaceCollection({ activeStone = "", stones, products, pro
           <button type="button" className="gemstone-view-all" onClick={clearFilters}>Xem tất cả <span aria-hidden="true">→</span></button>
         </div>
 
-        <nav className="gemstone-type-tabs" aria-label="Lọc theo loại đá">
-          <button type="button" className={!selectedStone ? "is-active" : ""} aria-pressed={!selectedStone} onClick={() => selectStone("")}>Tất cả</button>
-          {stones.map((stone) => <button type="button" key={stone.id} className={selectedStone === stone.slug ? "is-active" : ""} aria-pressed={selectedStone === stone.slug} onClick={() => selectStone(stone.slug)}>{stone.name}</button>)}
+        <nav className="gemstone-type-tabs new-arrivals-tabs" aria-label="Lọc theo loại đá">
+          <button type="button" className={!selectedStone ? "is-selected" : ""} aria-pressed={!selectedStone} onClick={() => selectStone("")}>Tất cả</button>
+          {stones.map((stone) => <button type="button" key={stone.id} className={selectedStone === stone.slug ? "is-selected" : ""} aria-pressed={selectedStone === stone.slug} onClick={() => selectStone(stone.slug)}>{stone.name}</button>)}
         </nav>
 
-        <div className="gemstone-product-toolbar">
+        {visibleCuts.length > 0 && <nav className="gemstone-cut-tabs" aria-label={`Lọc theo dạng cắt ${stones.find((stone) => stone.slug === selectedStone)?.name || "đá quý"}`}>
+          <button type="button" className={!selectedCut ? "is-active" : ""} aria-pressed={!selectedCut} onClick={() => selectCut("")}>Tất cả dạng cắt</button>
+          {visibleCuts.map((cut) => <button type="button" key={cut.id} className={selectedCut === cut.slug ? "is-active" : ""} aria-pressed={selectedCut === cut.slug} onClick={() => selectCut(cut.slug)}>{cut.name}</button>)}
+        </nav>}
+
+        <div className="gemstone-product-toolbar new-arrivals-actions">
           <div className="gemstone-filter-control">
-            <button ref={filterButtonRef} type="button" className="gemstone-filter-toggle" aria-expanded={filtersOpen} aria-controls="gemstone-filter-panel" onClick={() => setFiltersOpen((open) => !open)}>
+            <button ref={filterButtonRef} type="button" className="gemstone-filter-toggle new-arrivals-filter-toggle" aria-expanded={filtersOpen} aria-controls="gemstone-filter-panel" onClick={() => setFiltersOpen((open) => !open)}>
               Bộ lọc{filteredCount ? " (" + filteredCount + ")" : ""} <span aria-hidden="true">{filtersOpen ? "−" : "+"}</span>
             </button>
             {filtersOpen && <div className="gemstone-filter-panel" id="gemstone-filter-panel" role="region" aria-label="Bộ lọc sản phẩm">
@@ -218,6 +247,11 @@ export function GemstoneFaceCollection({ activeStone = "", stones, products, pro
                 <legend>Loại đá</legend>
                 <label><input type="radio" name="gemstone-filter-stone" checked={!selectedStone} onChange={() => selectStone("")} /> Tất cả</label>
                 {stones.map((stone) => <label key={stone.id}><input type="radio" name="gemstone-filter-stone" checked={selectedStone === stone.slug} onChange={() => selectStone(stone.slug)} /> {stone.name}</label>)}
+              </fieldset>}
+              {visibleCuts.length > 0 && <fieldset>
+                <legend>Dạng cắt</legend>
+                <label><input type="radio" name="gemstone-filter-cut" checked={!selectedCut} onChange={() => selectCut("")} /> Tất cả dạng cắt</label>
+                {visibleCuts.map((cut) => <label key={cut.id}><input type="radio" name="gemstone-filter-cut" checked={selectedCut === cut.slug} onChange={() => selectCut(cut.slug)} /> {cut.name}</label>)}
               </fieldset>}
               <fieldset>
                 <legend>Khoảng giá</legend>
@@ -227,7 +261,7 @@ export function GemstoneFaceCollection({ activeStone = "", stones, products, pro
               <button type="button" className="gemstone-filter-reset" onClick={clearFilters}>Đặt lại bộ lọc</button>
             </div>}
           </div>
-          <label className="gemstone-sort-control"><span>Sắp xếp</span>
+          <label className="gemstone-sort-control new-arrivals-sort"><span>Sắp xếp</span>
             <select value={sort} onChange={(event) => selectSort(event.target.value)} aria-label="Sắp xếp sản phẩm đá quý">
               <option value="newest">Mới nhất</option>
               {hasSalesData && <option value="best-selling">Bán chạy</option>}
