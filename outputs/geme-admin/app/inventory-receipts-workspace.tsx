@@ -23,13 +23,17 @@ type ReceiptItem = {
   id: string;
   productName: string;
   productSku: string;
+  quality?: string | null;
+  beadSize?: string | null;
+  carat?: number | string | null;
+  gemstoneQuality?: string | null;
   categoryName?: string | null;
   stoneName?: string | null;
   kind: string;
   quantity: number;
   unitCost: number | string;
   lineTotal: number | string;
-  variant?: { sku?: string | null; quality?: string | null; beadSize?: string | null } | null;
+  variant?: { sku?: string | null; quality?: string | null; beadSize?: string | null; carat?: number | string | null; gemstoneQuality?: string | null } | null;
 };
 
 type ReceiptDetail = ReceiptSummary & {
@@ -50,6 +54,10 @@ const dateTime = (value: string) => new Intl.DateTimeFormat("vi-VN", { day: "2-d
 const dateOnly = (value: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(new Date(value));
 const kindName = (value: string) => value === "GEMSTONE" ? "Đá quý" : "Trang sức";
 const pos365SyncLabel = (status?: ReceiptSummary["pos365SyncStatus"]) => status === "SYNCED" ? "Đã nhận" : status === "SYNCING" ? "Đang gửi" : status === "RETRYING" ? "Đang thử lại" : status === "PENDING" ? "Đang chờ" : "Chưa đồng bộ";
+const receiptVariantLabel = (item: ReceiptItem) => {
+  const variant = item.variant;
+  return [variant?.quality ?? item.quality, variant?.beadSize ?? item.beadSize, (variant?.carat ?? item.carat) != null ? `${amount(variant?.carat ?? item.carat)} ct` : null, (variant?.gemstoneQuality ?? item.gemstoneQuality) ? `Chất lượng ${(variant?.gemstoneQuality ?? item.gemstoneQuality)}` : null].filter(Boolean).join(" · ") || variant?.sku || "Tiêu chuẩn";
+};
 
 async function request<T>(path: string): Promise<T> {
   const response = await fetch(`${apiBaseUrl}/${path}`, { cache: "no-store" });
@@ -131,7 +139,7 @@ export default function InventoryReceiptsWorkspace() {
           <div className="inventory-receipt-paper">
             <div className="inventory-receipt-paper-title"><div><strong>GEME</strong><span>PHIẾU NHẬP KHO</span></div><div><b>{detail.receiptNo}</b><small>Ngày nhập: {dateTime(detail.receivedAt)}</small><small>Trạng thái: {detail.status === "COMPLETED" ? "Hoàn thành" : detail.status}</small></div></div>
             <div className="inventory-receipt-parties"><div><small>NHÀ CUNG CẤP</small><strong>{detail.supplierName || "Không ghi nhận"}</strong></div><div><small>NGƯỜI NHẬP</small><strong>{detail.receiver || "Không ghi nhận"}</strong></div><div><small>KHO NHẬP</small><strong>{detail.warehouseName || "Kho chính"}</strong></div><div><small>THANH TOÁN</small><strong>{detail.paymentMethod || "Không ghi nhận"}</strong></div></div>
-            <div className="inventory-receipt-paper-table-wrap"><table className="inventory-receipt-paper-table"><thead><tr><th>#</th><th>Sản phẩm / SKU</th><th>Phân loại / biến thể</th><th>Nhóm hàng</th><th>Số lượng</th><th>Đơn giá nhập</th><th>Thành tiền</th></tr></thead><tbody>{detail.items.map((item, index) => <tr key={item.id}><td>{index + 1}</td><td><strong>{item.productName}</strong><small>{item.productSku}</small></td><td>{[item.variant?.quality, item.variant?.beadSize].filter(Boolean).join(" · ") || item.variant?.sku || "Tiêu chuẩn"}</td><td>{[kindName(item.kind), item.categoryName, item.stoneName].filter(Boolean).join(" · ")}</td><td>{amount(item.quantity)}</td><td>{amount(Number(item.unitCost))} ₫</td><td>{amount(Number(item.lineTotal))} ₫</td></tr>)}</tbody></table></div>
+            <div className="inventory-receipt-paper-table-wrap"><table className="inventory-receipt-paper-table"><thead><tr><th>#</th><th>Sản phẩm / SKU</th><th>Phân loại / biến thể</th><th>Nhóm hàng</th><th>Số lượng</th><th>Đơn giá nhập</th><th>Thành tiền</th></tr></thead><tbody>{detail.items.map((item, index) => <tr key={item.id}><td>{index + 1}</td><td><strong>{item.productName}</strong><small>{item.productSku}</small></td><td>{receiptVariantLabel(item)}</td><td>{[kindName(item.kind), item.categoryName, item.stoneName].filter(Boolean).join(" · ")}</td><td>{amount(item.quantity)}</td><td>{amount(Number(item.unitCost))} ₫</td><td>{amount(Number(item.lineTotal))} ₫</td></tr>)}</tbody></table></div>
             <div className="inventory-receipt-calculation"><div><span>Tổng số lượng</span><strong>{amount(detail.totalQuantity)} món</strong></div><div><span>Tiền hàng</span><strong>{amount(Number(detail.subtotalAmount))} ₫</strong></div><div><span>Chiết khấu ({amount(Number(detail.discountPercent))}%)</span><strong>− {amount(Number(detail.discountAmount))} ₫</strong></div><div><span>VAT ({amount(Number(detail.vatPercent))}%)</span><strong>+ {amount(Number(detail.vatAmount))} ₫</strong></div><div className="grand"><span>Tổng thanh toán</span><strong>{amount(Number(detail.totalAmount))} ₫</strong></div></div>
             {(detail.note || detail.additionalNote) && <div className="inventory-receipt-notes"><strong>Ghi chú</strong>{detail.note && <p>{detail.note}</p>}{detail.additionalNote && <p>{detail.additionalNote}</p>}</div>}
             {detail.documentUrls?.length > 0 && <div className="inventory-receipt-documents"><strong>Chứng từ đính kèm</strong><div>{detail.documentUrls.map((url, index) => <a key={`${url}-${index}`} href={`${apiBaseUrl}${url}`} target="_blank" rel="noreferrer">{url.toLocaleLowerCase("vi").endsWith(".pdf") ? "PDF" : "Ảnh"} chứng từ {index + 1} · Mở</a>)}</div></div>}

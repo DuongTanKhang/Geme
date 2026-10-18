@@ -1,5 +1,13 @@
+packages:
+  - .
+
 allowBuilds:
   '@prisma/engines': true
-  '@scarf/scarf': true
+  '@scarf/scarf': false
   esbuild: true
   prisma: true
+
+overrides:
+  deepmerge-ts: ^8.0.0
+  mysql2: ^3.23.1
+  js-yaml: ^5.4.1

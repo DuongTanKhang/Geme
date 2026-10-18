@@ -22,9 +22,9 @@ export type CustomerSession = {
  * Next's parsed URL can use an internal/proxy hostname, while Host or the
  * trusted reverse-proxy headers retain the public hostname the browser used.
  */
-export function isSameOriginRequest(request: NextRequest) {
+export function isSameOriginRequest(request: NextRequest, requireOrigin = false) {
   const rawOrigin = request.headers.get("origin");
-  if (!rawOrigin) return true;
+  if (!rawOrigin) return !requireOrigin;
 
   let origin: URL;
   try {

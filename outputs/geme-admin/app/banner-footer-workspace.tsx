@@ -300,7 +300,7 @@ async function uploadImage(file: File, alt: string) {
   const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
   const response = await fetch(`${apiBaseUrl}/media`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filename: file.name, mimeType: "image/webp", base64, alt }) });
   if (!response.ok) {
-    let message = "Không thể lưu ảnh vào database.";
+    let message = "Không thể lưu ảnh vào thư viện media.";
     try { const detail = await response.json(); message = detail.message || message; } catch { /* keep default */ }
     throw new Error(Array.isArray(message) ? message.join(" ") : message);
   }
@@ -438,7 +438,7 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
   const pickBannerImage = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
     setUploading(true);
-    try { const imageUrl = await uploadImage(file, draft.name || "Banner GEME"); setDraft((old) => ({ ...old, imageUrl })); onNotify("Ảnh đã được nén và lưu trong database."); }
+    try { const imageUrl = await uploadImage(file, draft.name || "Banner GEME"); setDraft((old) => ({ ...old, imageUrl })); onNotify("Ảnh đã được nén và lưu vào thư viện media."); }
     catch (error) { onNotify(error instanceof Error ? error.message : "Không thể lưu ảnh."); }
     finally { setUploading(false); }
   };
@@ -453,7 +453,7 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
   const uploadFooterImage = async (field: "logoImageUrl" | "backgroundImageUrl", event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
     setUploading(true);
-    try { const imageUrl = await uploadImage(file, field === "logoImageUrl" ? "Logo footer GEME" : "Ảnh nền footer GEME"); setFooter((old) => ({ ...old, [field]: imageUrl })); onNotify("Ảnh footer đã được lưu trong database. Bấm Lưu footer để áp dụng."); }
+    try { const imageUrl = await uploadImage(file, field === "logoImageUrl" ? "Logo footer GEME" : "Ảnh nền footer GEME"); setFooter((old) => ({ ...old, [field]: imageUrl })); onNotify("Ảnh footer đã được lưu vào thư viện media. Bấm Lưu footer để áp dụng."); }
     catch (error) { onNotify(error instanceof Error ? error.message : "Không thể lưu ảnh footer."); }
     finally { setUploading(false); }
   };
@@ -521,7 +521,7 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
       const next = [...catalogPromos].sort((a, b) => a.sortOrder - b.sortOrder);
       await saveSettings({ catalogEditorialPromos: next });
       setCatalogPromos(next);
-      onNotify("Ảnh/video biên tập Trang sức đã lưu vào database.");
+      onNotify("Ảnh/video biên tập Trang sức đã lưu vào thư viện media.");
     } catch (error) { onNotify(error instanceof Error ? error.message : "Không thể lưu ảnh/video Trang sức."); }
     finally { setSaving(false); }
   };
@@ -530,7 +530,7 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
     setSaving(true);
     try {
       await saveSettings({ newArrivalsMedia });
-      onNotify("Ảnh/video New Arrivals đã lưu vào database.");
+      onNotify("Ảnh/video New Arrivals đã lưu vào thư viện media.");
     } catch (error) { onNotify(error instanceof Error ? error.message : "Không thể lưu ảnh/video New Arrivals."); }
     finally { setSaving(false); }
   };
@@ -545,7 +545,7 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
   const isJewelryCarousel = /^Trang sức - Carousel [1-5]$/.test(draft.position);
 
   return <section className="bf-workspace">
-    <div className="page-heading bf-heading"><div><h1>Quản lý Banner &amp; Footer</h1><p>Cập nhật banner và nội dung chân trang; ảnh được lưu bền vững trong database.</p></div>{tab === "banners" && <div className="bf-heading-actions"><button className="button button-quiet" onClick={editLoginBanner}>Chỉnh ảnh đăng nhập</button><button className="button button-primary" onClick={beginCreate}>＋ Thêm banner mới</button></div>}</div>
+    <div className="page-heading bf-heading"><div><h1>Quản lý Banner &amp; Footer</h1><p>Cập nhật banner và nội dung chân trang; ảnh được lưu bền vững trong thư viện media.</p></div>{tab === "banners" && <div className="bf-heading-actions"><button className="button button-quiet" onClick={editLoginBanner}>Chỉnh ảnh đăng nhập</button><button className="button button-primary" onClick={beginCreate}>＋ Thêm banner mới</button></div>}</div>
     <div className="bf-tabs"><button className={tab === "banners" ? "active" : ""} onClick={() => setTab("banners")}>▧ &nbsp; Banner</button><button className={tab === "footer" ? "active" : ""} onClick={() => setTab("footer")}>▤ &nbsp; Footer</button><button className={tab === "catalog" ? "active" : ""} onClick={() => setTab("catalog")}>▧ &nbsp; Ảnh &amp; video Trang sức / New Arrivals</button><button className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}>▦ &nbsp; Thư viện ảnh</button></div>
 
     {tab === "banners" ? <div className="bf-banner-layout">
@@ -581,9 +581,9 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
           <div className="bf-footer-images"><label><span>Logo footer</span>{footer.logoImageUrl && <img src={apiImageUrl(footer.logoImageUrl)} alt="Logo footer"/>}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadFooterImage("logoImageUrl", event)} disabled={uploading}/></label><label><span>Ảnh nền footer (không bắt buộc)</span>{footer.backgroundImageUrl && <img src={apiImageUrl(footer.backgroundImageUrl)} alt="Nền footer"/>}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadFooterImage("backgroundImageUrl", event)} disabled={uploading}/></label></div>
         </section>
       </div>
-      <div className="bf-footer-save"><span>Mọi nội dung và ảnh footer được lưu vào PostgreSQL.</span><button className="button button-primary" onClick={() => void saveFooter()} disabled={saving || uploading}>{saving ? "Đang lưu…" : "Lưu footer"}</button></div>
+      <div className="bf-footer-save"><span>Nội dung footer được lưu trong cấu hình website; ảnh được lưu riêng trong thư viện media.</span><button className="button button-primary" onClick={() => void saveFooter()} disabled={saving || uploading}>{saving ? "Đang lưu…" : "Lưu footer"}</button></div>
     </div> : tab === "catalog" ? <div className="bf-catalog-editor">
-      <div className="bf-catalog-intro"><div><h2>Ảnh &amp; video Trang sức và New Arrivals</h2><p>Chỉnh các nội dung THE GREEN EDIT, GEME TRÊN BẠN, TỪ ĐÁ ĐẾN TRANG SỨC và ảnh/video riêng trên trang New Arrivals.</p></div><span>Được lưu cùng cấu hình website trong PostgreSQL.</span></div>
+      <div className="bf-catalog-intro"><div><h2>Ảnh &amp; video Trang sức và New Arrivals</h2><p>Chỉnh các nội dung THE GREEN EDIT, GEME TRÊN BẠN, TỪ ĐÁ ĐẾN TRANG SỨC và ảnh/video riêng trên trang New Arrivals.</p></div><span>Nội dung lưu cùng cấu hình website; media lưu trong thư viện media.</span></div>
       <p className="bf-catalog-video-note">Chọn trực tiếp video MP4/WebM tối đa 8 MB hoặc dán URL video công khai. Ảnh và poster được tải vào thư viện GEME.</p>
       <div className="bf-catalog-promo-grid">{catalogPromos.map((promo) => <section className="bf-catalog-promo-card" key={promo.id}>
         <header><div><h3>{promo.title || promo.id}</h3><small>Chèn sau {promo.placement.replace("after-", "")} sản phẩm</small></div><label className="bf-catalog-enable"><input type="checkbox" checked={promo.enabled} onChange={(event) => updateCatalogPromo(promo.id, "enabled", event.target.checked)}/> Bật</label></header>
@@ -621,7 +621,7 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
         <div className="bf-footer-save"><span>Lưu riêng ảnh biên tập và video của New Arrivals.</span><button className="button button-primary" onClick={() => void saveNewArrivalsMedia()} disabled={saving || uploading}>{saving ? "Đang lưu…" : "Lưu ảnh & video New Arrivals"}</button></div>
       </section>
     </div> : <div className="bf-library-panel">
-      <div className="bf-library-heading"><div><h2>Thư viện ảnh Banner &amp; Footer</h2><p>Ảnh được lưu trên PostgreSQL, phân nhóm theo mục đang sử dụng.</p></div><div className="bf-library-filters"><button className={libraryKind === "banner" ? "active" : ""} onClick={() => setLibraryKind("banner")}>Tất cả ảnh banner <span>{bannerImages.length}</span></button><button className={libraryKind === "footer" ? "active" : ""} onClick={() => setLibraryKind("footer")}>Tất cả ảnh footer <span>{footerImages.length}</span></button>{libraryKind === "banner" && <select aria-label="Lọc ảnh theo mùa" value={filterSeason} onChange={(event) => setFilterSeason(event.target.value)}><option>Tất cả mùa</option>{seasons.map((season) => <option key={season}>{season}</option>)}</select>}</div></div>
+      <div className="bf-library-heading"><div><h2>Thư viện ảnh Banner &amp; Footer</h2><p>Ảnh được lưu trong media storage, phân nhóm theo mục đang sử dụng.</p></div><div className="bf-library-filters"><button className={libraryKind === "banner" ? "active" : ""} onClick={() => setLibraryKind("banner")}>Tất cả ảnh banner <span>{bannerImages.length}</span></button><button className={libraryKind === "footer" ? "active" : ""} onClick={() => setLibraryKind("footer")}>Tất cả ảnh footer <span>{footerImages.length}</span></button>{libraryKind === "banner" && <select aria-label="Lọc ảnh theo mùa" value={filterSeason} onChange={(event) => setFilterSeason(event.target.value)}><option>Tất cả mùa</option>{seasons.map((season) => <option key={season}>{season}</option>)}</select>}</div></div>
       {filteredGallery.length ? <div className="bf-gallery-grid">{filteredGallery.map((item, index) => <article className="bf-gallery-card" key={`${item.url}-${index}`}><button type="button" className="bf-gallery-open" aria-label={`Phóng to ảnh ${item.name}`} onClick={() => setZoomImage({ url: apiImageUrl(item.url), name: item.name })}><span className="bf-gallery-photo"><img src={apiImageUrl(item.url)} alt={item.name}/><span>⌕</span></span></button><strong>{item.name}</strong><small>{item.detail}</small>{libraryKind === "banner" && <em>{item.season || "Không theo mùa"}</em>}<button type="button" className="bf-download-button" onClick={() => void downloadImage(item.url, item.name).catch((error) => onNotify(error instanceof Error ? error.message : "Không tải được ảnh."))}>↓ Tải ảnh</button></article>)}</div> : <p className="bf-empty">{libraryKind === "footer" ? "Chưa có ảnh footer được chọn." : "Không có ảnh banner thuộc mùa này."}</p>}
       <p className="bf-library-foot">Chọn ảnh để phóng to. Thay ảnh banner hoặc footer ở các thẻ tương ứng.</p>
     </div>}

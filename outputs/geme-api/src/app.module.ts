@@ -7,8 +7,9 @@ import { MaterialsModule } from "./materials/materials.module.js";
 import { CommerceModule } from "./commerce/commerce.module.js";
 import { Pos365Module } from "./pos365/pos365.module.js";
 import { ViettelPostModule } from "./viettel-post/viettel-post.module.js";
+import { AdminAuthModule } from "./admin-auth/admin-auth.module.js";
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, HealthModule, MaterialsModule, CommerceModule, AccountModule, Pos365Module, ViettelPostModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, AdminAuthModule, HealthModule, MaterialsModule, CommerceModule, AccountModule, Pos365Module, ViettelPostModule],
 })
 export class AppModule {}

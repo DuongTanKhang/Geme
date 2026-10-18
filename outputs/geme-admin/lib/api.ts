@@ -1,8 +1,6 @@
-export function normalizeApiBaseUrl(value: string): string {
-  return value.replace(/^http:\/\/localhost(?=[:/]|$)/i, "http://127.0.0.1").replace(/\/$/, "");
-}
-
-export const apiBaseUrl = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:4000/api/v1");
+// Admin API traffic stays same-origin so its HttpOnly session cookie can be
+// exchanged for a backend bearer token by the server-side Route Handler.
+export const apiBaseUrl = "/api/admin";
 
 /** Shared HTTP boundary for the future NestJS service. Keep auth secrets server-side. */
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {

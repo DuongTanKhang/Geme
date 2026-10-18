@@ -9,6 +9,7 @@ Backend riêng cho storefront (`outputs/geme`) và admin (`outputs/geme-admin`):
 - Đơn hàng, dòng sản phẩm và thanh toán.
 - Chương trình khuyến mãi, đối tượng áp dụng và lượt sử dụng.
 - Bài viết, ảnh bài viết và cấu hình website.
+- Media lưu metadata trong PostgreSQL; byte ảnh/video dùng được với database hoặc Cloudflare R2, còn URL cũ tiếp tục được phục vụ.
 - Doanh thu là số liệu tổng hợp từ đơn hàng; không tạo bảng báo cáo trùng dữ liệu.
 - Không có bảng kho/tồn kho. `kiot_viet_product_id` và `kiot_viet_order_id` chỉ là mã đối chiếu để tích hợp Kiot Việt sau này.
 
@@ -48,6 +49,12 @@ Chất liệu kim loại và loại đá được lưu trong bảng riêng `mate
 - `/api/v1/docs`: OpenAPI.
 
 `ADMIN_EMAIL` và `ADMIN_PASSWORD` chỉ cần cấu hình nếu chạy seed để tạo tài khoản khởi tạo; mật khẩu phải dài ít nhất 12 ký tự. Không có mật khẩu thật hay dữ liệu giả trong migration.
+
+## Media storage
+
+Local mặc định dùng `MEDIA_STORAGE_PROVIDER=database`, nên không cần tài khoản Cloudflare. Khi triển khai production, tạo bucket R2 và token chỉ có quyền đọc/ghi object trong bucket đó; đặt credentials ở backend dưới `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, rồi đặt `MEDIA_STORAGE_PROVIDER=r2`. `MEDIA_PUBLIC_BASE_URL` là custom domain công khai của bucket (ví dụ `https://media.geme.vn`) để trình duyệt lấy ảnh trực tiếp từ Cloudflare CDN. Không đưa khóa R2 vào biến `NEXT_PUBLIC_*`.
+
+Migration `20261017000000_media_object_storage` giữ nguyên dữ liệu cũ và chỉ cho phép `data` rỗng ở những media đã chuyển sang R2. Sau khi sao lưu database, có thể chạy `pnpm media:migrate-r2` để chuyển từng media công khai trong `media_assets`; script chỉ xóa byte khỏi PostgreSQL sau khi R2 xác nhận upload thành công và có thể chạy lại nếu bị ngắt. Tệp riêng tư/PDF vẫn ở database đến khi có bucket private và cơ chế tải có chữ ký. Ảnh đang nằm trong kho DirectAdmin cũ không tự được import bởi script này; cần có quyền đọc file hoặc bản archive để lập manifest và chuyển riêng.
 
 ## Kết nối admin
 

@@ -7,7 +7,7 @@ import {
 
 export async function PATCH(request: NextRequest) {
   try {
-    if (!isSameOriginRequest(request)) {
+    if (!isSameOriginRequest(request, true)) {
       return NextResponse.json({ message: "Yêu cầu cập nhật hồ sơ không hợp lệ." }, { status: 403 });
     }
     const accessToken = getCustomerAccessToken(request);

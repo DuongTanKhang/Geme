@@ -8,7 +8,7 @@ type MenuId = "trang-suc" | "da-quy" | "san-pham";
 type MenuStone = { id: string; name: string; slug: string; imageUrl?: string; appliedCategoryIds?: string[]; sortOrder?: number };
 type MenuCategory = { id: string; name: string; slug: string; kind: "JEWELRY" | "GEMSTONE"; usage: "PRODUCT_CATEGORY" | "GEMSTONE_TYPE"; level: number; parentId?: string | null; status: "ACTIVE" | "INACTIVE"; imageUrl?: string | null; sortOrder?: number };
 type ApiMaterialOption = { id: string; name: string; scope: "JEWELRY" | "GEMSTONE"; kind: "MATERIAL" | "STONE"; active: boolean; imageUrl?: string | null; slug?: string; sortOrder?: number; appliedCategoryIds?: string[] };
-type StoreCartLine = { key: string; productId: string; variantId: string | null; slug: string; name: string; sku: string; price: number; quality: string | null; beadSize: string | null; quantity: number; stock: number };
+type StoreCartLine = { key: string; productId: string; variantId: string | null; slug: string; name: string; sku: string; price: number; quality: string | null; beadSize: string | null; carat?: number | null; gemstoneQuality?: string | null; quantity: number; stock: number };
 const CART_STORAGE_KEY = "geme-cart-v1";
 function readStoreCart(): StoreCartLine[] {
   try {
@@ -199,7 +199,7 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
     const fetchCategories = async (fresh = false) => {
       const requestId = ++categoriesRequestId;
       try {
-        const response = await fetch(`${materialsApiBase}/categories?public=true`, { cache: fresh ? "no-store" : "default" });
+        const response = await fetch(`${materialsApiBase}/categories/public`, { cache: fresh ? "no-store" : "default" });
         if (response.ok) {
           const records = await response.json() as MenuCategory[];
           if (requestId === categoriesRequestId) applyCategories(records);
@@ -357,7 +357,7 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
         <div className="store-cart-heading"><div><span className="eyebrow">GEME</span><h2 id="store-cart-title">Giỏ hàng <small>({cartCount})</small></h2></div><button type="button" aria-label="Đóng giỏ hàng" onClick={() => setCartOpen(false)}>×</button></div>
         {cartItems.length ? <>
           <div className="store-cart-lines">{cartItems.map((item) => <article className="store-cart-line" key={item.key}>
-            <div className="store-cart-line-copy"><a href={`/san-pham/${encodeURIComponent(item.slug)}`} onClick={() => setCartOpen(false)}>{item.name}</a><small>{[item.quality, item.beadSize].filter(Boolean).join(" · ") || item.sku}</small><strong>{money(item.price)}</strong></div>
+            <div className="store-cart-line-copy"><a href={`/san-pham/${encodeURIComponent(item.slug)}`} onClick={() => setCartOpen(false)}>{item.name}</a><small>{[item.quality, item.beadSize, item.carat != null ? `${item.carat} ct` : null, item.gemstoneQuality ? `Chất lượng ${item.gemstoneQuality}` : null].filter(Boolean).join(" · ") || item.sku}</small><strong>{money(item.price)}</strong></div>
             <div className="store-cart-line-controls"><button type="button" aria-label={`Giảm số lượng ${item.name}`} onClick={() => saveCart(cartItems.flatMap((row) => row.key !== item.key ? [row] : row.quantity > 1 ? [{ ...row, quantity: row.quantity - 1 }] : []))}>−</button><span>{item.quantity}</span><button type="button" aria-label={`Tăng số lượng ${item.name}`} disabled={item.quantity >= item.stock} onClick={() => saveCart(cartItems.map((row) => row.key === item.key ? { ...row, quantity: Math.min(row.stock, row.quantity + 1) } : row))}>+</button></div>
             <button className="store-cart-remove" type="button" onClick={() => saveCart(cartItems.filter((row) => row.key !== item.key))}>Xóa</button>
           </article>)}</div>

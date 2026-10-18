@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Header, Param, ParseUUIDPipe, Patch, Post, Query, Sse } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Header, Param, ParseUUIDPipe, Patch, Post, Query, Sse, UseGuards } from "@nestjs/common";
+import { AdminAuthGuard } from "../admin-auth/admin-auth.guard.js";
 import { ApiTags } from "@nestjs/swagger";
 import { MaterialOptionScope } from "../generated/prisma/client.js";
 import { ImportMaterialOptionsDto, MaterialOptionInputDto, UpdateMaterialOptionDto } from "./dto/material-option.dto.js";
@@ -23,21 +24,25 @@ export class MaterialsController {
   }
 
   @Post()
+  @UseGuards(AdminAuthGuard)
   create(@Body() input: MaterialOptionInputDto) {
     return this.materials.create(input);
   }
 
   @Post("import-local")
+  @UseGuards(AdminAuthGuard)
   importLocalOptions(@Body() body: ImportMaterialOptionsDto) {
     return this.materials.importLocalOptions(body.items);
   }
 
   @Patch(":id")
+  @UseGuards(AdminAuthGuard)
   update(@Param("id", ParseUUIDPipe) id: string, @Body() input: UpdateMaterialOptionDto) {
     return this.materials.update(id, input);
   }
 
   @Delete(":id")
+  @UseGuards(AdminAuthGuard)
   remove(@Param("id", ParseUUIDPipe) id: string) {
     return this.materials.remove(id);
   }

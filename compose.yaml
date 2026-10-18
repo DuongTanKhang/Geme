@@ -15,7 +15,7 @@ services:
       GEME_API_BASE_URL: http://geme-api:4000/api/v1
       AEGIS_AUTH_API_URL: http://aegis:5130
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./outputs/geme:/app
       - storefront_node_modules:/app/node_modules
@@ -38,7 +38,7 @@ services:
       GEME_STOREFRONT_ASSETS_URL: http://storefront:3000
       AEGIS_AUTH_API_URL: http://aegis:5130
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     volumes:
       - ./outputs/geme-admin:/workspace/outputs/geme-admin
       - admin_node_modules:/workspace/outputs/geme-admin/node_modules
@@ -59,6 +59,12 @@ services:
       PORT: "4000"
       CORS_ORIGINS: http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001
       DATABASE_URL: ${GEME_DATABASE_URL:?Set GEME_DATABASE_URL in .env.docker}
+      MEDIA_STORAGE_PROVIDER: ${MEDIA_STORAGE_PROVIDER:-database}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-}
       AEGIS_AUTH_API_URL: http://aegis:5130
       AEGIS_ORDER_EMAIL_URL: http://aegis:5130
       GEME_ORDER_EMAIL_API_KEY: ${GEME_ORDER_EMAIL_API_KEY:?Set GEME_ORDER_EMAIL_API_KEY in .env.docker}
@@ -77,7 +83,7 @@ services:
       VIETTELPOST_SENDER_ADDRESS: ${VIETTELPOST_SENDER_ADDRESS:-}
       VIETTELPOST_WEBHOOK_TOKEN: ${VIETTELPOST_WEBHOOK_TOKEN:-}
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
     volumes:
       - ./outputs/geme-api:/app
       - geme_api_node_modules:/app/node_modules
@@ -121,7 +127,7 @@ services:
       Jwt__Key: ${AEGIS_JWT_KEY:?Set AEGIS_JWT_KEY in .env.docker}
       InternalApi__OrderEmailKey: ${GEME_ORDER_EMAIL_API_KEY:?Set GEME_ORDER_EMAIL_API_KEY in .env.docker}
     ports:
-      - "5130:5130"
+      - "127.0.0.1:5130:5130"
     depends_on:
       sqlserver:
         condition: service_healthy
@@ -132,12 +138,14 @@ services:
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_PID: Developer
+      # Use Express by default to match production. Developer can be selected
+      # only for local development/testing that needs its extra features.
+      MSSQL_PID: ${AEGIS_SQL_EDITION:-Express}
       MSSQL_SA_PASSWORD: ${AEGIS_SQL_PASSWORD:?Set AEGIS_SQL_PASSWORD in .env.docker}
-    ports:
-      - "1433:1433"
+    # SQL is reachable only by services on the private Compose network.
+    # Do not publish 1433 on the Windows host; AEGIS connects to sqlserver:1433.
     volumes:
-      - aegis_sql_data:/var/opt/mssql
+      - aegis_sql_express_data:/var/opt/mssql
     healthcheck:
       test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q 'SELECT 1' >/dev/null 2>&1"]
       interval: 10s
@@ -148,7 +156,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - aegis_redis_data:/data
     healthcheck:
@@ -160,8 +168,8 @@ services:
   mailpit:
     image: axllent/mailpit:latest
     ports:
-      - "8025:8025"
-      - "1025:1025"
+      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:1025:1025"
 
 volumes:
   storefront_node_modules:
@@ -169,5 +177,5 @@ volumes:
   admin_node_modules:
   admin_next:
   geme_api_node_modules:
-  aegis_sql_data:
+  aegis_sql_express_data:
   aegis_redis_data:

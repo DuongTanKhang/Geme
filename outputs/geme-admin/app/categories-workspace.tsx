@@ -14,7 +14,7 @@ export type AdminCategory = {
   kind: CategoryKind;
   usage?: "product" | "stone";
   level?: 1 | 2 | 3;
-  pricingMode?: "FIXED" | "QUALITY" | "QUALITY_AND_BEAD_SIZE";
+  pricingMode?: "FIXED" | "QUALITY" | "QUALITY_AND_BEAD_SIZE" | "GEMSTONE_SIZE" | "GEMSTONE_CARAT" | "GEMSTONE_CARAT_AND_QUALITY";
   parentId?: string;
   description?: string;
   sortOrder: string;
@@ -246,7 +246,7 @@ export default function CategoriesWorkspace({ categories, onSave, onDelete, onNo
       parentId: effectiveParent?.id,
       description: "",
       sortOrder: effectiveParent ? `${effectiveParent.sortOrder}.1` : "1",
-      pricingMode: !effectiveParent ? "FIXED" : effectiveParent.kind === "Đá quý" ? "QUALITY" : effectiveParent.slug === "vong-tay" ? "QUALITY_AND_BEAD_SIZE" : "FIXED",
+      pricingMode: !effectiveParent ? "FIXED" : effectiveParent.kind === "Đá quý" ? "GEMSTONE_SIZE" : effectiveParent.slug === "vong-tay" ? "QUALITY_AND_BEAD_SIZE" : "FIXED",
       isHot: false,
     };
     setSelectedId("");
@@ -278,7 +278,7 @@ export default function CategoriesWorkspace({ categories, onSave, onDelete, onNo
       return;
     }
     const usage = "product";
-    setDraft({ ...category, level, parentId: parent.id, usage, pricingMode: category.pricingMode ?? (category.kind === "Đá quý" ? "QUALITY" : "FIXED"), sortOrder: `${parent.sortOrder}.1` });
+    setDraft({ ...category, level, parentId: parent.id, usage, pricingMode: category.pricingMode ?? (category.kind === "Đá quý" ? "GEMSTONE_SIZE" : "FIXED"), sortOrder: `${parent.sortOrder}.1` });
   };
 
   const changeKind = (kind: CategoryKind) => {
@@ -291,7 +291,7 @@ export default function CategoriesWorkspace({ categories, onSave, onDelete, onNo
     const parent = safeLevel === 1 ? undefined : categories.find((item) => categoryLevel(item) === safeLevel - 1 && item.kind === kind && item.status === "Hoạt động" && (safeLevel !== 3 || (kind === "Đá quý" ? true : item.usage !== "stone")));
     const nextLevel = jewelryRoot ? 2 : safeLevel;
     const nextParent = jewelryRoot ?? parent;
-    setDraft({ ...category, kind, level: nextLevel, usage: nextLevel === 1 ? undefined : "product", parentId: nextParent?.id, pricingMode: nextLevel === 1 ? "FIXED" : kind === "Đá quý" ? "QUALITY" : nextParent?.slug === "vong-tay" ? "QUALITY_AND_BEAD_SIZE" : "FIXED", sortOrder: nextParent ? `${nextParent.sortOrder}.1` : "1" });
+    setDraft({ ...category, kind, level: nextLevel, usage: nextLevel === 1 ? undefined : "product", parentId: nextParent?.id, pricingMode: nextLevel === 1 ? "FIXED" : kind === "Đá quý" ? "GEMSTONE_SIZE" : nextParent?.slug === "vong-tay" ? "QUALITY_AND_BEAD_SIZE" : "FIXED", sortOrder: nextParent ? `${nextParent.sortOrder}.1` : "1" });
   };
 
   const save = async () => {
@@ -385,7 +385,7 @@ export default function CategoriesWorkspace({ categories, onSave, onDelete, onNo
     if (!file || !category) return;
     try {
       update("image", await makeCategoryThumbnail(file));
-      onNotify("Đã nén ảnh xem trước. Bấm Lưu thay đổi để lưu ảnh vào database.");
+      onNotify("Đã nén ảnh xem trước. Bấm Lưu thay đổi để lưu ảnh vào thư viện media.");
     } catch (error) {
       onNotify(error instanceof Error ? error.message : "Không thể xử lý ảnh danh mục.");
     }
@@ -397,13 +397,13 @@ export default function CategoriesWorkspace({ categories, onSave, onDelete, onNo
       const dataUrl = await compressProductImage(file);
       const response = await fetch(`${apiBaseUrl}/media`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filename: file.name, mimeType: "image/webp", base64: dataUrl.slice(dataUrl.indexOf(",") + 1), alt: `Banner danh mục ${category.name || "GEME"}` }) });
       if (!response.ok) {
-        let message = "Không thể lưu ảnh banner vào database.";
+        let message = "Không thể lưu ảnh banner vào thư viện media.";
         try { const detail = await response.json(); message = detail.message || message; } catch { /* keep fallback */ }
         throw new Error(Array.isArray(message) ? message.join(" ") : message);
       }
       const asset = await response.json();
       update("bannerUrl", String(asset.url || `/media/${asset.id}`));
-      onNotify("Ảnh banner danh mục đã được lưu trong database. Bấm Lưu thay đổi để gắn vào danh mục.");
+      onNotify("Ảnh banner danh mục đã được lưu trong thư viện media. Bấm Lưu thay đổi để gắn vào danh mục.");
     } catch (error) {
       onNotify(error instanceof Error ? error.message : "Không thể tải ảnh banner lên.");
     }
@@ -436,9 +436,9 @@ export default function CategoriesWorkspace({ categories, onSave, onDelete, onNo
           <label className="category-field"><span>Slug <b>*</b></span><input value={category.slug} onChange={(event) => { setSlugEdited(true); update("slug", slugify(event.target.value)); }} placeholder="ten-danh-muc"/><small>Slug sẽ được tạo tự động nếu để trống</small></label>
           {creating && <label className="category-field"><span>Cấp danh mục</span><select value={categoryLevel(category)} onChange={(event) => changeLevel(Number(event.target.value) as 1 | 2 | 3)}>{category.kind === "Trang sức" ? <><option value={2}>Cấp 2 · Danh mục</option><option value={3}>Cấp 3 · Phân loại con</option></> : category.kind === "Đá quý" ? <><option value={1}>Cấp 1 · Nhóm chính</option><option value={2}>Cấp 2 · Loại đá / danh mục</option></> : <><option value={1}>Cấp 1 · Nhóm chính</option><option value={2}>Cấp 2 · Danh mục</option></>}</select><small>{category.kind === "Đá quý" && categoryLevel(category) === 3 ? "Dạng cắt cấp 3 được quản lý trong Sản phẩm → Loại đá → Mặt đá quý." : "Chọn danh mục cha bên dưới để đặt đúng vị trí trong cây danh mục."}</small></label>}
           {(creating || !category.parentId) && <label className="category-field"><span>Nhóm danh mục</span><select value={category.kind} onChange={(event) => changeKind(event.target.value as CategoryKind)}><option>Trang sức</option><option>Đá quý</option>{(!creating || category.kind === "Khác") && <option>Khác</option>}</select><small>Chọn nhóm hàng rồi đặt danh mục vào đúng cấp bên dưới.</small></label>}
-          {category.parentId && <label className="category-field"><span>Danh mục cha cấp {categoryLevel(category) - 1}</span><select value={category.parentId} onChange={(event) => { const parent = categories.find((item) => item.id === event.target.value); setDraft((current) => current ? { ...current, parentId: parent?.id, kind: parent?.kind ?? current.kind, usage: categoryLevel(current) === 2 && parent?.kind === "Đá quý" ? current.usage ?? "product" : "product", pricingMode: current.usage === "stone" ? "FIXED" : parent?.slug === "vong-tay" ? "QUALITY_AND_BEAD_SIZE" : current.kind === "Đá quý" ? "QUALITY" : current.pricingMode ?? "FIXED", sortOrder: parent ? `${parent.sortOrder}.1` : "1" } : current); }}>{categories.filter((item) => item.id !== category.id && categoryLevel(item) === categoryLevel(category) - 1 && item.kind === category.kind && item.status === "Hoạt động" && (categoryLevel(category) !== 3 || (category.kind === "Đá quý" ? true : item.usage !== "stone"))).map((item) => <option key={item.id} value={item.id}>{item.name}{categoryLevel(item) > 1 ? ` · ${categories.find((parent) => parent.id === item.parentId)?.name ?? ""}` : ""}</option>)}</select></label>}
-          {category.parentId && category.kind === "Đá quý" && categoryLevel(category) === 2 && <label className="category-field"><span>Dùng danh mục này làm</span><select value={category.usage ?? "product"} onChange={(event) => { const usage = event.target.value as "product" | "stone"; update("usage", usage); update("pricingMode", usage === "stone" ? "FIXED" : "QUALITY"); }}><option value="product">Danh mục sản phẩm (ví dụ: Mặt đá quý)</option><option value="stone">Loại đá để gắn vào mặt đá (ví dụ: Opal)</option></select><small>Loại đá sẽ xuất hiện trong danh sách chọn; có thể tạo các dạng cắt bên dưới loại đá này.</small></label>}
-          {category.parentId && category.usage !== "stone" && category.kind !== "Khác" && <label className="category-field"><span>Cách định giá</span><select value={category.pricingMode ?? (category.kind === "Đá quý" ? "QUALITY" : "FIXED")} onChange={(event) => update("pricingMode", event.target.value as AdminCategory["pricingMode"])}><option value="FIXED">Giá cố định</option><option value="QUALITY">Giá theo chất lượng</option><option value="QUALITY_AND_BEAD_SIZE">Giá theo chất lượng và size hạt</option></select><small>Quy tắc giá sẽ tự áp dụng trong form tạo và sửa sản phẩm.</small></label>}
+          {category.parentId && <label className="category-field"><span>Danh mục cha cấp {categoryLevel(category) - 1}</span><select value={category.parentId} onChange={(event) => { const parent = categories.find((item) => item.id === event.target.value); setDraft((current) => current ? { ...current, parentId: parent?.id, kind: parent?.kind ?? current.kind, usage: categoryLevel(current) === 2 && parent?.kind === "Đá quý" ? current.usage ?? "product" : "product", pricingMode: current.usage === "stone" ? "FIXED" : current.kind === "Đá quý" ? "GEMSTONE_SIZE" : parent?.slug === "vong-tay" ? "QUALITY_AND_BEAD_SIZE" : current.pricingMode ?? "FIXED", sortOrder: parent ? `${parent.sortOrder}.1` : "1" } : current); }}>{categories.filter((item) => item.id !== category.id && categoryLevel(item) === categoryLevel(category) - 1 && item.kind === category.kind && item.status === "Hoạt động" && (categoryLevel(category) !== 3 || (category.kind === "Đá quý" ? true : item.usage !== "stone"))).map((item) => <option key={item.id} value={item.id}>{item.name}{categoryLevel(item) > 1 ? ` · ${categories.find((parent) => parent.id === item.parentId)?.name ?? ""}` : ""}</option>)}</select></label>}
+          {category.parentId && category.kind === "Đá quý" && categoryLevel(category) === 2 && <label className="category-field"><span>Dùng danh mục này làm</span><select value={category.usage ?? "product"} onChange={(event) => { const usage = event.target.value as "product" | "stone"; update("usage", usage); update("pricingMode", usage === "stone" ? "FIXED" : "GEMSTONE_SIZE"); }}><option value="product">Danh mục sản phẩm (ví dụ: Mặt đá quý)</option><option value="stone">Loại đá để gắn vào mặt đá (ví dụ: Opal)</option></select><small>Loại đá sẽ xuất hiện trong danh sách chọn; có thể tạo các dạng cắt bên dưới loại đá này.</small></label>}
+          {category.parentId && category.usage !== "stone" && category.kind !== "Khác" && <label className="category-field"><span>{category.kind === "Đá quý" ? "Cách định giá đá quý" : "Cách định giá"}</span><select value={category.pricingMode ?? (category.kind === "Đá quý" ? "GEMSTONE_SIZE" : "FIXED")} onChange={(event) => update("pricingMode", event.target.value as AdminCategory["pricingMode"])}>{category.kind === "Đá quý" ? <><option value="GEMSTONE_SIZE">Giá theo size</option><option value="GEMSTONE_CARAT">Giá theo carat (đơn giá / 1 ct)</option><option value="GEMSTONE_CARAT_AND_QUALITY">Giá theo carat và chất lượng (đơn giá / 1 ct)</option></> : <><option value="FIXED">Giá cố định</option><option value="QUALITY">Giá theo chất lượng</option><option value="QUALITY_AND_BEAD_SIZE">Giá theo chất lượng và size hạt</option></>}</select><small>{category.kind === "Đá quý" ? "Chọn quy tắc dùng khi nhập biến thể và lập Hồ sơ giá cho mặt đá trong danh mục này." : "Quy tắc giá sẽ tự áp dụng trong form tạo và sửa sản phẩm."}</small></label>}
           {creating && category.parentId && category.kind !== "Khác" && <p className="category-create-next-step">{category.usage === "stone" ? "Sau khi lưu loại đá, thêm các dạng cắt trong Sản phẩm → Loại đá → Mặt đá quý." : isGemstoneCut(category, categories) || category.kind === "Đá quý" && categoryLevel(category) === 3 ? "Dạng cắt này có thể chọn làm danh mục khi tạo hồ sơ mặt đá quý." : `Sau khi lưu danh mục cấp ${categoryLevel(category)}, màn hình sẽ chuyển sang tạo sản phẩm thuộc danh mục này.`}</p>}
           <label className="category-field"><span>Mô tả ngắn</span><textarea rows={3} maxLength={200} value={category.description ?? ""} onChange={(event) => update("description", event.target.value)} placeholder="Nhập mô tả ngắn về danh mục..."/><small className="category-counter">{(category.description ?? "").length}/200</small></label>
           <div className="category-status-setting"><div><strong>Trạng thái</strong></div><label className="category-switch"><input type="checkbox" checked={category.status === "Hoạt động"} onChange={(event) => update("status", event.target.checked ? "Hoạt động" : "Đã ẩn")}/><span/><small>{category.status}</small></label></div>
@@ -450,7 +450,7 @@ export default function CategoriesWorkspace({ categories, onSave, onDelete, onNo
 
         {activeTab === "media" && <div className="category-editor-fields">
           <div className="category-field"><span>Ảnh đại diện danh mục</span><label className="category-upload"><input type="file" accept="image/*" onChange={(event) => { void uploadImage(event.target.files?.[0]); event.currentTarget.value = ""; }}/>{category.image ? <img src={categoryImageUrl(category.image)} alt="Ảnh danh mục"/> : <><Icon name="image"/><strong>Chọn ảnh danh mục</strong><small>Ảnh sẽ tự thu nhỏ để dùng trong menu</small></>}</label></div>
-          <div className="category-field"><span>Banner trang danh mục</span><label className="category-upload category-banner-upload"><input type="file" accept="image/*" onChange={(event) => { void uploadBanner(event.target.files?.[0]); event.currentTarget.value = ""; }}/>{category.bannerUrl ? <img src={categoryImageUrl(category.bannerUrl)} alt={`Banner ${category.name}`}/> : <><Icon name="image"/><strong>Chọn ảnh banner</strong><small>Ảnh sẽ hiện đầu trang khi khách chọn danh mục này</small></>}</label><small>Ảnh được lưu trong PostgreSQL, dùng được cho danh mục mới và danh mục đã có.</small>{category.bannerUrl && <button type="button" className="category-remove-banner" onClick={() => update("bannerUrl", "")}>Gỡ banner khỏi danh mục</button>}</div>
+          <div className="category-field"><span>Banner trang danh mục</span><label className="category-upload category-banner-upload"><input type="file" accept="image/*" onChange={(event) => { void uploadBanner(event.target.files?.[0]); event.currentTarget.value = ""; }}/>{category.bannerUrl ? <img src={categoryImageUrl(category.bannerUrl)} alt={`Banner ${category.name}`}/> : <><Icon name="image"/><strong>Chọn ảnh banner</strong><small>Ảnh sẽ hiện đầu trang khi khách chọn danh mục này</small></>}</label><small>Ảnh được lưu trong thư viện media, dùng được cho danh mục mới và danh mục đã có.</small>{category.bannerUrl && <button type="button" className="category-remove-banner" onClick={() => update("bannerUrl", "")}>Gỡ banner khỏi danh mục</button>}</div>
           <div className="category-editor-actions"><button className="button button-quiet" onClick={cancel}>Hủy</button><button className="button button-primary" disabled={saving} onClick={save}>{saving ? "Đang lưu…" : "Lưu thay đổi"}</button></div>
         </div>}
 

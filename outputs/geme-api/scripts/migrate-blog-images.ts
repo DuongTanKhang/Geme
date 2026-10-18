@@ -2,11 +2,15 @@ import "dotenv/config";
 import { createHash } from "node:crypto";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client.js";
+import { MediaAssetsService } from "../src/media/media-assets.service.js";
+import { MediaStorageService } from "../src/media/media-storage.service.js";
+import type { PrismaService } from "../src/prisma/prisma.service.js";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL is required");
 
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
+const mediaAssets = new MediaAssetsService(prisma as unknown as PrismaService, new MediaStorageService());
 const dataImage = /^data:(image\/(?:png|jpeg|webp|gif|avif));base64,([A-Za-z0-9+/=]+)$/i;
 const cachedUrls = new Map<string, string>();
 
@@ -22,13 +26,14 @@ async function storeDataImage(value: string, alt: string) {
   const digest = createHash("sha256").update(bytes).digest("hex");
   const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.slice("image/".length);
   const sourceKey = `blog/${digest}.${extension}`;
-  const asset = await prisma.mediaAsset.upsert({
-    where: { sourceKey },
-    create: { filename: `blog-${digest}.${extension}`, sourceKey, mimeType, data: bytes, size: bytes.length, alt: alt.slice(0, 240) || null },
-    update: {},
-    select: { id: true },
+  const asset = await mediaAssets.save({
+    filename: `blog-${digest}.${extension}`,
+    sourceKey,
+    mimeType,
+    bytes,
+    alt: alt.slice(0, 240) || null,
   });
-  const url = `/media/${asset.id}`;
+  const url = asset.url;
   cachedUrls.set(value, url);
   return url;
 }

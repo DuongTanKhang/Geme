@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    if (!isSameOriginRequest(request)) return NextResponse.json({ message: "Yêu cầu không hợp lệ." }, { status: 403 });
+    if (!isSameOriginRequest(request, true)) return NextResponse.json({ message: "Yêu cầu không hợp lệ." }, { status: 403 });
     const accessToken = getCustomerAccessToken(request);
     if (!accessToken) {
       return NextResponse.json({ message: "Phiên đăng nhập đã hết hạn." }, { status: 401 });

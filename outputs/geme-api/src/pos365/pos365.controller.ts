@@ -1,9 +1,11 @@
-import { Controller, Get, Post } from "@nestjs/common";
+import { Body, Controller, Get, Post, UseGuards } from "@nestjs/common";
 import { ApiOperation, ApiTags } from "@nestjs/swagger";
+import { AdminAuthGuard } from "../admin-auth/admin-auth.guard.js";
 import { Pos365Service } from "./pos365.service.js";
 
 @ApiTags("integrations")
 @Controller("integrations/pos365")
+@UseGuards(AdminAuthGuard)
 export class Pos365Controller {
   constructor(private readonly pos365: Pos365Service) {}
 
@@ -29,6 +31,13 @@ export class Pos365Controller {
   @ApiOperation({ summary: "Đưa các giá bán đã cấu hình vào hàng đợi đồng bộ POS365" })
   syncProductPrices() {
     return this.pos365.queueAllProductPriceSync();
+  }
+
+  @Post("product-price-status")
+  @ApiOperation({ summary: "Đọc trạng thái đồng bộ giá theo mã hồ sơ sản phẩm" })
+  productPriceStatuses(@Body("productIds") productIds: unknown) {
+    const ids = Array.isArray(productIds) ? productIds.filter((id): id is string => typeof id === "string") : [];
+    return this.pos365.productPriceSyncStatuses(ids);
   }
 
   @Get("sync-summary")

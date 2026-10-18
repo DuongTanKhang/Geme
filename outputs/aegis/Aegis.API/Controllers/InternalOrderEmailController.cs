@@ -3,6 +3,7 @@ using System.Text;
 using Aegis.Application.Common.Models;
 using Aegis.Infrastructure.Email;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace Aegis.API.Controllers;
 
@@ -21,12 +22,13 @@ public sealed class InternalOrderEmailController : ControllerBase
     }
 
     [HttpPost("order-confirmation")]
+    [EnableRateLimiting("internal-email")]
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     public IActionResult QueueOrderConfirmation([FromBody] OrderConfirmationEmail request)
     {
         var expectedKey = _configuration["InternalApi:OrderEmailKey"];
         var suppliedKey = Request.Headers[ApiKeyHeader].ToString();
-        if (string.IsNullOrWhiteSpace(expectedKey))
+        if (string.IsNullOrWhiteSpace(expectedKey) || Encoding.UTF8.GetByteCount(expectedKey) < 32)
         {
             return StatusCode(StatusCodes.Status503ServiceUnavailable);
         }

@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { createHash } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service.js";
 import type { AegisCustomerIdentity } from "../auth/aegis-customer.guard.js";
+import { MediaAssetsService } from "../media/media-assets.service.js";
 
 type Input = Record<string, unknown>;
 
@@ -29,31 +30,38 @@ function parseAvatarDataUrl(value: unknown) {
 @Injectable()
 export class AccountService {
   private storefrontVisibilityCache: { expiresAt: number; where: Record<string, unknown> } | null = null;
+  private storefrontVisibilityLoad: Promise<Record<string, unknown>> | null = null;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly mediaAssets: MediaAssetsService) {}
 
   private async storefrontProductVisibilityWhere() {
     if (this.storefrontVisibilityCache && this.storefrontVisibilityCache.expiresAt > Date.now()) return this.storefrontVisibilityCache.where;
-    const categories = await this.prisma.category.findMany({ select: { id: true, parentId: true, name: true, kind: true, usage: true, level: true, status: true } });
-    const byId = new Map(categories.map((category) => [category.id, category]));
-    const visibleIds = new Set<string>();
-    const isVisible = (category: typeof categories[number] | undefined, path = new Set<string>()): boolean => {
-      if (!category || category.status !== "ACTIVE" || path.has(category.id)) return false;
-      if (!category.parentId) return true;
-      return isVisible(byId.get(category.parentId), new Set(path).add(category.id));
-    };
-    categories.forEach((category) => { if (isVisible(category)) visibleIds.add(category.id); });
-    const hiddenCuts = categories.filter((category) => category.kind === "GEMSTONE" && category.usage === "PRODUCT_CATEGORY" && category.level === 3 && category.parentId && !visibleIds.has(category.id));
-    const where = {
-      AND: [
-        { OR: [{ categoryId: null }, { categoryId: { in: [...visibleIds] } }] },
-        { OR: [{ gemstoneTypeId: null }, { gemstoneTypeId: { in: [...visibleIds] } }] },
-        { OR: [{ materialOptionId: null }, { materialOption: { active: true } }] },
-        ...hiddenCuts.map((cut) => ({ NOT: { kind: "GEMSTONE", gemstoneTypeId: cut.parentId, variants: { some: { quality: cut.name } } } })),
-      ],
-    };
-    this.storefrontVisibilityCache = { where, expiresAt: Date.now() + 2_000 };
-    return where;
+    if (this.storefrontVisibilityLoad) return this.storefrontVisibilityLoad;
+    const load = this.prisma.category.findMany({ select: { id: true, parentId: true, name: true, kind: true, usage: true, level: true, status: true } }).then((categories) => {
+      const byId = new Map(categories.map((category) => [category.id, category]));
+      const visibleIds = new Set<string>();
+      const isVisible = (category: typeof categories[number] | undefined, path = new Set<string>()): boolean => {
+        if (!category || category.status !== "ACTIVE" || path.has(category.id)) return false;
+        if (!category.parentId) return true;
+        return isVisible(byId.get(category.parentId), new Set(path).add(category.id));
+      };
+      categories.forEach((category) => { if (isVisible(category)) visibleIds.add(category.id); });
+      const hiddenCuts = categories.filter((category) => category.kind === "GEMSTONE" && category.usage === "PRODUCT_CATEGORY" && category.level === 3 && category.parentId && !visibleIds.has(category.id));
+      const where = {
+        AND: [
+          { OR: [{ categoryId: null }, { categoryId: { in: [...visibleIds] } }] },
+          { OR: [{ gemstoneTypeId: null }, { gemstoneTypeId: { in: [...visibleIds] } }] },
+          { OR: [{ materialOptionId: null }, { materialOption: { active: true } }] },
+          ...hiddenCuts.map((cut) => ({ NOT: { kind: "GEMSTONE", gemstoneTypeId: cut.parentId, variants: { some: { quality: cut.name } } } })),
+        ],
+      };
+      this.storefrontVisibilityCache = { where, expiresAt: Date.now() + 2_000 };
+      return where;
+    }).finally(() => {
+      if (this.storefrontVisibilityLoad === load) this.storefrontVisibilityLoad = null;
+    });
+    this.storefrontVisibilityLoad = load;
+    return load;
   }
 
   private async attachVerifiedEmailOrders(customerId: string, verifiedEmail: string) {
@@ -63,7 +71,7 @@ export class AccountService {
     // customer was signed in. Claim only unowned orders matching the verified
     // account email so they appear in this customer's history.
     await this.prisma.order.updateMany({
-      where: { customerId: null, customerEmail: { equals: email, mode: "insensitive" } },
+      where: { customerId: null, customerEmail: email },
       data: { customerId },
     });
   }
@@ -116,34 +124,22 @@ export class AccountService {
     }
     const avatar = Object.hasOwn(input, "avatarDataUrl") ? parseAvatarDataUrl(input.avatarDataUrl) : null;
     if (input.removeAvatar === true) data.avatarUrl = null;
-    if (avatar) data.avatarUrl = "";
+    if (avatar) {
+      const digest = createHash("sha256").update(avatar.bytes).digest("hex");
+      const asset = await this.mediaAssets.save({
+        filename: `avatar-${digest.slice(0, 16)}.${avatar.extension}`,
+        sourceKey: `customer-avatars/${customer.id}`,
+        mimeType: avatar.mimeType,
+        bytes: avatar.bytes,
+        alt: `Ảnh đại diện ${customer.name}`,
+        updateExisting: true,
+      });
+      data.avatarUrl = asset.url;
+    }
     if (!Object.keys(data).length) return this.profile(identity);
 
     try {
       await this.prisma.$transaction(async (transaction) => {
-        if (avatar) {
-          const digest = createHash("sha256").update(avatar.bytes).digest("hex");
-          const asset = await transaction.mediaAsset.upsert({
-            where: { sourceKey: `customer-avatars/${customer.id}` },
-            create: {
-              filename: `avatar-${digest.slice(0, 16)}.${avatar.extension}`,
-              sourceKey: `customer-avatars/${customer.id}`,
-              mimeType: avatar.mimeType,
-              data: new Uint8Array(avatar.bytes),
-              size: avatar.bytes.length,
-              alt: `Ảnh đại diện ${customer.name}`,
-            },
-            update: {
-              filename: `avatar-${digest.slice(0, 16)}.${avatar.extension}`,
-              mimeType: avatar.mimeType,
-              data: new Uint8Array(avatar.bytes),
-              size: avatar.bytes.length,
-              alt: `Ảnh đại diện ${customer.name}`,
-            },
-            select: { id: true },
-          });
-          data.avatarUrl = `/media/${asset.id}`;
-        }
         await transaction.customer.update({ where: { id: customer.id }, data });
       });
     } catch (error: any) {
@@ -161,16 +157,25 @@ export class AccountService {
       // customerId yet. Include only those unowned orders with this verified
       // email as a read fallback while the claim above links them permanently.
       where: {
-        OR: [
-          { customerId: customer.id },
-          { customerId: null, customerEmail: { equals: identity.email.trim().toLowerCase(), mode: "insensitive" } },
-        ],
+        customerId: customer.id,
       },
-      include: {
+      select: {
+        id: true,
+        code: true,
+        status: true,
+        shippingProvider: true,
+        shippingMethod: true,
+        trackingCode: true,
+        carrierStatusName: true,
+        carrierStatusAt: true,
+        totalAmount: true,
+        placedAt: true,
         items: {
-          include: {
+          select: {
+            productName: true,
+            quantity: true,
             product: {
-              include: { images: { orderBy: { sortOrder: "asc" }, take: 1 } },
+              select: { images: { orderBy: { sortOrder: "asc" }, take: 1, select: { url: true } } },
             },
           },
         },

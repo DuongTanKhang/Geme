@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Patch, Post, Req, UseGuards } from "@nestjs/common";
 import { AegisCustomerGuard, type AegisCustomerIdentity } from "../auth/aegis-customer.guard.js";
 import { CommerceService } from "../commerce/commerce.service.js";
+import { onlineOrderInput } from "../commerce/online-order-input.js";
 import { AccountService } from "./account.service.js";
 
 type AuthenticatedRequest = { customerIdentity: AegisCustomerIdentity };
@@ -54,6 +55,6 @@ export class AccountController {
   @Post("orders")
   async createOrder(@Req() request: AuthenticatedRequest, @Body() body: Record<string, any>) {
     const customerId = await this.account.customerId(request.customerIdentity);
-    return this.commerce.createOrder(body, customerId);
+    return this.commerce.createOrder(onlineOrderInput(body), customerId);
   }
 }

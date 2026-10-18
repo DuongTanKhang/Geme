@@ -28,7 +28,21 @@ type Pos365Config = {
 
 type Pos365Record = Record<string, any>;
 
+class Pos365HttpError extends Error {
+  constructor(message: string, readonly status: number, readonly retryAfterMs: number | null) {
+    super(message);
+    this.name = "Pos365HttpError";
+  }
+}
+
 const normalizedCode = (value: unknown) => String(value || "").trim().toLocaleUpperCase("en");
+const posVariantSellPrice = (product: Pos365Record, variant: Pos365Record) => {
+  const price = Number(variant.price) || 0;
+  const mode = product.category?.pricingMode;
+  return product.kind === "GEMSTONE" && ["GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"].includes(String(mode || ""))
+    ? Math.round(price * Number(variant.carat || 0))
+    : price;
+};
 const asNumber = (value: unknown) => {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -40,8 +54,14 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
   private syncTimer: NodeJS.Timeout | null = null;
   private processingQueue = false;
   private processingProductPriceQueue = false;
+  private productPriceSyncQueueRequested = false;
   private processingProductStockQueue = false;
   private processingOrderQueue = false;
+  private posRequestQueue: Promise<void> = Promise.resolve();
+  private posRequestNotBefore = 0;
+  private posRateLimitStreak = 0;
+  private readonly posRequestIntervalMs = 1000;
+  private readonly productPriceSyncRequests = new Set<string>();
   private cachedSession: { baseUrl: string; username: string; sessionId: string; expiresAt: number } | null = null;
 
   constructor(private readonly prisma: PrismaService) {}
@@ -56,7 +76,18 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     }, 15000);
     this.syncTimer.unref?.();
     void this.processPendingReceipts();
-    void this.processPendingProductPrices();
+    // Requeue records failed by earlier pricebook/branch-price verifiers so
+    // the corrected ProductSave path can write and verify the standard price.
+    void this.prisma.product.updateMany({
+      where: {
+        pos365PriceSyncStatus: "RETRYING",
+        OR: [
+          { pos365PriceSyncError: { contains: "giá chi nhánh" } },
+          { pos365PriceSyncError: { contains: "Bảng giá không tồn tại" } },
+        ],
+      },
+      data: { pos365PriceSyncStatus: "PENDING", pos365PriceSyncNextAttemptAt: new Date(), pos365PriceSyncError: null },
+    }).then(() => this.processPendingProductPrices()).catch((error) => this.logger.error(`Không thể đưa giá POS365 cần xác minh lại vào hàng đợi: ${this.safeErrorMessage(error)}`));
     void this.prisma.product.updateMany({
       where: { pos365StockSyncStatus: "DISABLED" },
       data: { pos365StockSyncStatus: "PENDING", pos365StockSyncNextAttemptAt: new Date(), pos365StockSyncError: null },
@@ -128,7 +159,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     const sessionId = await this.authenticate(config);
     const products = await this.prisma.product.findMany({
       orderBy: { sku: "asc" },
-      include: { variants: { orderBy: { sortOrder: "asc" } } },
+      include: { category: { select: { pricingMode: true } }, variants: { orderBy: { sortOrder: "asc" } } },
     });
     const receiptCosts = await this.prisma.inventoryReceiptItem.findMany({
       orderBy: { createdAt: "desc" },
@@ -147,7 +178,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
           if (!sku) throw new Error(`Sản phẩm ${product.name} có biến thể thiếu SKU riêng; chưa thể đồng bộ tồn an toàn.`);
           const key = normalizedCode(sku);
           if (linesBySku.has(key)) throw new Error(`SKU ${sku} bị lặp giữa nhiều biến thể hoặc sản phẩm; chưa thể đồng bộ tồn an toàn.`);
-          linesBySku.set(key, { sku, name: product.name, price: Number(variant.price) || 0, stock: variant.stock });
+          linesBySku.set(key, { sku, name: product.name, price: posVariantSellPrice(product, variant), stock: variant.stock });
         }
       } else {
         const key = normalizedCode(product.sku);
@@ -223,6 +254,22 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     await this.processPendingProductPrices(productId);
   }
 
+  async productPriceSyncStatuses(productIds: string[]) {
+    const ids = [...new Set(productIds.map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 500);
+    if (!ids.length) return [];
+    const rows = await this.prisma.product.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, sku: true, pos365PriceSyncStatus: true, pos365PriceSyncError: true, pos365PriceSyncedAt: true },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      sku: row.sku,
+      status: row.pos365PriceSyncStatus,
+      error: row.pos365PriceSyncError,
+      syncedAt: row.pos365PriceSyncedAt,
+    }));
+  }
+
   private async processPendingProductStocks() {
     if (this.processingProductStockQueue || !this.isSyncEnabled()) return;
     this.processingProductStockQueue = true;
@@ -244,39 +291,48 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
         take: 20,
         select: { id: true },
       });
+      const eligibleIds: string[] = [];
       for (const row of products) {
         const [pendingReceipts, pendingOrders] = await Promise.all([
           this.prisma.inventoryReceiptItem.count({ where: { productId: row.id, receipt: { pos365SyncStatus: { in: ["PENDING", "RETRYING", "SYNCING"] } } } }),
           this.prisma.orderItem.count({ where: { productId: row.id, order: { pos365SyncStatus: { in: ["PENDING", "RETRYING", "SYNCING"] } } } }),
         ]);
         if (pendingReceipts || pendingOrders) continue;
-        const claimedAt = new Date();
-        const claim = await this.prisma.product.updateMany({
-          where: {
-            id: row.id,
-            pos365StockSyncStatus: { in: ["PENDING", "RETRYING"] },
-            OR: [{ pos365StockSyncNextAttemptAt: null }, { pos365StockSyncNextAttemptAt: { lte: claimedAt } }],
+        eligibleIds.push(row.id);
+      }
+      if (!eligibleIds.length) return;
+
+      // Claim one bounded batch so the POS catalog is read once for many SKUs,
+      // instead of reloading every page once per product.
+      const claimedAt = new Date();
+      await this.prisma.product.updateMany({
+        where: {
+          id: { in: eligibleIds },
+          pos365StockSyncStatus: { in: ["PENDING", "RETRYING"] },
+          OR: [{ pos365StockSyncNextAttemptAt: null }, { pos365StockSyncNextAttemptAt: { lte: claimedAt } }],
         },
-          data: { pos365StockSyncStatus: "SYNCING", pos365StockSyncAttempts: { increment: 1 }, pos365StockSyncLastAttemptAt: claimedAt, pos365StockSyncNextAttemptAt: null },
+        data: { pos365StockSyncStatus: "SYNCING", pos365StockSyncAttempts: { increment: 1 }, pos365StockSyncLastAttemptAt: claimedAt, pos365StockSyncNextAttemptAt: null },
+      });
+      const claimed = await this.prisma.product.findMany({
+        where: { id: { in: eligibleIds }, pos365StockSyncStatus: "SYNCING", pos365StockSyncLastAttemptAt: claimedAt },
+        select: { id: true, pos365StockSyncAttempts: true },
+      });
+      const claimedIds = claimed.map((product) => product.id);
+      if (!claimedIds.length) return;
+      try {
+        await this.syncProductStockBatchByIds(claimedIds);
+        await this.prisma.product.updateMany({
+          where: { id: { in: claimedIds }, pos365StockSyncStatus: "SYNCING", pos365StockSyncLastAttemptAt: claimedAt },
+          data: { pos365StockSyncStatus: "SYNCED", pos365StockSyncError: null, pos365StockSyncNextAttemptAt: null, pos365StockSyncedAt: new Date() },
         });
-        if (!claim.count) continue;
-        try {
-          await this.syncProductStockById(row.id);
-          await this.prisma.product.updateMany({
-            where: { id: row.id, pos365StockSyncStatus: "SYNCING", pos365StockSyncLastAttemptAt: claimedAt },
-            data: { pos365StockSyncStatus: "SYNCED", pos365StockSyncError: null, pos365StockSyncNextAttemptAt: null, pos365StockSyncedAt: new Date() },
-          });
-        } catch (error) {
-          const latest = await this.prisma.product.findUnique({ where: { id: row.id }, select: { pos365StockSyncAttempts: true } });
-          const attempts = Number(latest?.pos365StockSyncAttempts || 1);
-          const delayMs = Math.min(60 * 60 * 1000, 15000 * (2 ** Math.min(attempts - 1, 7)));
-          const message = this.safeErrorMessage(error).slice(0, 2000);
-          await this.prisma.product.updateMany({
-            where: { id: row.id, pos365StockSyncStatus: "SYNCING", pos365StockSyncLastAttemptAt: claimedAt },
-            data: { pos365StockSyncStatus: "RETRYING", pos365StockSyncError: message, pos365StockSyncNextAttemptAt: new Date(Date.now() + delayMs) },
-          });
-          this.logger.warn(`Tồn SKU ${row.id} chưa đồng bộ POS365; sẽ tự thử lại. ${message}`);
-        }
+      } catch (error) {
+        const delayMs = Math.max(...claimed.map((product) => this.retryDelayMs(error, Number(product.pos365StockSyncAttempts || 1))));
+        const message = this.safeErrorMessage(error).slice(0, 2000);
+        await this.prisma.product.updateMany({
+          where: { id: { in: claimedIds }, pos365StockSyncStatus: "SYNCING", pos365StockSyncLastAttemptAt: claimedAt },
+          data: { pos365StockSyncStatus: "RETRYING", pos365StockSyncError: message, pos365StockSyncNextAttemptAt: new Date(Date.now() + delayMs) },
+        });
+        this.logger.warn(`Chưa đồng bộ được tồn POS365 theo lô ${claimedIds.length} SKU; sẽ tự thử lại. ${message}`);
       }
     } catch (error) {
       this.logger.error(`Không xử lý được hàng đợi tồn kho POS365: ${this.safeErrorMessage(error)}`);
@@ -285,44 +341,51 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async syncProductStockById(productId: string) {
+  private async syncProductStockBatchByIds(productIds: string[]) {
     const config = this.readConfiguration();
     if (!this.isSyncEnabled() || !config.baseUrl || !config.branchId) throw new Error("POS365 chưa bật đồng bộ tồn hoặc chưa chọn chi nhánh.");
-    const product = await this.prisma.product.findUnique({ where: { id: productId }, include: { variants: { orderBy: { sortOrder: "asc" } } } });
-    if (!product) return;
-    const targetLines = product.variants.length
-      ? product.variants.map((variant) => ({ sku: String(variant.sku || "").trim(), name: product.name, price: Number(variant.price) || 0, stock: variant.stock }))
-      : [{ sku: String(product.sku || "").trim(), name: product.name, price: Number(product.price) || 0, stock: product.stock }];
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: productIds } },
+      include: { category: { select: { pricingMode: true } }, variants: { orderBy: { sortOrder: "asc" } } },
+    });
+    const targetLines = products.flatMap((product) => product.variants.length
+      ? product.variants.map((variant) => ({ sku: String(variant.sku || "").trim(), name: product.name, price: posVariantSellPrice(product, variant), stock: variant.stock }))
+      : [{ sku: String(product.sku || "").trim(), name: product.name, price: Number(product.price) || 0, stock: product.stock }]);
+    if (!targetLines.length) return;
     const seen = new Set<string>();
     for (const line of targetLines) {
       const key = normalizedCode(line.sku);
-      if (!key || seen.has(key)) throw new Error(`SKU biến thể của ${product.name} bị thiếu hoặc trùng; tồn chưa được ghi sang POS365.`);
+      if (!key || seen.has(key)) throw new Error(`SKU biến thể của lô tồn bị thiếu hoặc trùng; tồn chưa được ghi sang POS365.`);
       seen.add(key);
     }
     const sessionId = await this.authenticate(config);
     let catalog = await this.readProducts(config, sessionId);
     for (const line of targetLines) {
       if (this.findProductByCode(catalog, line.sku)) continue;
-      catalog.push(await this.createProduct(config, sessionId, line.sku, line.name, line.price));
+      const existing = await this.findRemoteProductByCode(config, sessionId, line.sku);
+      catalog.push(existing || await this.createProduct(config, sessionId, line.sku, line.name, line.price));
     }
-    catalog = await this.readProducts(config, sessionId);
-    const details = targetLines.map((line) => {
+    const details: Pos365Record[] = [];
+    for (const line of targetLines) {
       const remote = this.findProductByCode(catalog, line.sku);
       if (!remote) throw new Error(`POS365 chưa có mặt hàng ${line.sku}.`);
       const onHand = asNumber(remote.OnHand ?? remote.TotalOnHand);
       if (onHand === null) throw new Error(`Không đọc được tồn POS365 hiện tại của ${line.sku}.`);
-      return { ProductId: Number(remote.Id), ActualCount: line.stock, OnHand: onHand, Cost: asNumber(remote.Cost ?? remote.AverageCost) ?? 0 };
-    });
-    const code = `GEME-STK-${product.id.replace(/-/g, "").slice(0, 8).toUpperCase()}-${Date.now()}`;
+      details.push({ ProductId: Number(remote.Id), ActualCount: line.stock, OnHand: onHand, Cost: asNumber(remote.Cost ?? remote.AverageCost) ?? 0 });
+    }
+    if (details.every((detail, index) => detail.OnHand === targetLines[index].stock)) return;
+    const code = `GEME-STK-BATCH-${Date.now()}`;
     await this.requestJson(new URL("/api/inventorycount", config.baseUrl), sessionId, {
       method: "POST",
       body: JSON.stringify({ InventoryCount: { Id: 0, Code: code, Status: 2, AdjustmentDate: new Date().toISOString().slice(0, 19).replace("T", " "), BranchId: config.branchId, InventoryCountDetails: details } }),
     });
     const verifiedCatalog = await this.readProducts(config, sessionId);
-    const mismatches = targetLines.flatMap((line) => {
-      const actual = asNumber(this.findProductByCode(verifiedCatalog, line.sku)?.OnHand ?? this.findProductByCode(verifiedCatalog, line.sku)?.TotalOnHand);
-      return actual === line.stock ? [] : [{ sku: line.sku, expected: line.stock, actual }];
-    });
+    const mismatches: { sku: string; expected: number; actual: number | null }[] = [];
+    for (const line of targetLines) {
+      const remote = this.findProductByCode(verifiedCatalog, line.sku);
+      const actual = asNumber(remote?.OnHand ?? remote?.TotalOnHand);
+      if (actual !== line.stock) mismatches.push({ sku: line.sku, expected: line.stock, actual });
+    }
     if (mismatches.length) throw new Error(`POS365 còn tồn chưa khớp cho ${mismatches.map((line) => line.sku).join(", ")}.`);
   }
 
@@ -385,24 +448,39 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
 
   async queueAllProductPriceSync() {
     if (!this.isSyncEnabled()) throw new Error("POS365 chưa bật đồng bộ giá hoặc chưa chọn chi nhánh.");
-    const products = await this.prisma.product.findMany({ include: { variants: true } });
+    const products = await this.prisma.product.findMany({ include: { category: { select: { pricingMode: true } }, variants: true } });
     const now = new Date();
-    let queued = 0;
     let skippedWithoutPrice = 0;
+    const eligibleIds: string[] = [];
     for (const product of products) {
       const prices = product.variants.length ? product.variants.map((variant) => Number(variant.price)) : [Number(product.price)];
       if (!prices.length || prices.some((price) => !Number.isFinite(price) || price <= 0)) {
         skippedWithoutPrice += 1;
         continue;
       }
-      await this.prisma.product.update({
-        where: { id: product.id },
+      eligibleIds.push(product.id);
+    }
+    if (eligibleIds.length) {
+      await this.prisma.product.updateMany({
+        where: { id: { in: eligibleIds } },
         data: { pos365PriceSyncStatus: "PENDING", pos365PriceSyncNextAttemptAt: now, pos365PriceSyncError: null },
       });
-      queued += 1;
+      // Wait for the first real POS pass so this endpoint does not report a
+      // successful queue operation while the user still sees no sync result.
+      await this.processPendingProductPrices();
     }
-    void this.processPendingProductPrices();
-    return { queued, skippedWithoutPrice };
+    const finalRows = eligibleIds.length ? await this.prisma.product.findMany({
+      where: { id: { in: eligibleIds } },
+      select: { pos365PriceSyncStatus: true },
+    }) : [];
+    return {
+      queued: eligibleIds.length,
+      skippedWithoutPrice,
+      synced: finalRows.filter((row) => row.pos365PriceSyncStatus === "SYNCED").length,
+      syncing: finalRows.filter((row) => row.pos365PriceSyncStatus === "SYNCING").length,
+      pending: finalRows.filter((row) => row.pos365PriceSyncStatus === "PENDING").length,
+      retrying: finalRows.filter((row) => row.pos365PriceSyncStatus === "RETRYING").length,
+    };
   }
 
   async queueUnsentOrders() {
@@ -489,7 +567,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
           const message = this.safeErrorMessage(error).slice(0, 2000);
           const needsConfiguration = message.startsWith("CONFIG_REQUIRED:");
           const attempts = Number(order.pos365SyncAttempts || 0) + 1;
-          const delayMs = Math.min(60 * 60 * 1000, 15000 * (2 ** Math.min(attempts - 1, 7)));
+          const delayMs = this.retryDelayMs(error, attempts);
           await this.prisma.order.update({
             where: { id: order.id },
             data: {
@@ -700,7 +778,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
           });
         } catch (error) {
           const attempts = Number(receipt.pos365SyncAttempts || 0) + 1;
-          const delayMs = Math.min(60 * 60 * 1000, 15000 * (2 ** Math.min(attempts - 1, 7)));
+          const delayMs = this.retryDelayMs(error, attempts);
           const message = this.safeErrorMessage(error).slice(0, 2000);
           await this.prisma.inventoryReceipt.update({
             where: { id: receipt.id },
@@ -717,8 +795,14 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processPendingProductPrices(onlyProductId?: string) {
-    if (this.processingProductPriceQueue || !this.isSyncEnabled()) return;
+    if (!this.isSyncEnabled()) return;
+    if (this.processingProductPriceQueue) {
+      if (onlyProductId) this.productPriceSyncRequests.add(onlyProductId);
+      else this.productPriceSyncQueueRequested = true;
+      return;
+    }
     this.processingProductPriceQueue = true;
+    let shouldDrainNextBatch = false;
     try {
       const now = new Date();
       const staleBefore = new Date(now.getTime() - 2 * 60 * 1000);
@@ -729,12 +813,17 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       const dueWhere: Pos365Record = {
         pos365PriceSyncStatus: { in: ["PENDING", "RETRYING"] },
         OR: [{ pos365PriceSyncNextAttemptAt: null }, { pos365PriceSyncNextAttemptAt: { lte: now } }],
+        // Receipt sync creates missing POS products with their current prices.
+        // Keep the price worker from racing that create and duplicating the SKU.
+        inventoryReceiptItems: { none: { receipt: { pos365SyncStatus: { in: ["PENDING", "RETRYING", "SYNCING"] } } } },
       };
       if (onlyProductId) dueWhere.id = onlyProductId;
       const products = await this.prisma.product.findMany({
         where: dueWhere,
         orderBy: { updatedAt: "asc" },
-        take: onlyProductId ? 1 : 10,
+        // Process a single SKU per turn so a newly saved price can jump ahead
+        // of the rest of a full-catalog sync after the current POS request.
+        take: 1,
         select: { id: true },
       });
       for (const row of products) {
@@ -753,29 +842,50 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
           },
         });
         if (!claim.count) continue;
-        const product = await this.prisma.product.findUnique({ where: { id: row.id }, include: { variants: { orderBy: { sortOrder: "asc" } } } });
+        const product = await this.prisma.product.findUnique({ where: { id: row.id }, include: { category: { select: { pricingMode: true } }, variants: { orderBy: { sortOrder: "asc" } } } });
         if (!product) continue;
         try {
           await this.sendProductPrices(product);
-          await this.prisma.product.update({
-            where: { id: product.id },
+          // Do not overwrite a newer price edit that arrived while the POS call
+          // was in flight. The edit resets the status/claim timestamp and must
+          // remain pending for the next queue pass.
+          await this.prisma.product.updateMany({
+            where: { id: product.id, pos365PriceSyncStatus: "SYNCING", pos365PriceSyncLastAttemptAt: claimedAt },
             data: { pos365PriceSyncStatus: "SYNCED", pos365PriceSyncError: null, pos365PriceSyncNextAttemptAt: null, pos365PriceSyncedAt: new Date() },
           });
         } catch (error) {
           const attempts = Number(product.pos365PriceSyncAttempts || 0) + 1;
-          const delayMs = Math.min(60 * 60 * 1000, 15000 * (2 ** Math.min(attempts - 1, 7)));
+          const delayMs = this.retryDelayMs(error, attempts);
           const message = this.safeErrorMessage(error).slice(0, 2000);
-          await this.prisma.product.update({
-            where: { id: product.id },
+          await this.prisma.product.updateMany({
+            where: { id: product.id, pos365PriceSyncStatus: "SYNCING", pos365PriceSyncLastAttemptAt: claimedAt },
             data: { pos365PriceSyncStatus: "RETRYING", pos365PriceSyncError: message, pos365PriceSyncNextAttemptAt: new Date(Date.now() + delayMs) },
           });
           this.logger.warn(`Giá SKU ${product.sku} chưa đồng bộ POS365; sẽ tự thử lại. ${message}`);
         }
       }
+      if (!onlyProductId) {
+        const nextNow = new Date();
+        shouldDrainNextBatch = (await this.prisma.product.count({
+          where: {
+            pos365PriceSyncStatus: { in: ["PENDING", "RETRYING"] },
+            OR: [{ pos365PriceSyncNextAttemptAt: null }, { pos365PriceSyncNextAttemptAt: { lte: nextNow } }],
+          },
+        })) > 0;
+      }
     } catch (error) {
       this.logger.error(`Không xử lý được hàng đợi đồng bộ giá POS365: ${this.safeErrorMessage(error)}`);
     } finally {
       this.processingProductPriceQueue = false;
+      const nextProductId = this.productPriceSyncRequests.values().next().value as string | undefined;
+      if (nextProductId) {
+        this.productPriceSyncRequests.delete(nextProductId);
+        if (this.productPriceSyncQueueRequested || shouldDrainNextBatch) this.productPriceSyncQueueRequested = true;
+        queueMicrotask(() => { void this.processPendingProductPrices(nextProductId); });
+      } else if (this.productPriceSyncQueueRequested || shouldDrainNextBatch) {
+        this.productPriceSyncQueueRequested = false;
+        queueMicrotask(() => { void this.processPendingProductPrices(); });
+      }
     }
   }
 
@@ -787,7 +897,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       ? product.variants.map((variant: Pos365Record) => ({
           sku: String(variant.sku || (product.variants.length === 1 ? product.sku : "")).trim(),
           name: String(product.name || product.sku).slice(0, 180),
-          price: Math.round(Number(variant.price) || 0),
+          price: posVariantSellPrice(product, variant),
         }))
       : [{ sku: String(product.sku || "").trim(), name: String(product.name || product.sku).slice(0, 180), price: Math.round(Number(product.price) || 0) }];
     for (const line of lines) line.name = line.name.slice(0, 180);
@@ -800,44 +910,54 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       if (!current) uniqueLines.set(key, line);
     }
 
-    const catalog = await this.readProducts(config, sessionId);
+    const verifiedLines: { sku: string; name: string; price: number }[] = [];
     for (const line of uniqueLines.values()) {
-      const existing = this.findProductByCode(catalog, line.sku);
+      const existing = await this.findRemoteProductByCode(config, sessionId, line.sku);
       if (!existing) {
-        const created = await this.createProduct(config, sessionId, line.sku, line.name, line.price);
-        catalog.push(created);
+        await this.createProduct(config, sessionId, line.sku, line.name, line.price);
       } else {
         const targetPrice = line.price > 0 ? line.price : Math.round(Number(existing.Price) || 0);
         const currentName = String(existing.Name || "").trim();
-        if (currentName === line.name && Math.round(Number(existing.Price) || 0) === targetPrice) continue;
-        if (normalizedCode(existing.Code) !== normalizedCode(line.sku)) throw new Error(`SKU POS365 của mặt hàng ${line.sku} không khớp; dừng để tránh sửa nhầm mã.`);
-        const saved = await this.requestJson(new URL("/api/products", config.baseUrl), sessionId, {
-          method: "POST",
-          body: JSON.stringify({
-            Product: {
-              Id: Number(existing.Id),
-              Code: String(existing.Code || line.sku),
-              Name: String(line.name || existing.Name || line.sku).slice(0, 180),
-              ProductType: asNumber(existing.ProductType) ?? 1,
-              Price: targetPrice,
-              Unit: String(existing.Unit || "Cái"),
-              CategoryId: existing.CategoryId ?? null,
-            },
-          }),
-        }) as Pos365Record;
-        const savedId = asNumber(saved?.Id ?? saved?.Product?.Id);
-        if (savedId !== null && savedId !== Number(existing.Id)) throw new Error(`POS365 trả về mã khác khi cập nhật giá SKU ${line.sku}.`);
+        const currentPrice = Math.round(Number(existing.Price) || 0);
+        if (currentName !== line.name || currentPrice !== targetPrice) {
+          if (normalizedCode(existing.Code) !== normalizedCode(line.sku)) throw new Error(`SKU POS365 của mặt hàng ${line.sku} không khớp; dừng để tránh sửa nhầm mã.`);
+          const saved = await this.requestJson(new URL("/api/products", config.baseUrl), sessionId, {
+            method: "POST",
+            body: JSON.stringify({
+              Product: {
+                Id: Number(existing.Id),
+                Code: String(existing.Code || line.sku),
+                Name: String(line.name || existing.Name || line.sku).slice(0, 180),
+                ProductType: asNumber(existing.ProductType) ?? 1,
+                Price: targetPrice,
+                Unit: String(existing.Unit || "Cái"),
+                CategoryId: existing.CategoryId ?? null,
+              },
+              // POS365 ProductSave owns the standard list price and can also
+              // set the branch selling price. Do not send this through the
+              // custom pricebook import endpoint: the default “Giá niêm yết”
+              // book is not a custom PriceBook record in every tenant.
+              PriceByBranch: targetPrice,
+            }),
+          }) as Pos365Record;
+          const savedId = asNumber(saved?.Id ?? saved?.Product?.Id);
+          if (savedId !== null && savedId !== Number(existing.Id)) throw new Error(`POS365 trả về mã khác khi cập nhật giá SKU ${line.sku}.`);
+        }
       }
+      verifiedLines.push(line);
     }
 
-    const verified = await this.readProducts(config, sessionId);
-    const mismatches = [...uniqueLines.values()].flatMap((line) => {
-      const remote = this.findProductByCode(verified, line.sku);
+    const mismatches = [] as { sku: string; expectedName: string; actualName: string | null; expectedPrice: number | null; actualPrice: unknown }[];
+    for (const line of verifiedLines) {
+      const remote = await this.findRemoteProductByCode(config, sessionId, line.sku);
       const nameMatches = String(remote?.Name || "").trim() === line.name;
       const priceMatches = line.price <= 0 || Math.round(Number(remote?.Price) || 0) === line.price;
-      return nameMatches && priceMatches ? [] : [{ sku: line.sku, expectedName: line.name, actualName: remote?.Name ?? null, expectedPrice: line.price || null, actualPrice: remote?.Price ?? null }];
-    });
-    if (mismatches.length) throw new Error(`POS365 chưa lưu đúng tên hoặc giá cho SKU: ${mismatches.map((row) => row.sku).join(", ")}.`);
+      if (!nameMatches || !priceMatches) mismatches.push({ sku: line.sku, expectedName: line.name, actualName: remote?.Name ?? null, expectedPrice: line.price || null, actualPrice: remote?.Price ?? null });
+    }
+    if (mismatches.length) {
+      const details = mismatches.map((row) => `${row.sku}: giá POS365 ${row.actualPrice ?? "—"}/${row.expectedPrice ?? "—"}`).join("; ");
+      throw new Error(`POS365 chưa lưu đúng tên hoặc giá cho SKU: ${details}.`);
+    }
   }
 
   private async sendPurchaseReceipt(receipt: Pos365Record) {
@@ -851,7 +971,9 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       if (!sku) throw new Error(`Dòng hàng ${item.productName || "không tên"} thiếu SKU để ghép POS365.`);
       const productName = String(item.product?.name || item.productName || sku);
       const salePrice = Number(item.variant?.price ?? item.product?.price) || 0;
-      const remote = this.findProductByCode(catalog, sku) || await this.createProduct(config, sessionId, sku, productName, salePrice);
+      let remote = this.findProductByCode(catalog, sku);
+      if (!remote) remote = await this.findRemoteProductByCode(config, sessionId, sku);
+      if (!remote) remote = await this.createProduct(config, sessionId, sku, productName, salePrice);
       if (!this.findProductByCode(catalog, sku)) catalog.push(remote);
       details.push({ ProductId: Number(remote.Id), Quantity: Number(item.quantity), Price: Number(item.unitCost) });
     }
@@ -902,7 +1024,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
   private async createProduct(config: Pos365Config, sessionId: string, sku: string, name: string, price: number) {
     const saved = await this.requestJson(new URL("/api/products", config.baseUrl!), sessionId, {
       method: "POST",
-      body: JSON.stringify({ Product: { Id: 0, Code: sku, Name: String(name || sku).slice(0, 180), ProductType: 1, Price: Math.max(0, Math.round(price)), Unit: "Cái", CategoryId: null } }),
+      body: JSON.stringify({ Product: { Id: 0, Code: sku, Name: String(name || sku).slice(0, 180), ProductType: 1, Price: Math.max(0, Math.round(price)), Unit: "Cái", CategoryId: null }, PriceByBranch: Math.max(0, Math.round(price)) }),
     }) as Pos365Record;
     const id = asNumber(saved?.Id ?? saved?.Product?.Id);
     if (!id) throw new Error(`POS365 không trả mã mặt hàng sau khi tạo SKU ${sku}.`);
@@ -913,6 +1035,15 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     const key = normalizedCode(sku);
     const matches = catalog.filter((product) => normalizedCode(product.Code) === key);
     if (matches.length > 1) throw new Error(`POS365 có nhiều mặt hàng dùng SKU ${sku}; dừng để tránh nhập nhầm.`);
+    return matches[0] || null;
+  }
+
+  private async findRemoteProductByCode(config: Pos365Config, sessionId: string, sku: string) {
+    const code = sku.trim();
+    const filter = encodeURIComponent(`Code eq '${code.replace(/'/g, "''")}'`);
+    const page = await this.requestJson(new URL(`/api/products?format=json&$top=10&$skip=0&$filter=${filter}`, config.baseUrl!), sessionId);
+    const matches = this.rows(page).filter((product) => normalizedCode(product.Code) === normalizedCode(code)) as Pos365Record[];
+    if (matches.length > 1) throw new Error(`POS365 có nhiều mặt hàng dùng SKU ${sku}; dừng để tránh sửa nhầm.`);
     return matches[0] || null;
   }
 
@@ -927,8 +1058,14 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       all.push(...rows);
       const count = asNumber((page as Pos365Record)?.__count);
       if (count !== null) expected = count;
-      if (rows.length < pageSize) break;
+      if (rows.length === 0) break;
       skip += rows.length;
+      // POS365 may cap a requested $top=500 page to 100 rows while still
+      // returning the full __count. Keep paging until that count is reached;
+      // otherwise only the first page is cached and every later SKU triggers
+      // a slow one-by-one lookup (or is missed by callers that rely on this
+      // catalog snapshot).
+      if (count === null && rows.length < pageSize) break;
       if (skip > 100000) throw new Error("Danh mục POS365 vượt giới hạn phân trang an toàn.");
     }
     return all;
@@ -947,11 +1084,10 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     if (cached && cached.baseUrl === config.baseUrl && cached.username === config.username && cached.expiresAt > Date.now()) {
       return cached.sessionId;
     }
-    const response = await fetch(new URL("/api/auth", config.baseUrl!), {
+    const response = await this.fetchPos365(new URL("/api/auth", config.baseUrl!), {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ UserName: config.username, Password: config.password }),
-      signal: AbortSignal.timeout(20000),
       cache: "no-store",
     });
     if (response.status === 401) throw new Error("POS365 từ chối thông tin đăng nhập.");
@@ -967,7 +1103,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     headers.set("accept", "application/json");
     headers.set("cookie", `ss-id=${sessionId}`);
     if (init.body) headers.set("content-type", "application/json");
-    const response = await fetch(url, { ...init, headers, signal: init.signal || AbortSignal.timeout(20000), cache: "no-store" });
+    const response = await this.fetchPos365(url, { ...init, headers, cache: "no-store" });
     if (response.status === 401) this.cachedSession = null;
     return this.responseBody(response);
   }
@@ -978,15 +1114,91 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     try { body = text ? JSON.parse(text) : {}; } catch { body = { message: text.slice(0, 300) }; }
     if (!response.ok) {
       const message = body?.ResponseStatus?.Message || body?.message || body?.Message || `POS365 trả về lỗi HTTP ${response.status}.`;
-      throw new Error(String(message).slice(0, 500));
+      const rateLimited = response.status === 429 || /TooManyRequests|rate.?limit/i.test(String(message));
+      const retryAfterMs = this.parseRetryAfter(response.headers.get("retry-after"));
+      // POS365 sometimes returns its TooManyRequests envelope with a non-429
+      // HTTP status. Treat the payload as a global rate limit too, otherwise
+      // each worker keeps hammering the same endpoint while individual rows
+      // back off independently.
+      throw new Pos365HttpError(String(message).slice(0, 500), rateLimited ? 429 : response.status, retryAfterMs);
     }
     return body;
   }
 
   private safeErrorMessage(error: unknown) {
+    if (error instanceof Pos365HttpError && error.status === 429) {
+      const retrySeconds = Math.ceil((error.retryAfterMs ?? 60_000) / 1000);
+      return `POS365 đang giới hạn số request; hệ thống sẽ tạm dừng và thử lại sau khoảng ${retrySeconds} giây.`;
+    }
     const name = error instanceof Error ? error.name : "";
     if (name === "TimeoutError" || name === "AbortError") return "POS365 phản hồi quá thời gian chờ; hệ thống sẽ tự thử lại.";
     return error instanceof Error ? error.message : "Không thể gọi POS365.";
+  }
+
+  private retryDelayMs(error: unknown, attempts: number) {
+    const exponentialDelay = Math.min(60 * 60 * 1000, 15000 * (2 ** Math.min(attempts - 1, 7)));
+    if (!(error instanceof Pos365HttpError) || error.status !== 429) return exponentialDelay;
+    return Math.max(exponentialDelay, error.retryAfterMs ?? 60_000);
+  }
+
+  private parseRetryAfter(value: string | null) {
+    const header = String(value || "").trim();
+    if (!header) return null;
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(60 * 60 * 1000, seconds * 1000);
+    const timestamp = Date.parse(header);
+    if (!Number.isFinite(timestamp)) return null;
+    return Math.min(60 * 60 * 1000, Math.max(0, timestamp - Date.now()));
+  }
+
+  private async fetchPos365(url: URL, init: RequestInit) {
+    let release = () => {};
+    const previous = this.posRequestQueue;
+    this.posRequestQueue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      const waitMs = Math.max(0, this.posRequestNotBefore - Date.now());
+      if (waitMs) await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+      this.posRequestNotBefore = Date.now() + this.posRequestIntervalMs;
+      // Start the network timeout after the serialized/rate-limit wait, or a
+      // request can expire before it reaches POS365 while waiting its turn.
+      const response = await fetch(url, { ...init, signal: init.signal || AbortSignal.timeout(20000) });
+      // Keep the global request gate until the response body is consumed. A
+      // POS response can arrive with headers first and stream its body later;
+      // releasing the gate at headers would let the next worker overlap it.
+      const payload = await response.arrayBuffer();
+      const bufferedBody = [204, 205, 304].includes(response.status) ? null : payload;
+      const bufferedResponse = new Response(bufferedBody, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+      if (response.status === 429) {
+        this.pauseForRateLimit(this.parseRetryAfter(response.headers.get("retry-after")));
+      } else if (response.ok) {
+        this.posRateLimitStreak = 0;
+      } else {
+        let body: Pos365Record = {};
+        try { body = payload.byteLength ? JSON.parse(new TextDecoder().decode(payload)) : {}; } catch { /* responseBody keeps the existing text fallback */ }
+        const message = body?.ResponseStatus?.Message || body?.message || body?.Message || "";
+        if (/TooManyRequests|rate.?limit/i.test(String(message))) {
+          this.pauseForRateLimit(this.parseRetryAfter(response.headers.get("retry-after")));
+        }
+      }
+      return bufferedResponse;
+    } catch (error) {
+      this.posRequestNotBefore = Math.max(this.posRequestNotBefore, Date.now() + 5000);
+      throw error;
+    } finally {
+      release();
+    }
+  }
+
+  private pauseForRateLimit(retryAfterMs: number | null) {
+    this.posRateLimitStreak = Math.min(this.posRateLimitStreak + 1, 5);
+    const serverDelay = retryAfterMs ?? 60_000;
+    const backoffDelay = Math.min(15 * 60 * 1000, 60_000 * (2 ** (this.posRateLimitStreak - 1)));
+    this.posRequestNotBefore = Math.max(this.posRequestNotBefore, Date.now() + Math.max(serverDelay, backoffDelay));
   }
 
   private readConfiguration(): Pos365Config {

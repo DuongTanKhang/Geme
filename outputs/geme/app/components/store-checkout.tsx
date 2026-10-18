@@ -14,6 +14,8 @@ type CheckoutLine = {
   price: number;
   quality: string | null;
   beadSize: string | null;
+  carat?: number | null;
+  gemstoneQuality?: string | null;
   quantity: number;
   stock: number;
 };
@@ -132,7 +134,7 @@ export function StoreCheckout() {
     {lines.length ? <div className="checkout-layout">
       <section className="checkout-products" aria-label="Sản phẩm đặt hàng">
         {lines.map((line) => <article className="checkout-line" key={line.key}>
-          <div className="checkout-line-copy"><a href={`/san-pham/${encodeURIComponent(line.slug)}`}>{line.name}</a><small>SKU {line.sku}{line.quality ? ` · ${line.quality}` : ""}{line.beadSize ? ` · ${line.beadSize}` : ""}</small><strong>{formatStorePrice(line.price)}</strong></div>
+          <div className="checkout-line-copy"><a href={`/san-pham/${encodeURIComponent(line.slug)}`}>{line.name}</a><small>SKU {line.sku}{line.quality ? ` · ${line.quality}` : ""}{line.beadSize ? ` · ${line.beadSize}` : ""}{line.carat != null ? ` · ${line.carat} ct` : ""}{line.gemstoneQuality ? ` · Chất lượng ${line.gemstoneQuality}` : ""}</small><strong>{formatStorePrice(line.price)}</strong></div>
           <div className="checkout-line-quantity"><button type="button" onClick={() => changeQuantity(line.key, -1)} aria-label={`Giảm số lượng ${line.name}`}>−</button><span>{line.quantity}</span><button type="button" onClick={() => changeQuantity(line.key, 1)} disabled={line.quantity >= line.stock} aria-label={`Tăng số lượng ${line.name}`}>+</button></div>
         </article>)}
         <div className="checkout-total"><span>Tạm tính</span><strong>{formatStorePrice(total)}</strong></div>

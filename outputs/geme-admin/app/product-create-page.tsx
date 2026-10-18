@@ -20,9 +20,9 @@ type Props = {
 
 type TabKey = "basic" | "images" | "variants" | "seo" | "other";
 
-type PricingMode = "FIXED" | "QUALITY" | "QUALITY_AND_BEAD_SIZE";
+type PricingMode = "FIXED" | "QUALITY" | "QUALITY_AND_BEAD_SIZE" | "GEMSTONE_SIZE" | "GEMSTONE_CARAT" | "GEMSTONE_CARAT_AND_QUALITY";
 type InventorySkuRule = { categoryId: string; materialOptionIds?: string[]; materialPrefixes?: { materialOptionId: string }[] };
-const qualityPricing = (mode?: PricingMode) => mode === "QUALITY" || mode === "QUALITY_AND_BEAD_SIZE";
+const qualityPricing = (mode?: PricingMode) => mode === "QUALITY" || mode === "QUALITY_AND_BEAD_SIZE" || mode === "GEMSTONE_SIZE" || mode === "GEMSTONE_CARAT" || mode === "GEMSTONE_CARAT_AND_QUALITY";
 
 const tabs: { key: TabKey; label: string }[] = [
   { key: "basic", label: "Thông tin cơ bản" },
@@ -37,6 +37,7 @@ const money = (value: number) => `${new Intl.NumberFormat("vi-VN").format(value 
 function fromInventoryProduct(value: Record<string, any>): AdminProduct {
   const variants = Array.isArray(value.variants) ? value.variants.map((variant: Record<string, any>) => ({
     id: String(variant.id || ""), sku: variant.sku || null, quality: String(variant.quality || "Standard"), beadSize: variant.beadSize || undefined,
+    carat: variant.carat == null ? null : Number(variant.carat), gemstoneQuality: variant.gemstoneQuality || null,
     price: Number(variant.price) || 0, originalPrice: Number(variant.originalPrice) || undefined, stock: Number(variant.stock) || 0,
     imageUrls: Array.isArray(variant.imageUrls) ? variant.imageUrls.filter((url: unknown) => typeof url === "string") : [], videoUrl: variant.videoUrl || null,
   })) : [];
@@ -93,7 +94,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     categoryId: initialProductCategory?.id,
     materialOptionId: initialMaterial?.id,
     gemstoneTypeId: initialGemstoneTypeId,
-    categoryPricingMode: initialProductCategory?.pricingMode ?? (initialType === "Đá quý" ? "QUALITY" : "FIXED"),
+    categoryPricingMode: initialProductCategory?.pricingMode ?? (initialType === "Đá quý" ? "GEMSTONE_SIZE" : "FIXED"),
     subcategory: initialMaterial?.name ?? "",
     description: "",
     fullDescription: "",
@@ -187,6 +188,9 @@ export default function ProductCreatePage({ products, categories: categoryRecord
   const hasVariantPrices = variantRows.length > 0;
   const sizeOnlyVariants = hasVariantPrices && variantRows.every((variant) => variant.quality === "Kích thước");
   const hasVariantSizes = variantRows.some((variant) => Boolean(variant.beadSize));
+  const hasVariantCarats = variantRows.some((variant) => variant.carat != null);
+  const hasVariantGemstoneQualities = variantRows.some((variant) => Boolean(variant.gemstoneQuality));
+  const usesCaratPricing = isGemstone && (product.categoryPricingMode === "GEMSTONE_CARAT" || product.categoryPricingMode === "GEMSTONE_CARAT_AND_QUALITY");
   const variantPrices = variantRows.map((item) => item.price).filter((price) => price > 0);
   const previewPrice = hasVariantPrices ? (variantPrices.length ? Math.min(...variantPrices) : 0) : product.price;
   const previewImage = imagePreview || product.image || "";
@@ -224,7 +228,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
       categoryId: undefined,
       materialOptionId: undefined,
       gemstoneTypeId: undefined,
-      categoryPricingMode: value === "Đá quý" ? "QUALITY" : "FIXED",
+      categoryPricingMode: value === "Đá quý" ? "GEMSTONE_SIZE" : "FIXED",
       subcategory: "",
       qualityGrades: value === "Đá quý" ? ["A", "AA", "AAA"] : [],
       beadSizes: [],
@@ -237,7 +241,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
   const changeCategory = (categoryId: string) => {
     setSelectedInventoryId("");
     const record = availableCategoryRecords.find((item) => item.id === categoryId) ?? categories.find((item) => item.id === categoryId);
-    const mode = record?.pricingMode ?? (product.productType === "Đá quý" ? "QUALITY" : "FIXED");
+    const mode = record?.pricingMode ?? (product.productType === "Đá quý" ? "GEMSTONE_SIZE" : "FIXED");
     const gemstoneType = isGemstone ? record : undefined;
     setProduct((current) => ({
       ...current,
@@ -257,7 +261,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
   };
 
   const updateVariant = (variant: ProductPriceVariant, patch: Partial<ProductPriceVariant>) => {
-    const keyOf = (item: ProductPriceVariant) => `${item.quality}::${item.beadSize ?? ""}`;
+    const keyOf = (item: ProductPriceVariant) => `${item.quality}::${item.beadSize ?? ""}::${item.carat ?? ""}::${item.gemstoneQuality ?? ""}`;
     update("priceVariants", variantRows.map((item) => (variant.id && item.id === variant.id) || (variant.sku && item.sku === variant.sku) || keyOf(item) === keyOf(variant) ? { ...item, ...patch } : item));
   };
 
@@ -497,7 +501,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
 
         {activeTab === "variants" && <section className="create-card create-tab-card">
           <div className="create-card-title"><div><h2>Thông số &amp; Biến thể</h2><p>Biến thể, tồn và giá bán lấy theo SKU từ Hồ sơ sản phẩm; tại đây chỉ cập nhật ảnh và video.</p></div></div>
-          {variantRows.length > 0 ? <div className="create-variant-table-wrap"><table className="create-variant-table"><thead><tr><th>{sizeOnlyVariants ? "Kích thước vòng" : "Chất lượng"}</th>{hasVariantSizes && !sizeOnlyVariants && <th>Kích thước hạt</th>}<th>SKU con</th><th>Tồn kho</th><th>Giá theo hồ sơ SKU</th><th>Ảnh / video biến thể</th></tr></thead><tbody>{variantRows.map((variant) => { const uploadKey = variant.sku || `${variant.quality}-${variant.beadSize || ""}`; const mediaCount = (variant.imageUrls?.length || 0) + (variant.videoUrl ? 1 : 0); return <tr key={`${variant.sku || variant.quality}-${variant.beadSize ?? "standard"}`}><td><strong>{sizeOnlyVariants ? (variant.beadSize || variant.quality) : variant.quality}</strong></td>{hasVariantSizes && !sizeOnlyVariants && <td>{variant.beadSize || "—"}</td>}<td><code>{variant.sku || "—"}</code></td><td>{Number(variant.stock) || 0}</td><td>{money(variant.price)}</td><td><div className="create-variant-media"><div className="create-variant-media-images">{(variant.imageUrls || []).map((url, index) => <span key={`${url.slice(0, 40)}-${index}`}><img src={url} alt={`Ảnh ${variant.sku} ${index + 1}`}/><button type="button" aria-label={`Xóa ảnh biến thể ${index + 1}`} onClick={() => updateVariant(variant, { imageUrls: (variant.imageUrls || []).filter((_, imageIndex) => imageIndex !== index) })}>×</button></span>)}</div><div className="create-variant-media-actions"><label className="create-variant-media-picker"><input type="file" accept="image/*" multiple disabled={Boolean(uploadingVariantMedia[uploadKey]) || mediaCount >= MAX_VARIANT_MEDIA_ITEMS} onChange={(event) => { void handleVariantImages(variant, event.target.files ?? undefined); event.currentTarget.value = ""; }}/><span>{uploadingVariantMedia[uploadKey] ? "Đang xử lý ảnh…" : "＋ Thêm ảnh"}</span></label><label className="create-variant-media-picker"><input type="file" accept="video/mp4,video/webm,.mp4,.webm" disabled={Boolean(uploadingVariantMedia[uploadKey]) || (!variant.videoUrl && mediaCount >= MAX_VARIANT_MEDIA_ITEMS)} onChange={(event) => { void handleVariantVideo(variant, event.target.files?.[0]); event.currentTarget.value = ""; }}/><span>{uploadingVariantMedia[uploadKey] ? "Đang tải video…" : variant.videoUrl ? "＋ Đổi video" : "＋ Tải video"}</span></label></div><small className="create-variant-media-limit">{mediaCount}/{MAX_VARIANT_MEDIA_ITEMS} tệp · tính cả video</small><label className="create-variant-media-url"><span>Đường dẫn video</span><input type="url" value={variant.videoUrl || ""} onChange={(event) => { const value = event.target.value || null; if (value && !variant.videoUrl && (variant.imageUrls?.length || 0) >= MAX_VARIANT_MEDIA_ITEMS) { onNotify(`Mỗi biến thể tối đa ${MAX_VARIANT_MEDIA_ITEMS} tệp, tính cả video.`); return; } updateVariant(variant, { videoUrl: value }); }} placeholder="https://… hoặc /media/…"/></label>{variant.videoUrl && <video className="create-variant-video-preview" src={variant.videoUrl} controls playsInline preload="metadata" aria-label={`Video ${variant.sku || variant.quality}`}/>}</div></td></tr>; })}</tbody></table><small className="create-inventory-variant-help">Biến thể, SKU và tồn chỉ lấy từ kho. Mỗi SKU con lưu tối đa 5 ảnh/video cộng lại; giá luôn lấy từ Hồ sơ sản phẩm theo SKU.</small></div> : <div className="create-empty-variants"><span>◇</span><strong>{usesQualityPricing ? "Chưa có biến thể trong kho" : "Sản phẩm dùng một giá chung"}</strong><p>{usesQualityPricing ? "Hãy tạo chất lượng, size và số lượng biến thể trong phiếu nhập kho trước. Giá sẽ lấy từ Hồ sơ sản phẩm." : "Giá bán lấy từ hồ sơ sản phẩm; tồn kho được quản lý riêng trong Quản lý tồn kho."}</p></div>}
+          {variantRows.length > 0 ? <div className="create-variant-table-wrap"><table className="create-variant-table"><thead><tr><th>{isGemstone ? "Dạng cắt" : sizeOnlyVariants ? "Kích thước vòng" : "Chất lượng"}</th>{hasVariantSizes && <th>Size</th>}{hasVariantCarats && <th>Carat</th>}{hasVariantGemstoneQualities && <th>Chất lượng đá</th>}<th>SKU con</th><th>Tồn kho</th><th>{usesCaratPricing ? "Giá / 1 ct" : "Giá theo hồ sơ SKU"}</th><th>Ảnh / video biến thể</th></tr></thead><tbody>{variantRows.map((variant) => { const uploadKey = variant.sku || `${variant.quality}-${variant.beadSize || ""}-${variant.carat || ""}`; const mediaCount = (variant.imageUrls?.length || 0) + (variant.videoUrl ? 1 : 0); return <tr key={`${variant.sku || variant.quality}-${variant.beadSize ?? "standard"}-${variant.carat ?? ""}`}><td><strong>{sizeOnlyVariants ? (variant.beadSize || variant.quality) : variant.quality}</strong></td>{hasVariantSizes && <td>{variant.beadSize || "—"}</td>}{hasVariantCarats && <td>{variant.carat ? `${variant.carat} ct` : "—"}</td>}{hasVariantGemstoneQualities && <td>{variant.gemstoneQuality || "—"}</td>}<td><code>{variant.sku || "—"}</code></td><td>{Number(variant.stock) || 0}</td><td>{money(variant.price)}</td><td><div className="create-variant-media"><div className="create-variant-media-images">{(variant.imageUrls || []).map((url, index) => <span key={`${url.slice(0, 40)}-${index}`}><img src={url} alt={`Ảnh ${variant.sku} ${index + 1}`}/><button type="button" aria-label={`Xóa ảnh biến thể ${index + 1}`} onClick={() => updateVariant(variant, { imageUrls: (variant.imageUrls || []).filter((_, imageIndex) => imageIndex !== index) })}>×</button></span>)}</div><div className="create-variant-media-actions"><label className="create-variant-media-picker"><input type="file" accept="image/*" multiple disabled={Boolean(uploadingVariantMedia[uploadKey]) || mediaCount >= MAX_VARIANT_MEDIA_ITEMS} onChange={(event) => { void handleVariantImages(variant, event.target.files ?? undefined); event.currentTarget.value = ""; }}/><span>{uploadingVariantMedia[uploadKey] ? "Đang xử lý ảnh…" : "＋ Thêm ảnh"}</span></label><label className="create-variant-media-picker"><input type="file" accept="video/mp4,video/webm,.mp4,.webm" disabled={Boolean(uploadingVariantMedia[uploadKey]) || (!variant.videoUrl && mediaCount >= MAX_VARIANT_MEDIA_ITEMS)} onChange={(event) => { void handleVariantVideo(variant, event.target.files?.[0]); event.currentTarget.value = ""; }}/><span>{uploadingVariantMedia[uploadKey] ? "Đang tải video…" : variant.videoUrl ? "＋ Đổi video" : "＋ Tải video"}</span></label></div><small className="create-variant-media-limit">{mediaCount}/{MAX_VARIANT_MEDIA_ITEMS} tệp · tính cả video</small><label className="create-variant-media-url"><span>Đường dẫn video</span><input type="url" value={variant.videoUrl || ""} onChange={(event) => { const value = event.target.value || null; if (value && !variant.videoUrl && (variant.imageUrls?.length || 0) >= MAX_VARIANT_MEDIA_ITEMS) { onNotify(`Mỗi biến thể tối đa ${MAX_VARIANT_MEDIA_ITEMS} tệp, tính cả video.`); return; } updateVariant(variant, { videoUrl: value }); }} placeholder="https://… hoặc /media/…"/></label>{variant.videoUrl && <video className="create-variant-video-preview" src={variant.videoUrl} controls playsInline preload="metadata" aria-label={`Video ${variant.sku || variant.quality}`}/>}</div></td></tr>; })}</tbody></table><small className="create-inventory-variant-help">Biến thể, SKU và tồn chỉ lấy từ kho. Mỗi SKU con lưu tối đa 5 ảnh/video cộng lại; giá luôn lấy từ Hồ sơ sản phẩm theo SKU.</small></div> : <div className="create-empty-variants"><span>◇</span><strong>{usesQualityPricing ? "Chưa có biến thể trong kho" : "Sản phẩm dùng một giá chung"}</strong><p>{usesQualityPricing ? "Hãy tạo chất lượng, size và số lượng biến thể trong phiếu nhập kho trước. Giá sẽ lấy từ Hồ sơ sản phẩm." : "Giá bán lấy từ hồ sơ sản phẩm; tồn kho được quản lý riêng trong Quản lý tồn kho."}</p></div>}
         </section>}
 
         {activeTab === "seo" && <section className="create-card create-tab-card"><div className="create-card-title"><div><h2>Tối ưu tìm kiếm (SEO)</h2><p>Thông tin này giúp sản phẩm hiển thị rõ trên công cụ tìm kiếm.</p></div></div><label className="create-field"><span>Tiêu đề SEO</span><input maxLength={70} value={product.seoTitle ?? ""} onChange={(event) => update("seoTitle", event.target.value)} placeholder={product.name || "Tên sản phẩm | GEME"}/><small className="create-counter">{(product.seoTitle ?? "").length}/70</small></label><label className="create-field"><span>Mô tả SEO</span><textarea rows={4} maxLength={160} value={product.seoDescription ?? ""} onChange={(event) => update("seoDescription", event.target.value)} placeholder="Mô tả ngắn gọn về sản phẩm..."/><small className="create-counter">{(product.seoDescription ?? "").length}/160</small></label><div className="create-seo-preview"><small>geme.vn › san-pham › {product.name.toLocaleLowerCase("vi").trim().replaceAll(" ", "-") || "ten-san-pham"}</small><strong>{product.seoTitle || product.name || "Tên sản phẩm | GEME"}</strong><span>{product.seoDescription || product.description || "Mô tả sản phẩm hiển thị trong kết quả tìm kiếm."}</span></div></section>}

@@ -1012,6 +1012,10 @@
 .price-profile-note>span{display:grid;place-items:center;width:23px;height:23px;flex:none;border-radius:50%;color:#47745b;background:#e5f1e9}
 .price-profile-note p{margin:0;font-size:10px;line-height:1.6}
 .price-profile-note strong{color:#315540}
+.price-profile-kind-tabs{display:flex;gap:8px;padding:4px;border:1px solid #e9edeb;border-radius:8px;background:#f7f9f7}
+.price-profile-kind-tabs button{min-height:36px;display:flex;align-items:center;gap:8px;padding:0 14px;border:1px solid transparent;border-radius:6px;color:#6c7b72;background:transparent;font-size:11px;font-weight:600;cursor:pointer}
+.price-profile-kind-tabs button.active{border-color:#dbe8df;color:#315c45;background:#fff;box-shadow:0 2px 6px #263a2d0a}
+.price-profile-kind-tabs button span{min-width:20px;padding:2px 5px;border-radius:999px;color:#75827a;background:#edf1ee;font-size:9px;text-align:center}
 .price-profile-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:11px;border:1px solid #e9edeb;border-radius:8px;background:#fff}
 .price-profile-search{height:34px;display:flex;align-items:center;gap:8px;flex:1 1 250px;max-width:460px;padding:0 10px;border:1px solid #e4eae6;border-radius:6px;color:#8e9a92;background:#fbfcfb}
 .price-profile-search input{width:100%;min-width:0;border:0;outline:0;color:#405348;background:transparent;font-size:10px}
@@ -1168,3 +1172,18 @@
 .vtp-cod-summary strong{color:#315c46;font-size:12px}
 @media(max-width:1000px){.shipping-stat-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:640px){.shipping-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.shipping-stat-card{min-height:72px;padding:11px}.shipping-list-heading{align-items:stretch;flex-direction:column}.shipping-search{width:auto}.shipping-intro{padding:13px}.shipping-intro h2{font-size:17px}}
+
+.admin-login-page{display:grid;min-height:100svh;place-items:center;padding:24px;background:radial-gradient(circle at 50% 0,#e9f0eb 0,transparent 45%),#f4f6f4}
+.admin-login-card{width:min(100%,420px);padding:38px;border:1px solid #e1e8e3;border-radius:14px;background:#fff;box-shadow:0 18px 60px #25392d14}
+.admin-login-mark{display:grid;width:44px;height:44px;place-items:center;border-radius:50%;color:#fff;background:#426f58;font-family:Georgia,serif;font-size:25px}
+.admin-login-eyebrow{margin:22px 0 7px;color:#71887a;font-size:10px;font-weight:700;letter-spacing:.18em}
+.admin-login-card h1{margin:0;color:#213a2d;font-family:Georgia,serif;font-size:28px;font-weight:500}
+.admin-login-description{margin:9px 0 26px;color:#78847d;font-size:13px;line-height:1.6}
+.admin-login-card form{display:grid;gap:16px}
+.admin-login-card label{display:grid;gap:7px;color:#46574d;font-size:12px;font-weight:600}
+.admin-login-card input{width:100%;height:44px;padding:0 12px;border:1px solid #dce4de;border-radius:6px;color:#263d30;background:#fff;font:inherit;font-weight:400;outline:none}
+.admin-login-card input:focus{border-color:#6a977a;box-shadow:0 0 0 3px #6a977a1c}
+.admin-login-card button{height:45px;margin-top:3px;border:0;border-radius:6px;color:#fff;background:#426f58;font:inherit;font-size:13px;font-weight:650;cursor:pointer}
+.admin-login-card button:disabled{opacity:.65;cursor:wait}
+.admin-login-error{margin:0;padding:10px 12px;border-radius:6px;color:#9e473d;background:#fff1ef;font-size:12px;line-height:1.5}
+@media(max-width:480px){.admin-login-card{padding:27px 22px}}

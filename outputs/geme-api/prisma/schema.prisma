@@ -40,6 +40,9 @@ enum CategoryPricingMode {
   FIXED
   QUALITY
   QUALITY_AND_BEAD_SIZE
+  GEMSTONE_SIZE
+  GEMSTONE_CARAT
+  GEMSTONE_CARAT_AND_QUALITY
 
   @@map("category_pricing_mode")
 }
@@ -148,6 +151,8 @@ model AdminUser {
   displayName  String     @map("display_name") @db.VarChar(120)
   role         AdminRole  @default(ADMIN)
   isActive     Boolean    @default(true) @map("is_active")
+  failedLoginAttempts Int @default(0) @map("failed_login_attempts")
+  lockedUntil  DateTime?  @map("locked_until") @db.Timestamptz(3)
   lastLoginAt  DateTime?  @map("last_login_at") @db.Timestamptz(3)
   createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -294,6 +299,7 @@ model Product {
   @@index([materialOptionId, status, createdAt(sort: Desc)])
   @@index([status, isFeatured, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
+  @@index([status, stock, soldOutAt])
   @@index([createdAt(sort: Desc), id(sort: Desc)])
   @@index([pos365PriceSyncStatus, pos365PriceSyncNextAttemptAt])
   @@index([pos365StockSyncStatus, pos365StockSyncNextAttemptAt])
@@ -320,6 +326,8 @@ model ProductPriceVariant {
   optionKey             String                 @map("option_key") @db.VarChar(100)
   quality               String                 @db.VarChar(40)
   beadSize              String?                @map("bead_size") @db.VarChar(24)
+  carat                 Decimal?               @db.Decimal(8, 3)
+  gemstoneQuality       String?                @map("gemstone_quality") @db.VarChar(40)
   sku                   String?                @unique @db.VarChar(64)
   imageUrls             String[]               @default([]) @map("image_urls")
   videoUrl              String?                @map("video_url") @db.Text
@@ -417,6 +425,7 @@ model Order {
 
   @@index([status, placedAt(sort: Desc)])
   @@index([customerId, placedAt(sort: Desc)])
+  @@index([customerId, customerEmail])
   @@index([placedAt(sort: Desc)])
   @@index([placedAt(sort: Desc), status])
   @@index([pos365SyncStatus, pos365SyncNextAttemptAt])
@@ -433,6 +442,8 @@ model OrderItem {
   productSku  String               @map("product_sku") @db.VarChar(64)
   quality     String?              @db.VarChar(40)
   beadSize    String?              @map("bead_size") @db.VarChar(24)
+  carat       Decimal?             @db.Decimal(8, 3)
+  gemstoneQuality String?           @map("gemstone_quality") @db.VarChar(40)
   quantity    Int
   unitPrice   Decimal              @map("unit_price") @db.Decimal(14, 0)
   lineTotal   Decimal              @map("line_total") @db.Decimal(14, 0)
@@ -630,6 +641,10 @@ model InventoryReceiptItem {
   variantId    String?              @map("variant_id") @db.Uuid
   productName  String               @map("product_name") @db.VarChar(180)
   productSku   String               @map("product_sku") @db.VarChar(64)
+  quality      String?              @db.VarChar(40)
+  beadSize     String?              @map("bead_size") @db.VarChar(24)
+  carat        Decimal?             @db.Decimal(8, 3)
+  gemstoneQuality String?            @map("gemstone_quality") @db.VarChar(40)
   categoryName String?              @map("category_name") @db.VarChar(120)
   stoneName    String?              @map("stone_name") @db.VarChar(120)
   kind         String               @db.VarChar(24)
@@ -691,17 +706,21 @@ model InventoryIssueItem {
 }
 
 model MediaAsset {
-  id        String   @id @default(uuid()) @db.Uuid
-  filename  String   @db.VarChar(240)
-  sourceKey String?  @unique @map("source_key") @db.VarChar(500)
-  mimeType  String   @map("mime_type") @db.VarChar(100)
-  data      Bytes    @db.ByteA
-  size      Int
-  alt       String?  @db.VarChar(240)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id              String   @id @default(uuid()) @db.Uuid
+  filename        String   @db.VarChar(240)
+  sourceKey       String?  @unique @map("source_key") @db.VarChar(500)
+  mimeType        String   @map("mime_type") @db.VarChar(100)
+  isPrivate       Boolean  @default(false) @map("is_private")
+  storageProvider String   @default("database") @map("storage_provider") @db.VarChar(24)
+  objectKey       String?  @map("object_key") @db.VarChar(700)
+  data            Bytes?   @db.ByteA
+  size            Int
+  alt             String?  @db.VarChar(240)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([createdAt(sort: Desc)])
+  @@index([storageProvider, objectKey])
   @@map("media_assets")
 }
 

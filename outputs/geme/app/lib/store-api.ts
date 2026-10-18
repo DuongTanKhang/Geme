@@ -13,6 +13,7 @@ export type StoreCategory = {
   bannerUrl?: string | null;
   status: "ACTIVE" | "INACTIVE";
   sortOrder: number;
+  pricingMode?: string;
 };
 
 export type StoreMaterial = {
@@ -31,6 +32,8 @@ export type StoreVariant = {
   sku?: string | null;
   quality: string;
   beadSize?: string | null;
+  carat?: number | null;
+  gemstoneQuality?: string | null;
   price: number;
   originalPrice?: number | null;
   stock: number;
@@ -232,7 +235,7 @@ export function getStoreCatalogEditorialPromos(settings: StoreSiteSettings): Sto
 export async function getStoreSiteSettings() {
   // Settings are edited in the admin and should be consistent on both local
   // host aliases as soon as the next page request reaches the shared server.
-  const result = await readApi<StoreSiteSettings>("/settings", { cacheTag: STOREFRONT_CACHE_TAG });
+  const result = await readApi<StoreSiteSettings>("/settings/public", { cacheTag: STOREFRONT_CACHE_TAG });
   return { settings: result.data ?? {}, connected: result.connected };
 }
 
@@ -296,6 +299,8 @@ function asStoreProduct(value: any): StoreProduct {
         sku: variant.sku ?? null,
         quality: String(variant.quality || "Tiêu chuẩn"),
         beadSize: variant.beadSize || null,
+        carat: variant.carat == null ? null : Number(variant.carat),
+        gemstoneQuality: variant.gemstoneQuality || null,
         price: Number(variant.price) || 0,
         originalPrice: variant.originalPrice == null ? null : Number(variant.originalPrice),
         stock: Number(variant.stock) || 0,
@@ -304,7 +309,9 @@ function asStoreProduct(value: any): StoreProduct {
         sortOrder: Number(variant.sortOrder ?? index) || 0,
       }))
     : [];
-  const variantPrices = variants.map((variant) => variant.price).filter((price) => price > 0);
+  const categoryPricingMode = String(value.category?.pricingMode || "");
+  const variantPrices = variants.map((variant) => variant.price * (value.kind === "GEMSTONE" && ["GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"].includes(categoryPricingMode) ? Number(variant.carat || 0) : 1)).filter((price) => price > 0);
+  const variantOriginalPrices = variants.map((variant) => Number(variant.originalPrice || 0) * (value.kind === "GEMSTONE" && ["GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"].includes(categoryPricingMode) ? Number(variant.carat || 0) : 1)).filter((price) => price > 0);
   return {
     id: String(value.id),
     sku: String(value.sku || ""),
@@ -326,11 +333,11 @@ function asStoreProduct(value: any): StoreProduct {
     status: value.status,
     isNew: Boolean(value.isNew),
     isFeatured: Boolean(value.isFeatured),
-    price: Number(value.price) || (variantPrices.length ? Math.min(...variantPrices) : 0),
-    originalPrice: value.originalPrice == null ? null : Number(value.originalPrice),
+    price: variants.length && variantPrices.length ? Math.min(...variantPrices) : Number(value.price) || 0,
+    originalPrice: variants.length && variantOriginalPrices.length ? Math.min(...variantOriginalPrices) : value.originalPrice == null ? null : Number(value.originalPrice),
     stock: Number(value.stock) || 0,
     createdAt: value.createdAt,
-    category: value.category ? { id: value.category.id, name: value.category.name, slug: value.category.slug, kind: value.category.kind, usage: value.category.usage, level: Number(value.category.level) || 1, parentId: value.category.parentId ?? null, status: value.category.status, sortOrder: Number(value.category.sortOrder) || 0 } : null,
+    category: value.category ? { id: value.category.id, name: value.category.name, slug: value.category.slug, kind: value.category.kind, usage: value.category.usage, level: Number(value.category.level) || 1, parentId: value.category.parentId ?? null, status: value.category.status, sortOrder: Number(value.category.sortOrder) || 0, pricingMode: value.category.pricingMode } : null,
     gemstoneType: value.gemstoneType ? { id: value.gemstoneType.id, name: value.gemstoneType.name, slug: value.gemstoneType.slug } : null,
     materialOption: value.materialOption ? { id: value.materialOption.id, name: value.materialOption.name, slug: value.materialOption.slug, scope: value.materialOption.scope, kind: value.materialOption.kind, active: Boolean(value.materialOption.active), sortOrder: Number(value.materialOption.sortOrder) || 0 } : null,
     images,
@@ -368,7 +375,7 @@ export async function getStoreProducts(options: {
 }
 
 export async function getStoreSalesOverview() {
-  const result = await readApi<{ products?: StoreSalesProduct[] }>("/reports/overview", { revalidateSeconds: 30, cacheTag: "store-sales" });
+  const result = await readApi<{ products?: StoreSalesProduct[] }>("/reports/storefront", { revalidateSeconds: 30, cacheTag: "store-sales" });
   return {
     products: Array.isArray(result.data?.products) ? result.data.products.map((item) => ({ sku: String(item.sku || ""), sold: Math.max(0, Number(item.sold) || 0) })) : [],
     connected: result.connected,
@@ -408,7 +415,7 @@ export async function getStorePromotions() {
 
 export async function getStoreFacets() {
   const [categories, materials] = await Promise.all([
-    readApi<any[]>("/categories?public=true", { cacheTag: STOREFRONT_CACHE_TAG }),
+    readApi<any[]>("/categories/public", { cacheTag: STOREFRONT_CACHE_TAG }),
     readApi<any[]>("/materials", { cacheTag: STOREFRONT_CACHE_TAG }),
   ]);
   return {

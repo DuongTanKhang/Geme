@@ -110,7 +110,7 @@ export default function BlogEditorPage({ post, categories, onBack, onSave, onSav
       }).join("");
       document.execCommand("insertHTML", false, html);
       updateBody();
-      onNotify(`${sources.length} ảnh đã chèn vào bài viết. Ảnh sẽ được lưu cùng bài viết trong database.`);
+      onNotify(`${sources.length} ảnh đã chèn vào bài viết. Ảnh được lưu trong thư viện media.`);
     } catch (error) { onNotify(error instanceof Error ? error.message : "Không thể xử lý ảnh."); }
     finally { setUploading(false); }
   };
@@ -161,7 +161,7 @@ export default function BlogEditorPage({ post, categories, onBack, onSave, onSav
 
     <div className="blog-editor-layout">
       <main className="blog-document-workspace">
-        <div className="blog-document-caption"><div><span className="blog-document-dot"/><span>{post?.apiId ? "CHỈNH SỬA BÀI VIẾT" : "BÀI VIẾT MỚI"}</span></div><span>{uploading ? "Đang nén ảnh…" : "Nội dung được lưu trong database"}</span></div>
+        <div className="blog-document-caption"><div><span className="blog-document-dot"/><span>{post?.apiId ? "CHỈNH SỬA BÀI VIẾT" : "BÀI VIẾT MỚI"}</span></div><span>{uploading ? "Đang nén ảnh…" : "Nội dung được lưu trong database · ảnh lưu trong media"}</span></div>
         <div className="blog-format-toolbar" role="toolbar" aria-label="Công cụ định dạng bài viết">
           <select aria-label="Kiểu văn bản" defaultValue="p" onMouseDown={rememberSelection} onChange={(event) => { restoreSelection(); document.execCommand("formatBlock", false, event.target.value); updateBody(); }}><option value="p">Đoạn văn</option><option value="h1">Tiêu đề 1</option><option value="h2">Tiêu đề 2</option><option value="h3">Tiêu đề 3</option><option value="blockquote">Trích dẫn</option></select>
           <i/>{toolbarButton("In đậm", "In đậm", "bold", undefined, <b>B</b>)}{toolbarButton("In nghiêng", "In nghiêng", "italic", undefined, <i>I</i>)}{toolbarButton("Gạch chân", "Gạch chân", "underline", undefined, <u>U</u>)}{toolbarButton("Gạch ngang", "Gạch ngang", "strikeThrough", undefined, <s>S</s>)}
@@ -187,7 +187,7 @@ export default function BlogEditorPage({ post, categories, onBack, onSave, onSav
           <div className="blog-property-field"><span>Ảnh bìa</span><input ref={coverImageInput} className="blog-hidden-file" type="file" accept="image/*" onChange={(event) => void handleCoverImage(event)}/>{draft.coverImageUrl ? <div className="blog-cover-preview"><img src={draft.coverImageUrl} alt="Ảnh bìa"/><button type="button" onClick={() => update({ coverImageUrl: "" })}>Gỡ ảnh bìa</button></div> : <button type="button" className="blog-cover-picker" disabled={uploading} onClick={() => coverImageInput.current?.click()}><strong>＋</strong><span>Chọn ảnh bìa (không bắt buộc)</span><small>Ảnh tự được nén trước khi lưu</small></button>}</div>
         </section>
         <section className="blog-property-card"><h2>Đường dẫn và SEO</h2><label className="blog-property-field"><span>Slug</span><input value={draft.slug} maxLength={220} onChange={(event) => update({ slug: event.target.value })} placeholder="Tự tạo theo tiêu đề"/><small>Để trống để tự tạo từ tiêu đề bài viết.</small></label><label className="blog-property-field"><span>Tiêu đề SEO</span><input value={draft.seoTitle} maxLength={180} onChange={(event) => update({ seoTitle: event.target.value })} placeholder={draft.name || "Tiêu đề hiển thị trên Google"}/></label><label className="blog-property-field"><span>Mô tả SEO</span><textarea value={draft.seoDescription} maxLength={320} onChange={(event) => update({ seoDescription: event.target.value })} rows={3} placeholder="Mô tả ngắn cho công cụ tìm kiếm"/></label></section>
-        <section className="blog-property-note"><strong>Ảnh trong bài viết</strong><p>Chèn tối đa {MAX_INLINE_IMAGES} ảnh vào giữa nội dung. Hệ thống tự tối ưu và lưu ảnh cùng bài viết trong database.</p></section>
+        <section className="blog-property-note"><strong>Ảnh trong bài viết</strong><p>Chèn tối đa {MAX_INLINE_IMAGES} ảnh vào giữa nội dung. Hệ thống tự tối ưu và lưu ảnh trong thư viện media.</p></section>
       </aside>
     </div>
   </div>;
