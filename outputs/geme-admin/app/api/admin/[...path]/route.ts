@@ -94,7 +94,7 @@ async function proxy(request: NextRequest, context: RouteContext) {
     Accept: request.headers.get("accept") || "application/json",
     Authorization: `Bearer ${token}`,
   });
-  for (const name of ["content-type", "accept-language", "last-event-id"]) {
+  for (const name of ["content-type", "accept-language", "last-event-id", "idempotency-key"]) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }

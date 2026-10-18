@@ -301,6 +301,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     this.catalogChanges.next({ data: { entity, action, ...(id ? { id } : {}), at: new Date().toISOString() } });
   }
 
+  notifyProductImagesUpdated(productId: string) {
+    this.publishCatalogChange("product", "updated", productId);
+  }
+
   private cachedPublicProductRead(key: string, load: () => Promise<any[]>) {
     const now = Date.now();
     const cached = this.productReadCache.get(key);

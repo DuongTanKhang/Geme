@@ -1,0 +1,11 @@
+node_modules
+.next
+.next-ai-studio-build
+.pnpm-store
+dist
+out
+.env
+.env.*
+!.env.example
+*.log
+*.tsbuildinfo

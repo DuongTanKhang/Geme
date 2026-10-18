@@ -11,6 +11,9 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Keep production builds isolated from a concurrently running Next dev server.
+  // This also allows CI/local builds to use a dedicated output directory when needed.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   poweredByHeader: false,
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   async headers() { return [{ source: "/:path*", headers: securityHeaders }]; },

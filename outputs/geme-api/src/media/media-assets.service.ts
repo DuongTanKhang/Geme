@@ -21,13 +21,16 @@ export class MediaAssetsService {
   async save(input: SaveMediaInput) {
     const sourceKey = input.sourceKey || null;
     const isPrivate = input.isPrivate === true;
-    // Keep private documents in PostgreSQL until a separately private bucket
-    // and signed-download policy are configured.
-    const useR2 = this.storage.usesR2 && !isPrivate;
+    // Private originals and pending AI outputs use a separate non-public bucket
+    // when configured. Otherwise they remain private BYTEA records in PostgreSQL.
+    const useR2 = isPrivate ? this.storage.usesPrivateR2 : this.storage.usesR2;
     const digest = createHash("sha256").update(input.bytes).digest("hex");
     const extension = input.mimeType === "image/jpeg" ? "jpg" : input.mimeType.split("/").pop() || "bin";
-    const objectKey = useR2 ? `media/${digest}.${extension}` : null;
-    if (useR2 && objectKey) await this.storage.putPublicObject(objectKey, input.bytes, input.mimeType);
+    const objectKey = useR2 ? `${isPrivate ? "private-media" : "media"}/${digest}.${extension}` : null;
+    if (useR2 && objectKey) {
+      if (isPrivate) await this.storage.putPrivateObject(objectKey, input.bytes, input.mimeType);
+      else await this.storage.putPublicObject(objectKey, input.bytes, input.mimeType);
+    }
 
     const data = {
       filename: input.filename,
@@ -94,8 +97,25 @@ export class MediaAssetsService {
   }
 
   async read(asset: MediaAsset) {
-    if (asset.storageProvider === "r2" && asset.objectKey) return this.storage.getPublicObject(asset.objectKey);
+    if (asset.storageProvider === "r2" && asset.objectKey) {
+      return asset.isPrivate ? this.storage.getPrivateObject(asset.objectKey) : this.storage.getPublicObject(asset.objectKey);
+    }
     if (asset.data) return Buffer.from(asset.data);
     throw new ServiceUnavailableException("Media chưa có dữ liệu trong database hoặc object storage.");
+  }
+
+  async removeUnreferencedAsset(id: string) {
+    const asset = await this.findById(id);
+    const referenced = await this.prisma.aiImageItem.findFirst({
+      where: { OR: [{ originalAssetId: id }, { outputAssetId: id }, { publishedAssetId: id }] },
+      select: { id: true },
+    });
+    if (referenced) return false;
+    if (asset.storageProvider === "r2" && asset.objectKey) {
+      if (asset.isPrivate) await this.storage.deletePrivateObject(asset.objectKey);
+      else await this.storage.deletePublicObject(asset.objectKey);
+    }
+    await this.prisma.mediaAsset.deleteMany({ where: { id } });
+    return true;
   }
 }

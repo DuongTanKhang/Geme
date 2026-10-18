@@ -16,6 +16,7 @@ The Compose environment runs the GEME storefront, admin, GEME API, and AEGIS on 
 2. Copy `.env.docker.example` to `.env.docker` and check `AEGIS_SOURCE_PATH`.
 3. Set `GEME_DATABASE_URL` to the existing GEME PostgreSQL database, replacing `127.0.0.1` with `host.docker.internal`. This keeps the products and records already stored in the host database.
 4. Set unique development-only values for `AEGIS_SQL_PASSWORD` and `AEGIS_OTP_HASHING_KEY` (the OTP key must contain at least 32 characters).
+5. Replace `AI_CORE_SHARED_SECRET` with a random secret of at least 32 characters; the API worker and private AI Core must use the same value.
 5. From this directory, run:
 
    ```powershell
@@ -29,6 +30,25 @@ The API runs Prisma migrations on startup. AEGIS runs its EF migrations on start
 Local development keeps `MEDIA_STORAGE_PROVIDER=database`, so the new storage path works without Cloudflare credentials and existing media URLs keep working. For production, create a Cloudflare R2 bucket, create a bucket-scoped access token, and attach a Cloudflare custom domain such as `media.geme.vn`. Put the R2 credentials only in the API environment and set `MEDIA_STORAGE_PROVIDER=r2` plus `MEDIA_PUBLIC_BASE_URL=https://media.geme.vn`. Do not set these as `NEXT_PUBLIC_*` variables.
 
 The Prisma migration adds provider/key metadata while retaining all existing media bytes. After configuring R2 and taking a database backup, run `pnpm media:migrate-r2` from `outputs/geme-api` to move existing public records in small batches; each row is removed from PostgreSQL only after the object upload succeeds. PDFs/private documents remain in PostgreSQL. This code does not yet import the separate 8 GB DirectAdmin image folder: that requires access to the original files or an archive, so the import and visual redesign can happen after the new hosting and R2 domain are ready.
+
+## AI Studio Phase 1
+
+AI Studio keeps NestJS as the authenticated admin API and database authority. BullMQ uses a dedicated `ai-redis` service and persistent volume, isolated from AEGIS's existing Redis. The AI Redis enables AOF with `appendfsync everysec` and `noeviction`. PostgreSQL remains the authoritative task/approval history. The standalone `ai-worker` service consumes jobs and calls the FastAPI `ai-core` service over an `internal: true` Compose network. AI Core and AI Redis have no published host ports or public routes. Set a random `AI_CORE_SHARED_SECRET` of at least 32 characters in `.env.docker`; Compose intentionally fails closed when it is missing.
+
+The initial agents return scaffold/provider-disabled results. The Image Worker contract does not call a paid service. Publication approvals record a human decision only; they do not change product publication, price, stock, or order data. Configure `AI_WORKER_CONCURRENCY`, `AI_STUDIO_ACTIVE_TASK_LIMIT`, and `AI_STUDIO_RATE_LIMIT_PER_MINUTE` conservatively before enabling any future provider. The API startup applies the additive Prisma migration. To run local checks:
+
+```powershell
+cd outputs/geme-api
+pnpm db:generate
+pnpm build
+pnpm test
+cd ../ai-core
+python -m unittest discover -s tests -v
+cd ../geme-admin
+pnpm build
+```
+
+Then start/rebuild `geme-api`, `ai-redis`, `ai-core`, `ai-worker`, and `admin` with Compose; use `docker compose --env-file .env.docker logs -f ai-worker ai-core ai-redis geme-api` to inspect structured service logs. In Admin, open **AI Studio**, submit a scaffold task, cancel a queued task, and submit a publication proposal to exercise approval without changing catalog data.
 
 ## Send email through GEME Gmail
 
@@ -98,3 +118,36 @@ docker compose --env-file .env.docker down
 ```
 
 Do not add `.env.docker` to source control or use these Development settings for a public deployment.
+
+## GEME Visual Agent — Image Studio (Phase 2)
+
+Image Studio is an authenticated Admin workspace backed by the existing NestJS AI Studio task/approval tables and BullMQ queue. The API stores originals as private media, the worker calls AI Core over the Compose network, and AI Core is the only service that receives the Photoroom key. AI Core has no published host port. Outputs remain private until an admin approves them; attaching an approved result is limited to a `DRAFT` product and does not publish the product or change prices, inventory, or orders.
+
+Before processing a batch, configure a Photoroom API key in the ignored `.env.docker` file. Keep it blank until you are ready to authorize provider calls. `PHOTOROOM_SANDBOX=true` requires a Photoroom sandbox key and returns sandbox-watermarked results; use the production key only after visual review. Each processed image makes a provider request that may incur a charge. See the [Photoroom segment API quickstart](https://docs.photoroom.com/remove-background-api-basic-plan/quickstart-guide) and [supported image limits](https://docs.photoroom.com/remove-background-api-basic-plan/file-size-resolution-and-format).
+
+```dotenv
+PHOTOROOM_API_KEY=
+PHOTOROOM_SANDBOX=false
+```
+
+The app rejects uploads over 8 MB each, more than 50 images per batch, or more than 100 MB total. PNG, JPEG, and WebP are accepted. Review the generated mask and flagged items before approving. Output images are PNG; individual export supports PNG/JPEG/WebP and approved batch export supports ZIP (up to 120 MB uncompressed input). ZIP assembly is memory-bounded by that limit. Classification currently uses admin hints and filename metadata and marks every suggestion for human review; it is not a trained vision classifier.
+
+By default, private media bytes are stored in PostgreSQL. For larger production image volumes, configure a separate **private**, non-public R2 bucket with `R2_PRIVATE_BUCKET_NAME` and the existing R2 credentials. Do not set the private bucket to public or point it at the storefront bucket. Public product media continues to use `R2_BUCKET_NAME`; the private originals and pending outputs use a separate bucket and authenticated reads.
+
+Rebuild and start only when you want to apply the image-studio migration locally:
+
+```powershell
+docker compose --env-file .env.docker up -d --build geme-api ai-core ai-worker admin
+docker compose --env-file .env.docker logs -f geme-api ai-core ai-worker
+```
+
+The migration is additive and does not touch existing product, order, or inventory records. Unit tests mock the Photoroom HTTP request, so they do not use a live key or incur provider charges:
+
+```powershell
+pnpm --dir outputs/geme-api test
+pnpm --dir outputs/geme-api build
+docker build -t geme-ai-core-test outputs/ai-core
+docker run --rm --entrypoint python geme-ai-core-test -m unittest discover -s /app/tests -v
+```
+
+Before production, process a representative 30–50 image sample across Opal, transparent stones, Emerald/Jade, detailed settings, and polished metal. Record and visually compare the originals and outputs; do not treat the automated QC as proof of perfect color preservation. Provider-backed sample validation needs an authorized Photoroom key and should be performed before using the outputs on live catalog products.

@@ -1,5 +1,6 @@
 **/node_modules
 **/.next
+**/.next-ai-studio-build
 **/out
 **/dist
 **/.env

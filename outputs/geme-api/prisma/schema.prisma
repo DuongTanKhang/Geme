@@ -15,6 +15,78 @@ enum AdminRole {
   @@map("admin_role")
 }
 
+enum AiTaskType {
+  CONTENT_DRAFT
+  IMAGE_GENERATION
+  IMAGE_STUDIO_PROCESSING
+  PRODUCT_PUBLICATION_PROPOSAL
+
+  @@map("ai_task_type")
+}
+
+enum AiTaskStatus {
+  QUEUED
+  RUNNING
+  AWAITING_APPROVAL
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  APPROVED
+  REJECTED
+
+  @@map("ai_task_status")
+}
+
+enum AiApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("ai_approval_status")
+}
+
+enum AiImagePreset {
+  STONE_GREY
+  WARM_IVORY
+  SOFT_SAGE
+
+  @@map("ai_image_preset")
+}
+
+enum AiImageBatchStatus {
+  UPLOADING
+  PROCESSING
+  REVIEW
+  COMPLETE
+  PARTIAL
+  FAILED
+  CANCELLED
+
+  @@map("ai_image_batch_status")
+}
+
+enum AiImageItemStatus {
+  PENDING_UPLOAD
+  QUEUED
+  RUNNING
+  AWAITING_APPROVAL
+  APPROVED
+  REJECTED
+  FAILED
+  CANCELLED
+
+  @@map("ai_image_item_status")
+}
+
+enum AiImageQcStatus {
+  PENDING
+  PASS
+  REVIEW
+  FAIL
+
+  @@map("ai_image_qc_status")
+}
+
 enum CustomerStatus {
   ACTIVE
   INACTIVE
@@ -158,6 +230,9 @@ model AdminUser {
   updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
   blogPosts    BlogPost[]
   auditLogs    AuditLog[]
+  aiTasks      AiTask[]     @relation("AiTaskRequester")
+  aiApprovals  AiApproval[] @relation("AiApprovalReviewer")
+  aiImageBatches AiImageBatch[] @relation("AiImageBatchCreator")
 
   @@map("admin_users")
 }
@@ -283,6 +358,7 @@ model Product {
   gemstoneType          Category?              @relation("GemstoneType", fields: [gemstoneTypeId], references: [id], onDelete: SetNull)
   materialOption        MaterialOption?        @relation(fields: [materialOptionId], references: [id], onDelete: SetNull)
   images                ProductImage[]
+  aiImageItems          AiImageItem[]
   variants              ProductPriceVariant[]
   reviews               ProductReview[]
   favorites             CustomerFavorite[]
@@ -716,6 +792,9 @@ model MediaAsset {
   data            Bytes?   @db.ByteA
   size            Int
   alt             String?  @db.VarChar(240)
+  aiImageOriginals AiImageItem[] @relation("AiImageOriginal")
+  aiImageOutputs   AiImageItem[] @relation("AiImageOutput")
+  aiImagePublishedOutputs AiImageItem[] @relation("AiImagePublishedOutput")
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -739,4 +818,101 @@ model AuditLog {
   @@index([entityType, entityId, createdAt(sort: Desc)])
   @@index([adminId, createdAt(sort: Desc)])
   @@map("audit_logs")
+}
+
+model AiTask {
+  id                  String      @id @default(uuid()) @db.Uuid
+  idempotencyKey      String      @unique @map("idempotency_key") @db.VarChar(128)
+  requestedByAdminId  String      @map("requested_by_admin_id") @db.Uuid
+  type                AiTaskType
+  status              AiTaskStatus @default(QUEUED)
+  title               String      @db.VarChar(120)
+  input               Json
+  result              Json?
+  errorCode           String?     @map("error_code") @db.VarChar(80)
+  errorMessage        String?     @map("error_message") @db.VarChar(500)
+  attemptCount        Int         @default(0) @map("attempt_count")
+  createdAt           DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  startedAt           DateTime?   @map("started_at") @db.Timestamptz(3)
+  completedAt         DateTime?   @map("completed_at") @db.Timestamptz(3)
+  cancelledAt         DateTime?   @map("cancelled_at") @db.Timestamptz(3)
+  requestedBy         AdminUser   @relation("AiTaskRequester", fields: [requestedByAdminId], references: [id], onDelete: Restrict)
+  approval            AiApproval?
+  imageItem           AiImageItem?
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([requestedByAdminId, createdAt(sort: Desc)])
+  @@map("ai_tasks")
+}
+
+model AiApproval {
+  id                String           @id @default(uuid()) @db.Uuid
+  taskId            String           @unique @map("task_id") @db.Uuid
+  reviewedByAdminId String?          @map("reviewed_by_admin_id") @db.Uuid
+  status            AiApprovalStatus @default(PENDING)
+  decisionNote      String?          @map("decision_note") @db.VarChar(1000)
+  requestedAt       DateTime         @default(now()) @map("requested_at") @db.Timestamptz(3)
+  reviewedAt        DateTime?        @map("reviewed_at") @db.Timestamptz(3)
+  task              AiTask           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  reviewedBy        AdminUser?       @relation("AiApprovalReviewer", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([status, requestedAt(sort: Desc)])
+  @@index([reviewedByAdminId, reviewedAt(sort: Desc)])
+  @@map("ai_approvals")
+}
+
+model AiImageBatch {
+  id                 String              @id @default(uuid()) @db.Uuid
+  idempotencyKey     String              @unique @map("idempotency_key") @db.VarChar(128)
+  manifestHash       String              @map("manifest_hash") @db.Char(64)
+  createdByAdminId   String              @map("created_by_admin_id") @db.Uuid
+  name               String              @db.VarChar(120)
+  preset             AiImagePreset
+  status             AiImageBatchStatus  @default(UPLOADING)
+  totalBytes         BigInt              @map("total_bytes")
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy          AdminUser           @relation("AiImageBatchCreator", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+  items              AiImageItem[]
+
+  @@index([createdByAdminId, createdAt(sort: Desc)])
+  @@index([status, updatedAt(sort: Desc)])
+  @@map("ai_image_batches")
+}
+
+model AiImageItem {
+  id                    String             @id @default(uuid()) @db.Uuid
+  batchId               String             @map("batch_id") @db.Uuid
+  taskId                String?            @unique @map("task_id") @db.Uuid
+  originalAssetId       String?            @unique @map("original_asset_id") @db.Uuid
+  outputAssetId         String?            @unique @map("output_asset_id") @db.Uuid
+  publishedAssetId      String?            @unique @map("published_asset_id") @db.Uuid
+  attachedProductId     String?            @map("attached_product_id") @db.Uuid
+  originalFilename      String             @map("original_filename") @db.VarChar(240)
+  relativePath          String             @default("") @map("relative_path") @db.VarChar(500)
+  mimeType              String             @map("mime_type") @db.VarChar(100)
+  expectedSize          Int                @map("expected_size")
+  sourceSha256          String?            @map("source_sha256") @db.Char(64)
+  classificationHint    String?            @map("classification_hint") @db.VarChar(120)
+  classification        Json?
+  status                AiImageItemStatus  @default(PENDING_UPLOAD)
+  qcStatus              AiImageQcStatus    @default(PENDING) @map("qc_status")
+  qcFlags               String[]           @default([]) @map("qc_flags")
+  qcReport              Json?              @map("qc_report")
+  attemptCount          Int                @default(0) @map("attempt_count")
+  errorCode             String?            @map("error_code") @db.VarChar(80)
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  batch                 AiImageBatch       @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  task                  AiTask?            @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  originalAsset         MediaAsset?        @relation("AiImageOriginal", fields: [originalAssetId], references: [id], onDelete: Restrict)
+  outputAsset           MediaAsset?        @relation("AiImageOutput", fields: [outputAssetId], references: [id], onDelete: Restrict)
+  publishedAsset        MediaAsset?        @relation("AiImagePublishedOutput", fields: [publishedAssetId], references: [id], onDelete: Restrict)
+  attachedProduct       Product?           @relation(fields: [attachedProductId], references: [id], onDelete: SetNull)
+
+  @@index([batchId, status, createdAt])
+  @@index([status, updatedAt])
+  @@index([attachedProductId])
+  @@map("ai_image_items")
 }

@@ -10,6 +10,7 @@ export class MediaStorageService {
   private readonly logger = new Logger(MediaStorageService.name);
   private readonly provider = (process.env.MEDIA_STORAGE_PROVIDER || "database").trim().toLowerCase();
   private readonly publicBaseUrl = (process.env.MEDIA_PUBLIC_BASE_URL || "").trim().replace(/\/+$/, "");
+  private readonly privateBucket = (process.env.R2_PRIVATE_BUCKET_NAME || "").trim();
 
   constructor() {
     if (this.provider !== "database" && this.provider !== "r2") {
@@ -19,6 +20,10 @@ export class MediaStorageService {
 
   get usesR2() {
     return this.provider === "r2";
+  }
+
+  get usesPrivateR2() {
+    return this.usesR2 && Boolean(this.privateBucket);
   }
 
   publicUrl(objectKey: string) {
@@ -43,9 +48,45 @@ export class MediaStorageService {
     return Buffer.from(await response.arrayBuffer());
   }
 
-  private async request(method: "GET" | "PUT", objectKey: string, body?: Uint8Array, mimeType?: string) {
+  async putPrivateObject(objectKey: string, bytes: Uint8Array, mimeType: string) {
+    if (!this.privateBucket) throw new ServiceUnavailableException("R2_PRIVATE_BUCKET_NAME chưa được cấu hình.");
+    const response = await this.request("PUT", objectKey, bytes, mimeType, this.privateBucket);
+    if (!response.ok) {
+      this.logger.error(`R2 private upload failed with HTTP ${response.status}.`);
+      throw new ServiceUnavailableException("Không thể lưu media riêng tư vào object storage.");
+    }
+  }
+
+  async getPrivateObject(objectKey: string) {
+    if (!this.privateBucket) throw new ServiceUnavailableException("R2_PRIVATE_BUCKET_NAME chưa được cấu hình.");
+    const response = await this.request("GET", objectKey, undefined, undefined, this.privateBucket);
+    if (!response.ok) {
+      this.logger.error(`R2 private read failed with HTTP ${response.status}.`);
+      throw new ServiceUnavailableException("Không thể đọc media riêng tư từ object storage.");
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  async deletePrivateObject(objectKey: string) {
+    if (!this.privateBucket) throw new ServiceUnavailableException("R2_PRIVATE_BUCKET_NAME chưa được cấu hình.");
+    const response = await this.request("DELETE", objectKey, undefined, undefined, this.privateBucket);
+    if (!response.ok && response.status !== 404) {
+      this.logger.error(`R2 private delete failed with HTTP ${response.status}.`);
+      throw new ServiceUnavailableException("Không thể dọn media riêng tư khỏi object storage.");
+    }
+  }
+
+  async deletePublicObject(objectKey: string) {
+    const response = await this.request("DELETE", objectKey);
+    if (!response.ok && response.status !== 404) {
+      this.logger.error(`R2 delete failed with HTTP ${response.status}.`);
+      throw new ServiceUnavailableException("Không thể dọn media khỏi object storage.");
+    }
+  }
+
+  private async request(method: "GET" | "PUT" | "DELETE", objectKey: string, body?: Uint8Array, mimeType?: string, selectedBucket?: string) {
     const accountId = process.env.R2_ACCOUNT_ID?.trim();
-    const bucket = process.env.R2_BUCKET_NAME?.trim();
+    const bucket = selectedBucket || process.env.R2_BUCKET_NAME?.trim();
     const accessKeyId = process.env.R2_ACCESS_KEY_ID?.trim();
     const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
     if (!accountId || !bucket || !accessKeyId || !secretAccessKey) {
