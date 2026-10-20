@@ -18,7 +18,7 @@ const IMAGE_BATCH_ACTIVE = ["UPLOADING", "PROCESSING", "REVIEW"] as const;
 const ALLOWED_ITEM_TRANSITIONS = ["PENDING_UPLOAD", "QUEUED", "RUNNING"] as const;
 
 type ImageManifestItem = { name: string; relativePath: string; size: number; mimeType: string; classificationHint: string };
-type ImageBatchInput = { name: string; preset: "STONE_GREY" | "WARM_IVORY" | "SOFT_SAGE"; items: ImageManifestItem[]; totalBytes: number; manifestHash: string; idempotencyKey: string };
+type ImageBatchInput = { name: string; preset: "STONE_GREY" | "WARM_IVORY" | "SOFT_SAGE"; purpose: "PRODUCT_PHOTO" | "TECHNICAL_DRAWING"; targetProductSku: string; visualPrompt: string; items: ImageManifestItem[]; totalBytes: number; manifestHash: string; idempotencyKey: string };
 type BinaryResponse = { setHeader(name: string, value: string): unknown; status(code: number): BinaryResponse; end(body?: Buffer): unknown };
 
 function cleanRelativePath(value: unknown) {
@@ -33,9 +33,18 @@ function cleanRelativePath(value: unknown) {
 function validateManifest(body: unknown, keyInput: unknown): ImageBatchInput {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new BadRequestException("Thông tin lô ảnh không hợp lệ.");
   const value = body as Record<string, unknown>;
-  if (Object.keys(value).some((key) => !["name", "preset", "items"].includes(key))) throw new BadRequestException("Lô ảnh có trường không được hỗ trợ.");
+  if (Object.keys(value).some((key) => !["name", "preset", "purpose", "productSku", "visualPrompt", "items"].includes(key))) throw new BadRequestException("Lô ảnh có trường không được hỗ trợ.");
   if (typeof value.preset !== "string" || !PRESETS.has(value.preset)) throw new BadRequestException("Preset xử lý ảnh không hợp lệ.");
+  const purpose = value.purpose === "TECHNICAL_DRAWING" ? "TECHNICAL_DRAWING" : value.purpose === undefined || value.purpose === "PRODUCT_PHOTO" ? "PRODUCT_PHOTO" : null;
+  if (!purpose) throw new BadRequestException("Loại tác vụ ảnh không hợp lệ.");
+  if (value.visualPrompt !== undefined && typeof value.visualPrompt !== "string") throw new BadRequestException("Chỉ dẫn hình ảnh không hợp lệ.");
+  const visualPrompt = typeof value.visualPrompt === "string" ? value.visualPrompt.trim() : "";
+  if (visualPrompt.length > 1200) throw new BadRequestException("Chỉ dẫn tạo nền tối đa 1.200 ký tự.");
+  if (purpose === "TECHNICAL_DRAWING" && visualPrompt) throw new BadRequestException("Chỉ dẫn tạo nền chỉ dùng cho hậu kỳ ảnh sản phẩm.");
+  const targetProductSku = typeof value.productSku === "string" ? value.productSku.trim().slice(0, 64) : "";
+  if (purpose === "TECHNICAL_DRAWING" && !targetProductSku) throw new BadRequestException("Hãy nhập SKU sản phẩm cần tạo ảnh kỹ thuật.");
   if (!Array.isArray(value.items) || value.items.length < 1 || value.items.length > MAX_ITEMS) throw new BadRequestException(`Mỗi lô cần từ 1 đến ${MAX_ITEMS} ảnh.`);
+  if (purpose === "TECHNICAL_DRAWING" && value.items.length !== 1) throw new BadRequestException("Ảnh kỹ thuật cần đúng một ảnh tham chiếu cho mỗi lần tạo.");
   const idempotencyKey = typeof keyInput === "string" ? keyInput.trim() : "";
   if (!/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) throw new BadRequestException("Thiếu khóa Idempotency-Key hợp lệ.");
 
@@ -56,9 +65,9 @@ function validateManifest(body: unknown, keyInput: unknown): ImageBatchInput {
     return { name, relativePath: cleanRelativePath(item.relativePath), size, mimeType, classificationHint };
   });
   if (totalBytes > MAX_BATCH_BYTES) throw new BadRequestException("Tổng dung lượng một lô ảnh không được vượt quá 100 MB.");
-  const manifestHash = createHash("sha256").update(JSON.stringify({ name: value.name, preset: value.preset, items })).digest("hex");
+  const manifestHash = createHash("sha256").update(JSON.stringify({ name: value.name, preset: value.preset, purpose, targetProductSku, visualPrompt, items })).digest("hex");
   const name = typeof value.name === "string" ? value.name.trim().slice(0, 120) : "";
-  return { name: name || `Lô ảnh ${new Date().toLocaleDateString("vi-VN")}`, preset: value.preset as ImageBatchInput["preset"], items, totalBytes, manifestHash, idempotencyKey };
+  return { name: name || `Lô ảnh ${new Date().toLocaleDateString("vi-VN")}`, preset: value.preset as ImageBatchInput["preset"], purpose, targetProductSku, visualPrompt, items, totalBytes, manifestHash, idempotencyKey };
 }
 
 function isSupportedImage(file: { buffer: Buffer; mimetype: string }) {
@@ -155,6 +164,8 @@ export class AiImageStudioService {
     return {
       provider: "PHOTOROOM",
       configured: process.env.PHOTOROOM_CONFIGURED?.trim() === "true" || Boolean(process.env.PHOTOROOM_API_KEY?.trim()),
+      technicalDrawingConfigured: process.env.OPENAI_CONFIGURED?.trim() === "true",
+      customPromptConfigured: process.env.OPENAI_CONFIGURED?.trim() === "true",
       sandbox: process.env.PHOTOROOM_SANDBOX?.trim().toLowerCase() === "true",
       maxFilesPerBatch: MAX_ITEMS,
       maxImageBytes: MAX_IMAGE_BYTES,
@@ -165,8 +176,14 @@ export class AiImageStudioService {
   }
 
   async createBatch(actor: AdminIdentity, body: unknown, idempotencyHeader: unknown) {
-    if (!this.status().configured) throw new ServiceUnavailableException("Image Studio chưa được bật. Hãy cấu hình Photoroom ở AI Core trước khi tạo lô ảnh.");
     const submission = validateManifest(body, idempotencyHeader);
+    if (submission.purpose === "PRODUCT_PHOTO" && !this.status().configured) throw new ServiceUnavailableException("Image Studio chưa được bật. Hãy cấu hình Photoroom ở AI Core trước khi tạo lô ảnh.");
+    if (submission.purpose === "TECHNICAL_DRAWING" && !this.status().technicalDrawingConfigured) throw new ServiceUnavailableException("Chưa cấu hình khóa OpenAI cho AI Core để tạo ảnh kỹ thuật.");
+    if (submission.visualPrompt && !this.status().customPromptConfigured) throw new ServiceUnavailableException("Chưa cấu hình khóa OpenAI cho AI Core để tạo bối cảnh theo chỉ dẫn.");
+    const targetProduct = submission.purpose === "TECHNICAL_DRAWING"
+      ? await this.prisma.product.findUnique({ where: { sku: submission.targetProductSku }, select: { id: true } })
+      : null;
+    if (submission.purpose === "TECHNICAL_DRAWING" && !targetProduct) throw new NotFoundException("Không tìm thấy sản phẩm theo SKU đã nhập.");
     const existing = await this.prisma.aiImageBatch.findUnique({ where: { idempotencyKey: submission.idempotencyKey } });
     if (existing) {
       if (existing.createdByAdminId !== actor.id || existing.manifestHash !== submission.manifestHash) throw new ConflictException("Khóa idempotency của lô ảnh đã được sử dụng cho yêu cầu khác.");
@@ -174,7 +191,7 @@ export class AiImageStudioService {
     }
     await this.queue.consumeCreateQuota(actor.id);
     const batch = await this.prisma.$transaction(async (transaction) => {
-      await transaction.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${actor.id})::bigint)`;
+      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${actor.id})::bigint)`;
       const active = await transaction.aiImageBatch.count({ where: { createdByAdminId: actor.id, status: { in: [...IMAGE_BATCH_ACTIVE] } } });
       if (active >= 3) throw new ConflictException("Mỗi admin chỉ có thể mở tối đa 3 lô ảnh đang xử lý hoặc chờ duyệt.");
       const created = await transaction.aiImageBatch.create({
@@ -184,6 +201,9 @@ export class AiImageStudioService {
           createdByAdminId: actor.id,
           name: submission.name,
           preset: submission.preset,
+          purpose: submission.purpose,
+          visualPrompt: submission.visualPrompt,
+          targetProductId: targetProduct?.id,
           totalBytes: BigInt(submission.totalBytes),
           items: { create: submission.items.map((item) => ({ originalFilename: item.name, relativePath: item.relativePath, mimeType: item.mimeType, expectedSize: item.size, classificationHint: item.classificationHint || null, status: "PENDING_UPLOAD", qcStatus: "PENDING" })) },
         },
@@ -191,7 +211,7 @@ export class AiImageStudioService {
       });
       return created;
     });
-    this.log("ai.image_batch.created", actor.id, batch.id, { files: submission.items.length, bytes: submission.totalBytes, preset: submission.preset });
+    this.log("ai.image_batch.created", actor.id, batch.id, { files: submission.items.length, bytes: submission.totalBytes, preset: submission.preset, purpose: submission.purpose, targetProductId: targetProduct?.id });
     return this.getBatch(batch.id);
   }
 
@@ -252,17 +272,19 @@ export class AiImageStudioService {
   async listBatches(limitInput?: string) {
     const parsed = Number(limitInput || 12);
     const take = Number.isInteger(parsed) ? Math.min(30, Math.max(1, parsed)) : 12;
-    return this.prisma.aiImageBatch.findMany({
+    const batches = await this.prisma.aiImageBatch.findMany({
       orderBy: { createdAt: "desc" },
       take,
-      include: { items: { select: { id: true, status: true, qcStatus: true, qcFlags: true, originalFilename: true, relativePath: true, taskId: true, createdAt: true }, orderBy: { createdAt: "asc" } } },
+      include: { targetProduct: { select: { sku: true, name: true } }, items: { select: { id: true, status: true, qcStatus: true, qcFlags: true, originalFilename: true, relativePath: true, taskId: true, createdAt: true }, orderBy: { createdAt: "asc" } } },
     });
+    return batches.map((batch) => ({ ...batch, totalBytes: batch.totalBytes.toString() }));
   }
 
   async getBatch(id: string) {
     const batch = await this.prisma.aiImageBatch.findUnique({
       where: { id },
       include: {
+        targetProduct: { select: { id: true, sku: true, name: true, status: true, technicalImageUrl: true } },
         items: {
           include: {
             task: { select: { id: true, status: true, approval: { select: { id: true, status: true, decisionNote: true } } } },
@@ -330,6 +352,7 @@ export class AiImageStudioService {
       this.prisma.aiImageItem.findUnique({ where: { id: itemId }, include: { batch: true } }),
       this.prisma.product.findUnique({ where: { sku }, select: { id: true, sku: true, name: true, status: true } }),
     ]);
+    if (item?.batch.purpose === "TECHNICAL_DRAWING") throw new BadRequestException("Tác vụ này là ảnh kỹ thuật. Hãy dùng nút gắn ảnh kỹ thuật vào SKU đã chọn khi tạo lô.");
     if (!item?.outputAssetId) throw new NotFoundException("Ảnh xử lý chưa có kết quả.");
     if (item.status !== "APPROVED") throw new ConflictException("Cần duyệt ảnh trước khi gắn vào sản phẩm.");
     if (!product) throw new NotFoundException("Không tìm thấy sản phẩm theo SKU.");
@@ -366,6 +389,73 @@ export class AiImageStudioService {
       await this.media.removeUnreferencedAsset(published.id).catch(() => undefined);
       throw error;
     }
+  }
+
+  async attachTechnicalDrawing(actor: AdminIdentity, itemId: string) {
+    const item = await this.prisma.aiImageItem.findUnique({
+      where: { id: itemId },
+      include: { batch: { include: { targetProduct: { select: { id: true, sku: true, name: true, technicalImageUrl: true } } } } },
+    });
+    if (!item?.outputAssetId) throw new NotFoundException("Ảnh kỹ thuật chưa có kết quả.");
+    if (item.batch.purpose !== "TECHNICAL_DRAWING" || !item.batch.targetProduct) throw new BadRequestException("Lô ảnh này chưa được tạo cho ảnh kỹ thuật của sản phẩm.");
+    if (item.status !== "APPROVED") throw new ConflictException("Cần duyệt ảnh kỹ thuật trước khi gắn vào sản phẩm.");
+    const product = item.batch.targetProduct;
+    if (item.attachedProductId) {
+      if (item.attachedProductId === product.id && item.publishedAssetId) return this.getBatch(item.batchId);
+      throw new ConflictException("Ảnh này đã được gắn vào một sản phẩm khác.");
+    }
+
+    const outputAsset = await this.media.findById(item.outputAssetId);
+    if (!outputAsset.isPrivate) throw new ConflictException("Ảnh kết quả không còn ở kho riêng tư như mong đợi.");
+    const outputBytes = await this.media.read(outputAsset);
+    const published = await this.media.save({
+      filename: `geme-technical-${product.sku}-${item.id}.png`,
+      mimeType: outputAsset.mimeType,
+      bytes: outputBytes,
+      sourceKey: `ai-studio/technical-drawings/${item.id}/published`,
+      isPrivate: false,
+      updateExisting: true,
+      alt: `Bản vẽ kỹ thuật AI tham khảo · ${product.name}`,
+    });
+    try {
+      await this.prisma.$transaction(async (transaction) => {
+        const currentProduct = await transaction.product.findUnique({ where: { id: product.id }, select: { name: true } });
+        if (!currentProduct) throw new NotFoundException("Sản phẩm đích không còn tồn tại.");
+        const claim = await transaction.aiImageItem.updateMany({ where: { id: item.id, status: "APPROVED", attachedProductId: null }, data: { attachedProductId: product.id, publishedAssetId: published.id } });
+        if (claim.count !== 1) throw new ConflictException("Ảnh vừa được gắn vào một sản phẩm khác.");
+        await transaction.product.update({ where: { id: product.id }, data: { technicalImageUrl: published.url } });
+        await transaction.productMediaAsset.create({
+          data: {
+            productId: product.id,
+            mediaAssetId: published.id,
+            tag: "TECHNICAL_DRAWING",
+            sourceAiImageItemId: item.id,
+            approvedByAdminId: actor.id,
+            approvedAt: new Date(),
+            metadata: { source: "AI_STUDIO", label: "Ảnh kỹ thuật", isAiGenerated: true, isManufacturingSpecification: false },
+          },
+        });
+      });
+      this.commerce.notifyProductImagesUpdated(product.id);
+      this.log("ai.technical_drawing.attached", actor.id, item.id, { productId: product.id, sku: product.sku, tag: "TECHNICAL_DRAWING", publishedAssetId: published.id });
+      return this.getBatch(item.batchId);
+    } catch (error) {
+      await this.media.removeUnreferencedAsset(published.id).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async listTechnicalDrawings(skuInput: string) {
+    const sku = skuInput.trim();
+    if (!sku || sku.length > 64) throw new BadRequestException("SKU sản phẩm không hợp lệ.");
+    const product = await this.prisma.product.findUnique({ where: { sku }, select: { id: true, sku: true, name: true, technicalImageUrl: true } });
+    if (!product) throw new NotFoundException("Không tìm thấy sản phẩm theo SKU.");
+    const assets = await this.prisma.productMediaAsset.findMany({
+      where: { productId: product.id, tag: "TECHNICAL_DRAWING" },
+      orderBy: { createdAt: "desc" },
+      include: { mediaAsset: { select: { id: true, filename: true, mimeType: true, isPrivate: true, storageProvider: true, objectKey: true, sourceKey: true, size: true } } },
+    });
+    return { product, assets: assets.map(({ mediaAsset, ...link }) => ({ ...link, url: this.media.urlFor(mediaAsset), filename: mediaAsset.filename, mimeType: mediaAsset.mimeType })) };
   }
 
   async download(itemId: string, formatInput: string) {

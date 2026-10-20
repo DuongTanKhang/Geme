@@ -14,7 +14,7 @@ ENV NODE_ENV=production \
     NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL} \
     AEGIS_AUTH_API_URL=${AEGIS_AUTH_API_URL}
 
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .

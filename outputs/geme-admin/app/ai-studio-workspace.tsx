@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { apiBaseUrl } from "../lib/api";
 import AiImageStudioWorkspace from "./ai-image-studio";
+import AiProductAgentWorkspace from "./ai-product-agent";
+import { AiPhaseFourWorkspace } from "./ai-phase-four";
 
-type AiTaskType = "CONTENT_DRAFT" | "IMAGE_GENERATION" | "IMAGE_STUDIO_PROCESSING" | "PRODUCT_PUBLICATION_PROPOSAL";
+type AiTaskType = "CONTENT_DRAFT" | "IMAGE_GENERATION" | "IMAGE_STUDIO_PROCESSING" | "PRODUCT_DRAFT_GENERATION" | "PRODUCT_PUBLICATION_PROPOSAL" | "SALES_ANSWER" | "MARKETING_DRAFT_GENERATION";
 type AiStatus = "QUEUED" | "RUNNING" | "AWAITING_APPROVAL" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "APPROVED" | "REJECTED";
 type AiTask = {
   id: string;
@@ -32,11 +34,14 @@ type AiApproval = {
   task: AiTask & { requestedBy?: { displayName: string } };
   reviewedBy?: { displayName: string } | null;
 };
-type StudioTab = "command" | "images" | "history" | "agents" | "approvals";
+type StudioTab = "command" | "images" | "products" | "sales" | "marketing" | "history" | "agents" | "approvals";
 
 const tabs: { id: StudioTab; label: string; mark: string }[] = [
   { id: "command", label: "Không gian lệnh", mark: "✦" },
   { id: "images", label: "Image Studio", mark: "▧" },
+  { id: "products", label: "Product Agent", mark: "◇" },
+  { id: "sales", label: "Sales Agent", mark: "✦" },
+  { id: "marketing", label: "Marketing Agent", mark: "Aa" },
   { id: "history", label: "Lịch sử tác vụ", mark: "◷" },
   { id: "agents", label: "AI Agents", mark: "◇" },
   { id: "approvals", label: "Trung tâm duyệt", mark: "✓" },
@@ -46,7 +51,10 @@ const typeLabel: Record<AiTaskType, string> = {
   CONTENT_DRAFT: "Bản nháp nội dung",
   IMAGE_GENERATION: "Yêu cầu hình ảnh",
   IMAGE_STUDIO_PROCESSING: "GEME Visual Agent",
+  PRODUCT_DRAFT_GENERATION: "GEME Product Agent",
   PRODUCT_PUBLICATION_PROPOSAL: "Đề xuất xuất bản sản phẩm",
+  SALES_ANSWER: "GEME Sales Agent",
+  MARKETING_DRAFT_GENERATION: "GEME Marketing Agent",
 };
 
 const statusLabel: Record<AiStatus, string> = {
@@ -61,7 +69,7 @@ const statusLabel: Record<AiStatus, string> = {
 };
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}/${path}`, {
+  const response = await fetch(`${apiBaseUrl}/admin/${path.replace(/^\//, "")}`, {
     ...init,
     cache: "no-store",
     credentials: "include",
@@ -205,7 +213,7 @@ export default function AiStudioWorkspace() {
 
   return <section className="ai-studio-page">
     <header className="ai-studio-hero">
-      <div className="ai-studio-hero-copy"><span className="ai-studio-eyebrow"><i /> GEME INTELLIGENCE · PHASE 2</span><h2>AI Studio</h2><p>Một không gian an toàn để điều phối bản nháp, hình ảnh và các quyết định cần con người phê duyệt.</p><div className="ai-studio-hero-note"><span>✦</span> AI chỉ đề xuất. Dữ liệu thương mại vẫn do GEME API quản lý.</div></div>
+      <div className="ai-studio-hero-copy"><span className="ai-studio-eyebrow"><i /> GEME INTELLIGENCE · PHASE 4 PILOT</span><h2>AI Studio</h2><p>Một không gian an toàn để điều phối hình ảnh, bản nháp sản phẩm, tư vấn và nội dung cần con người rà soát.</p><div className="ai-studio-hero-note"><span>✦</span> AI chỉ đề xuất. Dữ liệu thương mại vẫn do GEME API quản lý.</div></div>
       <div className="ai-studio-hero-art" aria-hidden="true"><span className="ai-orbit ai-orbit-one"/><span className="ai-orbit ai-orbit-two"/><span className="ai-orbit ai-orbit-three"/><span className="ai-gem-mark">G</span><span className="ai-star ai-star-one">✦</span><span className="ai-star ai-star-two">✧</span></div>
     </header>
 
@@ -241,9 +249,15 @@ export default function AiStudioWorkspace() {
 
     {tab === "images" && <AiImageStudioWorkspace />}
 
+    {tab === "products" && <AiProductAgentWorkspace />}
+
+    {tab === "sales" && <AiPhaseFourWorkspace mode="sales" />}
+
+    {tab === "marketing" && <AiPhaseFourWorkspace mode="marketing" />}
+
     {tab === "history" && <section className="ai-list-card"><div className="ai-section-heading ai-list-heading"><div><span className="ai-section-kicker">ACTIVITY LOG</span><h3>Lịch sử tác vụ</h3><p>Task state bền vững trong PostgreSQL; Redis xử lý công việc nền.</p></div><span className="ai-count-pill">{tasks.length} tác vụ</span></div>{tasks.length ? <div className="ai-task-list">{tasks.map((task) => <article className="ai-task-row" key={task.id}><span className={`ai-task-type-icon type-${task.type.toLowerCase()}`}>✦</span><div className="ai-task-copy"><strong>{task.title}</strong><p>{task.input?.prompt || typeLabel[task.type]}</p><small>{typeLabel[task.type]} · {formatDate(task.createdAt)} · thử {task.attemptCount} lần</small></div><StatusBadge status={task.status}/><div className="ai-task-actions"><button type="button" onClick={() => void openTask(task.id)}>Chi tiết</button>{(task.status === "QUEUED" || task.status === "RUNNING") && <button type="button" className="is-danger" disabled={busyTask === task.id} onClick={() => void cancelTask(task.id)}>{busyTask === task.id ? "Đang hủy…" : "Hủy"}</button>}</div></article>)}</div> : <div className="ai-empty-state"><span>◷</span><h4>{loading ? "Đang tải lịch sử" : "Chưa có tác vụ nào"}</h4><p>Tác vụ mới sẽ xuất hiện tại đây.</p></div>}</section>}
 
-    {tab === "agents" && <section className="ai-agent-grid">{(overview?.agents || []).map((agent, index) => <article className="ai-agent-card" key={agent.id}><div className={`ai-agent-visual agent-visual-${index}`}><span>{index === 0 ? "Aa" : index === 1 ? "✧" : "✓"}</span><i/><b/></div><div className="ai-agent-body"><div className="ai-agent-topline"><span className="ai-section-kicker">AGENT 0{index + 1}</span><span className={`ai-agent-state ${agent.status.toLowerCase()}`}>{agent.status === "PROVIDER_DISABLED" ? "Nhà cung cấp đang tắt" : agent.status === "APPROVAL_REQUIRED" ? "Luôn cần duyệt" : "Scaffold sẵn sàng"}</span></div><h3>{agent.name}</h3><p>{agent.capability}</p><div className="ai-agent-foot"><span><i/> Hàng đợi riêng</span><span>Phase 1</span></div></div></article>)}</section>}
+    {tab === "agents" && <section className="ai-agent-grid">{(overview?.agents || []).map((agent, index) => <article className="ai-agent-card" key={agent.id}><div className={`ai-agent-visual agent-visual-${index}`}><span>{index === 0 ? "Aa" : index === 1 ? "✧" : "✓"}</span><i/><b/></div><div className="ai-agent-body"><div className="ai-agent-topline"><span className="ai-section-kicker">AGENT 0{index + 1}</span><span className={`ai-agent-state ${agent.status.toLowerCase()}`}>{agent.status === "PROVIDER_DISABLED" ? "Nhà cung cấp chưa cấu hình" : agent.status === "APPROVAL_REQUIRED" ? "Luôn cần duyệt" : agent.status === "READY" ? "Đang hoạt động" : "Scaffold sẵn sàng"}</span></div><h3>{agent.name}</h3><p>{agent.capability}</p><div className="ai-agent-foot"><span><i/> Hàng đợi riêng</span><span>Phase 1</span></div></div></article>)}</section>}
 
     {tab === "approvals" && <section className="ai-list-card"><div className="ai-section-heading ai-list-heading"><div><span className="ai-section-kicker">HUMAN IN THE LOOP</span><h3>Trung tâm phê duyệt</h3><p>Quyết định được ghi lại cùng người duyệt và thời gian.</p></div><span className="ai-count-pill">{pendingApprovals.length} đang chờ</span></div>{approvals.length ? <div className="ai-approval-list">{approvals.map((approval) => <article className={`ai-approval-card ${approval.status !== "PENDING" ? "is-reviewed" : ""}`} key={approval.id}><div className="ai-approval-top"><div><span className="ai-approval-icon">✓</span><div><span className="ai-section-kicker">{approval.task.type === "PRODUCT_PUBLICATION_PROPOSAL" ? "ĐỀ XUẤT XUẤT BẢN" : "YÊU CẦU PHÊ DUYỆT"}</span><h4>{approval.task.title}</h4></div></div><span className={`ai-approval-status ${approval.status.toLowerCase()}`}>{approval.status === "PENDING" ? "Chờ quyết định" : approval.status === "APPROVED" ? "Đã duyệt" : "Đã từ chối"}</span></div><p className="ai-approval-prompt">{approval.task.input?.prompt || "Không có chỉ dẫn."}</p><div className="ai-approval-result">{resultMessage(approval.task.result)}</div><div className="ai-approval-foot"><span>Đề xuất bởi {approval.task.requestedBy?.displayName || "Admin"} · {formatDate(approval.requestedAt)}</span>{approval.status === "PENDING" ? <div><button type="button" className="ai-reject-button" disabled={busyTask === approval.task.id} onClick={() => void decide(approval.task.id, "reject")}>Từ chối</button><button type="button" className="ai-approve-button" disabled={busyTask === approval.task.id} onClick={() => void decide(approval.task.id, "approve")}>{busyTask === approval.task.id ? "Đang lưu…" : "Phê duyệt"}</button></div> : <span>{approval.reviewedBy?.displayName ? `Quyết định bởi ${approval.reviewedBy.displayName}` : "Đã ghi nhận quyết định"}{approval.decisionNote ? ` · ${approval.decisionNote}` : ""}</span>}</div></article>)}</div> : <div className="ai-empty-state"><span>✓</span><h4>Không có đề xuất chờ duyệt</h4><p>Đề xuất cần con người phê duyệt sẽ được hiển thị ở đây.</p></div>}</section>}
 

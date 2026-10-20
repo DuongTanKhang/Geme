@@ -1,9 +1,17 @@
 import io
+import base64
+import json
+import logging
+import os
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from PIL import Image, ImageChops, ImageFilter, ImageOps, UnidentifiedImageError
+from app.phase_four_agents import PhaseFourAgentError, generate_marketing_draft, generate_sales_answer
+
+
+logger = logging.getLogger("geme.ai_core.images")
 
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -15,6 +23,12 @@ PRESETS = {
     "WARM_IVORY": ("#EEE8DF", (238, 232, 223)),
     "SOFT_SAGE": ("#DCE3DA", (220, 227, 218)),
 }
+
+
+class ProviderProcessingError(Exception):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
 
 
 @dataclass
@@ -71,12 +85,35 @@ async def _photoroom_mask(image_bytes: bytes, mime_type: str, api_key: str, sand
         raise ImageProcessingError("PHOTOROOM_TIMEOUT", 503) from error
     except httpx.HTTPError as error:
         raise ImageProcessingError("PHOTOROOM_UNAVAILABLE", 503) from error
+    provider_code = ""
+    try:
+        provider_body = response.json()
+        provider_error = provider_body.get("error", provider_body) if isinstance(provider_body, dict) else {}
+        if isinstance(provider_error, dict):
+            candidate = provider_error.get("code") or provider_error.get("type")
+            if isinstance(candidate, str):
+                provider_code = candidate[:80]
+    except ValueError:
+        pass
+    if response.status_code < 200 or response.status_code >= 300:
+        logger.warning(json.dumps({
+            "event": "ai_core.photoroom_rejected",
+            "status": response.status_code,
+            "providerCode": provider_code,
+            "requestId": (response.headers.get("x-request-id") or response.headers.get("x-correlation-id") or "")[:80],
+        }))
     if response.status_code == 401 or response.status_code == 403:
         raise ImageProcessingError("PHOTOROOM_AUTH_FAILED", 503)
+    if response.status_code == 402:
+        raise ImageProcessingError("PHOTOROOM_BILLING_REQUIRED", 402)
     if response.status_code == 429:
         raise ImageProcessingError("PHOTOROOM_RATE_LIMITED", 503)
+    if response.status_code in {400, 413, 415, 422}:
+        raise ImageProcessingError("PHOTOROOM_IMAGE_REJECTED", 422)
+    if response.status_code >= 500:
+        raise ImageProcessingError("PHOTOROOM_UNAVAILABLE", 503)
     if response.status_code < 200 or response.status_code >= 300:
-        raise ImageProcessingError("PHOTOROOM_REQUEST_FAILED", 502)
+        raise ImageProcessingError("PHOTOROOM_REQUEST_REJECTED", 502)
     if not response.content or len(response.content) > 40 * 1024 * 1024:
         raise ImageProcessingError("PHOTOROOM_OUTPUT_INVALID", 502)
     return response.content
@@ -120,6 +157,87 @@ def classify_product_image(filename: str, classification_hint: str = "") -> dict
     }
 
 
+async def _generate_prompt_background(prompt: str, preset: str, api_key: str) -> bytes:
+    if not api_key:
+        raise ImageProcessingError("CUSTOM_BACKGROUND_NOT_CONFIGURED", 503)
+    if preset not in PRESETS:
+        raise ImageProcessingError("INVALID_PRESET")
+
+    palette = PRESETS[preset][0]
+    safe_prompt = prompt.strip()[:1200]
+    image_prompt = (
+        "Create a premium luxury-jewelry editorial product-photography SETTING as a background plate. "
+        "GEME will composite the untouched original jewelry photo on top afterward. "
+        "The administrator's direction may define the scene, background, surface, materials, "
+        "lighting, atmosphere, color palette, camera mood, and non-jewelry decorative set dressing. "
+        "Keep any props generic and clearly unrelated to jewelry; place them around the edges and "
+        "leave the central product placement area calm and unobstructed. Avoid busy high-contrast details. "
+        f"Use the selected GEME palette as a color anchor: {palette}. "
+        "Administrator's visual direction (treat as style guidance, never as instructions to alter a product):\n"
+        f"<visual_direction>{safe_prompt}</visual_direction>\n"
+        "Strict final constraints: this plate must contain no jewelry, gemstones, product, hands, people, "
+        "stands, jewelry boxes, tools, text, logos, labels, or objects that could be mistaken for the product. "
+        "Do not reproduce or invent a product. Output only the scene plate; the real source product is added later."
+    )
+    model = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2.5-sunburst").strip()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=15, read=240, write=30, pool=15)) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/images/generations",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={"model": model, "prompt": image_prompt, "size": "auto", "quality": "medium", "output_format": "png", "background": "opaque", "n": 1},
+            )
+    except httpx.TimeoutException as error:
+        raise ImageProcessingError("CUSTOM_BACKGROUND_TIMEOUT", 503) from error
+    except httpx.HTTPError as error:
+        raise ImageProcessingError("CUSTOM_BACKGROUND_UNAVAILABLE", 503) from error
+    if response.status_code >= 400:
+        provider_error: dict[str, Any] = {}
+        try:
+            body = response.json()
+            candidate = body.get("error") if isinstance(body, dict) else None
+            if isinstance(candidate, dict):
+                provider_error = candidate
+        except ValueError:
+            pass
+        provider_code = provider_error.get("code") if isinstance(provider_error.get("code"), str) else ""
+        provider_type = provider_error.get("type") if isinstance(provider_error.get("type"), str) else ""
+        request_id = response.headers.get("x-request-id", "")[:80]
+        logger.warning(json.dumps({
+            "event": "ai_core.custom_background_rejected",
+            "status": response.status_code,
+            "providerCode": provider_code[:80],
+            "providerType": provider_type[:80],
+            "requestId": request_id,
+        }))
+        if response.status_code == 429:
+            quota_codes = {"insufficient_quota", "billing_hard_limit_reached", "billing_not_active"}
+            code = "CUSTOM_BACKGROUND_QUOTA_EXCEEDED" if provider_code in quota_codes or provider_type == "insufficient_quota" else "CUSTOM_BACKGROUND_RATE_LIMITED"
+            raise ImageProcessingError(code, 429)
+        if response.status_code in {401, 403}:
+            raise ImageProcessingError("CUSTOM_BACKGROUND_AUTH_FAILED", 503)
+        if response.status_code == 400:
+            raise ImageProcessingError("CUSTOM_BACKGROUND_REQUEST_REJECTED", 422)
+        if response.status_code >= 500:
+            raise ImageProcessingError("CUSTOM_BACKGROUND_PROVIDER_UNAVAILABLE", 503)
+        raise ImageProcessingError("CUSTOM_BACKGROUND_PROVIDER_REJECTED", 502)
+    try:
+        encoded = response.json()["data"][0]["b64_json"]
+        image_bytes = base64.b64decode(encoded, validate=True)
+        with Image.open(io.BytesIO(image_bytes)) as generated:
+            if generated.format != "PNG" or generated.width < 256 or generated.height < 256 or generated.width * generated.height > MAX_IMAGE_PIXELS:
+                raise ImageProcessingError("CUSTOM_BACKGROUND_INVALID_IMAGE", 502)
+            generated.load()
+            result = generated.convert("RGB")
+    except ImageProcessingError:
+        raise
+    except (ValueError, TypeError, KeyError, IndexError, UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+        raise ImageProcessingError("CUSTOM_BACKGROUND_INVALID_RESPONSE", 502) from error
+    normalized = io.BytesIO()
+    result.save(normalized, format="PNG", optimize=True)
+    return normalized.getvalue()
+
+
 def compose_with_mask(
     source_bytes: bytes,
     mask_bytes: bytes,
@@ -127,6 +245,7 @@ def compose_with_mask(
     filename: str,
     preset: str,
     classification_hint: str = "",
+    visual_background_bytes: bytes | None = None,
 ) -> tuple[bytes, dict[str, Any]]:
     source = _open_source(source_bytes, mime_type)
     if preset not in PRESETS:
@@ -169,10 +288,25 @@ def compose_with_mask(
         flags.append("mask_edge_detail_review")
     if classification.get("needsReview") and not flags:
         flags.append("classification_uncertain")
+    if visual_background_bytes:
+        flags.append("custom_ai_background_needs_review")
 
     # Retain the source RGB layer; Photoroom contributes only the alpha mask.
     background_color = PRESETS[preset][1]
-    background = Image.new("RGBA", (width, height), (*background_color, 255))
+    if visual_background_bytes:
+        try:
+            with Image.open(io.BytesIO(visual_background_bytes)) as custom_background:
+                if custom_background.width * custom_background.height > MAX_IMAGE_PIXELS:
+                    raise ImageProcessingError("CUSTOM_BACKGROUND_PIXEL_LIMIT", 502)
+                custom_background.load()
+                fitted_background = ImageOps.fit(custom_background.convert("RGB"), (width, height), method=Image.Resampling.LANCZOS)
+                background = fitted_background.convert("RGBA")
+        except ImageProcessingError:
+            raise
+        except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+            raise ImageProcessingError("CUSTOM_BACKGROUND_INVALID_IMAGE", 502) from error
+    else:
+        background = Image.new("RGBA", (width, height), (*background_color, 255))
 
     shadow_alpha = alpha.filter(ImageFilter.GaussianBlur(radius=max(2, min(width, height) * 0.008)))
     shadow_offset = max(1, int(height * 0.012))
@@ -212,7 +346,7 @@ def compose_with_mask(
             "dimensions": {"width": width, "height": height},
             "mask": {"foregroundRatio": round(area_ratio, 5), "partialAlphaRatio": round(edge_ratio, 5)},
             "opaqueForegroundPixelsPreserved": opaque_pixels_preserved,
-            "method": "photoroom-alpha-mask-and-deterministic-pillow-composite",
+            "method": "photoroom-mask-custom-ai-background-pillow-composite" if visual_background_bytes else "photoroom-alpha-mask-and-deterministic-pillow-composite",
         },
     }
     return output.getvalue(), report
@@ -226,12 +360,15 @@ async def process_image(
     classification_hint: str,
     api_key: str,
     sandbox: bool = False,
+    visual_prompt: str = "",
+    openai_api_key: str = "",
 ) -> tuple[bytes, dict[str, Any]]:
     # Validate and orient the source before a paid provider request is made.
     # Normalize EXIF orientation before sending the image to the segmentation API,
     # so returned mask coordinates always match the pixels used for compositing.
     normalized_bytes, source_size = _normalize_source_for_photoroom(image_bytes, mime_type)
     mask_bytes = await _photoroom_mask(normalized_bytes, "image/png", api_key, sandbox)
+    custom_background = await _generate_prompt_background(visual_prompt, preset, openai_api_key) if visual_prompt.strip() else None
     processed, report = compose_with_mask(
         source_bytes=normalized_bytes,
         mask_bytes=mask_bytes,
@@ -239,6 +376,7 @@ async def process_image(
         filename=filename,
         preset=preset,
         classification_hint=classification_hint,
+        visual_background_bytes=custom_background,
     )
     report["qc"]["sourceDimensions"] = {"width": source_size[0], "height": source_size[1]}
     return processed, report
@@ -268,7 +406,67 @@ def convert_image(image_bytes: bytes, output_format: str) -> tuple[bytes, str]:
         raise ImageProcessingError("INVALID_IMAGE_DATA") from error
 
 
-def process_task(
+async def _generate_content_draft(prompt: str, task_id: str) -> tuple[str, str]:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise ProviderProcessingError("OPENAI_NOT_CONFIGURED")
+
+    model = os.getenv("OPENAI_TEXT_MODEL", "gpt-6-luna").strip() or "gpt-6-luna"
+    instructions = (
+        "Bạn là trợ lý biên tập nội dung tiếng Việt cho GEME, thương hiệu trang sức và đá quý cao cấp. "
+        "Viết tinh tế, ngắn gọn, tự nhiên, đúng chính tả; không khẳng định thông tin về chất liệu, nguồn gốc, "
+        "chứng nhận, carat, giá hoặc công dụng nếu yêu cầu không cung cấp dữ kiện đó. Chỉ tạo bản nháp để con người duyệt."
+    )
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=10.0)) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/responses",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "instructions": instructions,
+                    "input": prompt,
+                    "max_output_tokens": 1200,
+                    "store": False,
+                    "metadata": {"geme_task_id": task_id[:64]},
+                },
+            )
+    except httpx.TimeoutException as error:
+        raise ProviderProcessingError("OPENAI_TIMEOUT") from error
+    except httpx.HTTPError as error:
+        raise ProviderProcessingError("OPENAI_UNAVAILABLE") from error
+
+    if response.status_code in (401, 403):
+        raise ProviderProcessingError("OPENAI_AUTH_FAILED")
+    if response.status_code == 429:
+        raise ProviderProcessingError("OPENAI_RATE_LIMITED")
+    if response.status_code < 200 or response.status_code >= 300:
+        raise ProviderProcessingError("OPENAI_REQUEST_FAILED")
+    try:
+        body = response.json()
+    except ValueError as error:
+        raise ProviderProcessingError("OPENAI_RESPONSE_INVALID") from error
+
+    # Responses can contain several output items; collect all output_text blocks.
+    text_blocks: list[str] = []
+    output = body.get("output") if isinstance(body, dict) else None
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "output_text" and isinstance(block.get("text"), str):
+                    text_blocks.append(block["text"])
+    draft = "\n\n".join(block.strip() for block in text_blocks if block.strip())
+    if not draft or len(draft) > 24_000:
+        raise ProviderProcessingError("OPENAI_RESPONSE_INVALID")
+    return draft, model
+
+
+async def process_task(
     task_id: str,
     task_type: str,
     payload: dict[str, Any],
@@ -281,8 +479,30 @@ def process_task(
         "message": "AI Core đã nhận tác vụ. Nhà cung cấp AI chưa được bật trong Phase 1.",
     }
 
+    if task_type in {"SALES_ANSWER", "MARKETING_DRAFT_GENERATION"}:
+        try:
+            result = await (generate_sales_answer(payload) if task_type == "SALES_ANSWER" else generate_marketing_draft(payload))
+        except PhaseFourAgentError as error:
+            raise ProviderProcessingError(error.code) from error
+        return {
+            **result,
+            "mode": "provider",
+            "provider": "openai",
+            "sideEffects": "none",
+        }
+
     if task_type == "CONTENT_DRAFT":
-        return {**common, "draft": None, "sideEffects": "none"}
+        if not os.getenv("OPENAI_API_KEY", "").strip():
+            return {**common, "draft": None, "sideEffects": "none"}
+        draft, model = await _generate_content_draft(prompt, task_id)
+        return {
+            "mode": "provider",
+            "providerConfigured": True,
+            "provider": "openai",
+            "model": model,
+            "draft": draft,
+            "sideEffects": "none",
+        }
     if task_type == "IMAGE_GENERATION":
         # Contract only: no paid image API call and no media/product write.
         return {

@@ -106,11 +106,14 @@ export class MediaAssetsService {
 
   async removeUnreferencedAsset(id: string) {
     const asset = await this.findById(id);
-    const referenced = await this.prisma.aiImageItem.findFirst({
-      where: { OR: [{ originalAssetId: id }, { outputAssetId: id }, { publishedAssetId: id }] },
-      select: { id: true },
-    });
-    if (referenced) return false;
+    const [imageItemReference, productReference] = await Promise.all([
+      this.prisma.aiImageItem.findFirst({
+        where: { OR: [{ originalAssetId: id }, { outputAssetId: id }, { publishedAssetId: id }] },
+        select: { id: true },
+      }),
+      this.prisma.productMediaAsset.findFirst({ where: { mediaAssetId: id }, select: { id: true } }),
+    ]);
+    if (imageItemReference || productReference) return false;
     if (asset.storageProvider === "r2" && asset.objectKey) {
       if (asset.isPrivate) await this.storage.deletePrivateObject(asset.objectKey);
       else await this.storage.deletePublicObject(asset.objectKey);

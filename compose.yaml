@@ -11,6 +11,7 @@ services:
         AEGIS_AUTH_API_URL: http://aegis:5130
     environment:
       NODE_ENV: development
+      CI: "true"
       NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:4000/api/v1
       GEME_API_BASE_URL: http://geme-api:4000/api/v1
       AEGIS_AUTH_API_URL: http://aegis:5130
@@ -18,14 +19,14 @@ services:
       - "127.0.0.1:3000:3000"
     volumes:
       - ./outputs/geme:/app
-      - storefront_node_modules:/app/node_modules
+      - storefront_node_modules_v2:/app/node_modules
       - storefront_next:/app/.next
     depends_on:
       geme-api:
         condition: service_healthy
       aegis:
         condition: service_started
-    command: pnpm dev
+    command: node scripts/dev-warmup.mjs --hostname 0.0.0.0
 
   admin:
     build:
@@ -64,7 +65,10 @@ services:
       dockerfile: Dockerfile
     environment:
       NODE_ENV: development
+      CI: "true"
       PORT: "4000"
+      ADMIN_AUTH_JWT_SECRET: ${ADMIN_AUTH_JWT_SECRET:?Set ADMIN_AUTH_JWT_SECRET to a random value of at least 32 characters in .env.docker}
+      OPENAI_CONFIGURED: ${GEME_OPENAI_API_KEY:+true}
       CORS_ORIGINS: http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001
       DATABASE_URL: ${GEME_DATABASE_URL:?Set GEME_DATABASE_URL in .env.docker}
       REDIS_URL: redis://ai-redis:6379/0
@@ -102,7 +106,7 @@ services:
       - "127.0.0.1:4000:4000"
     volumes:
       - ./outputs/geme-api:/app
-      - geme_api_node_modules:/app/node_modules
+      - geme_api_node_modules_v2:/app/node_modules
     depends_on:
       aegis:
         condition: service_started
@@ -131,6 +135,7 @@ services:
       dockerfile: Dockerfile
     environment:
       NODE_ENV: development
+      CI: "true"
       DATABASE_URL: ${GEME_DATABASE_URL:?Set GEME_DATABASE_URL in .env.docker}
       REDIS_URL: redis://ai-redis:6379/0
       AI_CORE_URL: http://ai-core:8000
@@ -144,7 +149,7 @@ services:
       AI_WORKER_CONCURRENCY: ${AI_WORKER_CONCURRENCY:-3}
     volumes:
       - ./outputs/geme-api:/app
-      - geme_api_node_modules:/app/node_modules
+      - geme_api_node_modules_v2:/app/node_modules
     depends_on:
       geme-api:
         condition: service_healthy
@@ -170,6 +175,10 @@ services:
       dockerfile: Dockerfile
     environment:
       AI_CORE_SHARED_SECRET: ${AI_CORE_SHARED_SECRET:?Set AI_CORE_SHARED_SECRET to a random value of at least 32 characters}
+      OPENAI_API_KEY: ${GEME_OPENAI_API_KEY:-}
+      OPENAI_TEXT_MODEL: ${GEME_OPENAI_TEXT_MODEL:-gpt-6-astra}
+      OPENAI_IMAGE_ANALYSIS_MODEL: ${GEME_OPENAI_IMAGE_ANALYSIS_MODEL:-${GEME_OPENAI_TEXT_MODEL:-gpt-6-luna}}
+      OPENAI_IMAGE_MODEL: ${GEME_OPENAI_IMAGE_MODEL:-gpt-image-2.5-sunburst}
       PHOTOROOM_API_KEY: ${PHOTOROOM_API_KEY:-}
       PHOTOROOM_SANDBOX: ${PHOTOROOM_SANDBOX:-false}
       LOG_LEVEL: ${AI_CORE_LOG_LEVEL:-INFO}
@@ -262,9 +271,11 @@ services:
 
 volumes:
   storefront_node_modules:
+  storefront_node_modules_v2:
   storefront_next:
   admin_next_v2:
   geme_api_node_modules:
+  geme_api_node_modules_v2:
   aegis_sql_express_data:
   aegis_redis_data:
   geme_ai_redis_data:

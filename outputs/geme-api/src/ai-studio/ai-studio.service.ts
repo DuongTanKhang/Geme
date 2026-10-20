@@ -10,7 +10,10 @@ type TaskStatus = (typeof taskStatuses)[number];
 
 const agents = [
   { id: "content", name: "Content Atelier", capability: "Chuẩn bị bản nháp nội dung", status: "SCAFFOLD" },
-  { id: "image", name: "GEME Visual Agent", capability: "Xóa nền bằng mask và ghép preset có kiểm soát", status: "PROVIDER_DISABLED" },
+  { id: "image", name: "GEME Visual Agent", capability: "Tạo bối cảnh theo chỉ dẫn, ghép mask và giữ sản phẩm gốc", status: "PROVIDER_DISABLED" },
+  { id: "product", name: "GEME Product Agent", capability: "Tạo bản nháp sản phẩm từ ảnh đã duyệt, luôn cần admin rà soát", status: "PROVIDER_DISABLED" },
+  { id: "sales", name: "GEME Sales Agent", capability: "Tư vấn dựa trên sản phẩm ACTIVE, tồn kho hiện tại và chính sách đã duyệt; chuyển người khi thiếu dữ kiện", status: "PROVIDER_DISABLED" },
+  { id: "marketing", name: "GEME Marketing Agent", capability: "Soạn nội dung theo sản phẩm đã duyệt; chỉ lưu nháp, không tự đăng hoặc gửi", status: "PROVIDER_DISABLED" },
   { id: "catalog-review", name: "Catalog Reviewer", capability: "Đưa đề xuất xuất bản vào trung tâm duyệt", status: "APPROVAL_REQUIRED" },
 ];
 
@@ -28,7 +31,13 @@ export class AiStudioService {
     const taskCounts: Record<TaskStatus, number> = Object.fromEntries(taskStatuses.map((status) => [status, 0])) as Record<TaskStatus, number>;
     for (const group of groups) taskCounts[group.status] = group._count._all;
     return {
-      agents: agents.map((agent) => agent.id === "image" ? { ...agent, status: process.env.PHOTOROOM_CONFIGURED?.trim() === "true" || Boolean(process.env.PHOTOROOM_API_KEY?.trim()) ? "READY" : "PROVIDER_DISABLED" } : agent),
+      agents: agents.map((agent) => {
+        if (agent.id === "image") return { ...agent, status: process.env.PHOTOROOM_CONFIGURED?.trim() === "true" || Boolean(process.env.PHOTOROOM_API_KEY?.trim()) ? "READY" : "PROVIDER_DISABLED" };
+        if (agent.id === "content") return { ...agent, status: process.env.OPENAI_CONFIGURED?.trim() === "true" ? "READY" : "PROVIDER_DISABLED" };
+        if (agent.id === "product") return { ...agent, status: process.env.OPENAI_CONFIGURED?.trim() === "true" ? "READY" : "PROVIDER_DISABLED" };
+        if (agent.id === "sales" || agent.id === "marketing") return { ...agent, status: process.env.OPENAI_CONFIGURED?.trim() === "true" ? "READY" : "PROVIDER_DISABLED" };
+        return agent;
+      }),
       taskCounts,
       queue,
     };
@@ -78,7 +87,7 @@ export class AiStudioService {
       task = await this.prisma.$transaction(async (transaction) => {
         // Serialize only task admission for this admin. Concurrent submit bursts
         // cannot race past the per-admin active-task cap.
-        await transaction.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${actor.id})::bigint)`;
+        await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${actor.id})::bigint)`;
         const activeCount = await transaction.aiTask.count({
           where: { requestedByAdminId: actor.id, status: { in: ["QUEUED", "RUNNING"] } },
         });
@@ -115,9 +124,13 @@ export class AiStudioService {
   }
 
   async cancelTask(actor: AdminIdentity, id: string) {
+    const existing = await this.prisma.aiTask.findUnique({ where: { id }, select: { type: true, input: true } });
     const changed = await this.prisma.aiTask.updateMany({
       where: { id, status: { in: ["QUEUED", "RUNNING"] } },
-      data: { status: "CANCELLED", cancelledAt: new Date(), completedAt: new Date() },
+      data: {
+        status: "CANCELLED", cancelledAt: new Date(), completedAt: new Date(),
+        ...(existing?.type === "SALES_ANSWER" ? { input: redactSalesInput(existing.input) } : {}),
+      },
     });
     if (changed.count === 0) {
       const current = await this.prisma.aiTask.findUnique({ where: { id } });
@@ -126,6 +139,7 @@ export class AiStudioService {
       return current;
     }
     await this.queue.removeIfWaiting(id);
+    await this.prisma.aiMarketingDraft.updateMany({ where: { taskId: id, status: { in: ["QUEUED", "GENERATING"] } }, data: { status: "CANCELLED" } });
     this.log("ai.task.cancelled", actor.id, id);
     return this.task(id);
   }
@@ -234,4 +248,12 @@ export class AiStudioService {
   private log(event: string, adminId: string, taskId: string, fields: Record<string, unknown> = {}) {
     this.logger.log(JSON.stringify({ event, adminId, taskId, ...fields, at: new Date().toISOString() }));
   }
+}
+
+function redactSalesInput(value: unknown): Prisma.InputJsonObject {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const ids = (field: "catalog" | "knowledge") => Array.isArray(input[field])
+    ? (input[field] as unknown[]).map((item) => item && typeof item === "object" && !Array.isArray(item) && typeof (item as Record<string, unknown>).id === "string" ? (item as Record<string, unknown>).id as string : "").filter(Boolean).slice(0, 16)
+    : [];
+  return { redacted: true, sourceProductIds: ids("catalog"), policySourceIds: ids("knowledge"), requestFingerprint: typeof input.requestFingerprint === "string" ? input.requestFingerprint : "" };
 }
