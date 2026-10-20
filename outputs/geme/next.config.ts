@@ -16,12 +16,6 @@ const nextConfig: NextConfig = {
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
-  async redirects() {
-    return [
-      { source: "/cam-nang-da-quy", destination: "/da-quy", permanent: true },
-      { source: "/cam-nang-da-quy/:slug", destination: "/da-quy", permanent: true },
-    ];
-  },
   async rewrites() {
     const apiBase = (process.env.GEME_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:4000/api/v1").replace(/\/$/, "");
     return {

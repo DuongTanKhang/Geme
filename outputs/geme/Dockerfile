@@ -6,21 +6,23 @@ RUN corepack enable
 ARG GEME_API_BASE_URL
 ARG NEXT_PUBLIC_API_BASE_URL
 ARG AEGIS_AUTH_API_URL
+ARG GEME_SITE_URL
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
     PORT=3000 \
     GEME_API_BASE_URL=${GEME_API_BASE_URL} \
     NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL} \
-    AEGIS_AUTH_API_URL=${AEGIS_AUTH_API_URL}
+    AEGIS_AUTH_API_URL=${AEGIS_AUTH_API_URL} \
+    GEME_SITE_URL=${GEME_SITE_URL}
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
 
-RUN if [ -z "$GEME_API_BASE_URL" ] || [ -z "$NEXT_PUBLIC_API_BASE_URL" ] || [ -z "$AEGIS_AUTH_API_URL" ]; then \
-      echo "Set GEME_API_BASE_URL, NEXT_PUBLIC_API_BASE_URL, and AEGIS_AUTH_API_URL when building the production image." >&2; exit 1; \
+RUN if [ -z "$GEME_API_BASE_URL" ] || [ -z "$NEXT_PUBLIC_API_BASE_URL" ] || [ -z "$AEGIS_AUTH_API_URL" ] || [ -z "$GEME_SITE_URL" ]; then \
+      echo "Set GEME_API_BASE_URL, NEXT_PUBLIC_API_BASE_URL, AEGIS_AUTH_API_URL, and GEME_SITE_URL when building the production image." >&2; exit 1; \
     fi \
     && pnpm build
 

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { NewArrivals, type NewArrivalsFilters } from "../components/new-arrivals";
 import { SiteFooter } from "../components/site-footer";
 import { SiteHeader } from "../components/site-header";
@@ -5,6 +6,17 @@ import { getStoreBanner, getStoreFacets, getStoreNewArrivalsMedia, getStoreProdu
 
 type SearchValue = string | string[] | undefined;
 type SearchParams = Record<string, SearchValue>;
+
+export async function generateMetadata({ searchParams }: { searchParams: Promise<SearchParams> }): Promise<Metadata> {
+  const query = await searchParams;
+  const hasFilters = Object.values(query).some((value) => values(value).length > 0);
+  return {
+    title: "Thiết kế mới",
+    description: "Khám phá những thiết kế trang sức và đá quý mới nhất từ GEME.",
+    alternates: { canonical: "/new-arrivals" },
+    ...(hasFilters ? { robots: { index: false, follow: true } } : {}),
+  };
+}
 
 function values(value: SearchValue) {
   return (Array.isArray(value) ? value : value ? [value] : []).map((item) => item.trim()).filter(Boolean);
@@ -54,6 +66,7 @@ export default async function NewArrivalsPage({ searchParams }: { searchParams: 
     ...filters,
   })));
   const connected = productResults.every((result) => result.connected);
+  if (!connected || !facets.catalogConnected) throw new Error("Không thể tải danh sách thiết kế mới từ GEME API.");
   const mergedProducts = new Map<string, (typeof productResults)[number]["products"][number]>();
   for (const result of productResults) for (const product of result.products) if (!mergedProducts.has(product.id)) mergedProducts.set(product.id, product);
   // Preserve the API's ordering within each branch while deduplicating products

@@ -1,4 +1,5 @@
 import Image from "next/image";
+import type { Metadata } from "next";
 import { ProductGrid } from "./components/product-grid";
 import { StoreProductGrid } from "./components/store-product-grid";
 import { SiteHeader } from "./components/site-header";
@@ -14,6 +15,13 @@ import {
   type StoreCategory,
   type StoreMaterial,
 } from "./lib/store-api";
+
+export const metadata: Metadata = {
+  alternates: { canonical: "/" },
+  openGraph: { type: "website", siteName: "GEME", url: "/", title: "GEME — Đá quý tự nhiên, dấu ấn riêng", description: "Trang sức đá quý tự nhiên, tinh tế và độc bản từ GEME." },
+};
+
+export const dynamic = "force-dynamic";
 
 function Icon({ name, className = "" }: { name: "heart" | "user" | "bag" | "search" | "diamond" | "shield" | "chat" | "truck" | "arrow"; className?: string }) {
   const common = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.45, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, className, "aria-hidden": true as const };
@@ -152,6 +160,7 @@ export default async function Home() {
     getStoreSiteSettings(),
     getStoreFacets(),
   ]);
+  if (!catalogProducts.connected || !facets.catalogConnected) throw new Error("Không thể tải danh mục GEME từ API.");
   const bestSellerProducts = selectHomeBestSellers(catalogProducts.products, featuredResult.products, salesOverview.products);
   const storyBanner = getStoreBanner(site.settings, "Trang chủ - Câu chuyện", "/images/home/geme/06-brand-craft.webp");
   const heroBanner = getStoreBanner(site.settings, "Trang chủ - Hero", "/images/home/geme/01-hero-opal.webp");

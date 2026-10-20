@@ -4,8 +4,10 @@ import { SiteHeader } from "../components/site-header";
 import { guideStones } from "./stones";
 
 export const metadata: Metadata = {
-  title: "Cẩm nang đá quý | GEME",
+  title: "Cẩm nang đá quý",
   description: "Khám phá đặc điểm, màu sắc và cách chăm sóc các loại đá quý cùng GEME.",
+  alternates: { canonical: "/cam-nang-da-quy" },
+  openGraph: { type: "website", siteName: "GEME", title: "Cẩm nang đá quý", description: "Khám phá đặc điểm, màu sắc và cách chăm sóc các loại đá quý cùng GEME.", url: "/cam-nang-da-quy" },
 };
 
 function StoneArtwork({ stone, className = "" }: { stone: (typeof guideStones)[number]; className?: string }) {

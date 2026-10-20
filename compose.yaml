@@ -9,11 +9,13 @@ services:
         GEME_API_BASE_URL: http://geme-api:4000/api/v1
         NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:4000/api/v1
         AEGIS_AUTH_API_URL: http://aegis:5130
+        GEME_SITE_URL: ${GEME_SITE_URL:-https://geme.vn}
     environment:
       NODE_ENV: development
       CI: "true"
       NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:4000/api/v1
       GEME_API_BASE_URL: http://geme-api:4000/api/v1
+      GEME_SITE_URL: ${GEME_SITE_URL:-https://geme.vn}
       AEGIS_AUTH_API_URL: http://aegis:5130
     ports:
       - "127.0.0.1:3000:3000"

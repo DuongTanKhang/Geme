@@ -80,6 +80,16 @@ const requiredJewelryCategorySlugs = new Set<string>(requiredJewelryCategories.m
 const isRequiredJewelryRoot = (category: { slug: string; kind: string; level: number }) => category.slug === "trang-suc" && category.kind === "JEWELRY" && category.level === 1;
 const isRequiredJewelryChild = (category: { slug: string; kind: string; level: number; parentId?: string | null }, rootId: string) => category.kind === "JEWELRY" && category.level === 2 && category.parentId === rootId && requiredJewelryCategorySlugs.has(category.slug);
 const includeProduct = { category: true, gemstoneType: true, materialOption: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { orderBy: { sortOrder: "asc" as const } } };
+const selectAdminProductSummary = {
+  id: true, sku: true, name: true, kind: true, categoryId: true, gemstoneTypeId: true, materialOptionId: true,
+  status: true, isNew: true, price: true, originalPrice: true, stock: true,
+  pos365PriceSyncStatus: true, pos365PriceSyncError: true, pos365PriceSyncedAt: true,
+  category: { select: { id: true, name: true, kind: true, level: true, parentId: true, pricingMode: true } },
+  gemstoneType: { select: { id: true, name: true } },
+  materialOption: { select: { id: true, name: true } },
+  images: { orderBy: [{ isPrimary: "desc" as const }, { sortOrder: "asc" as const }], take: 1, select: { url: true, alt: true } },
+  variants: { orderBy: { sortOrder: "asc" as const }, select: { id: true, sku: true, quality: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, originalPrice: true, stock: true, sortOrder: true } },
+} satisfies Prisma.ProductSelect;
 const includeStorefrontProduct = {
   category: { select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true, status: true, sortOrder: true, pricingMode: true } },
   gemstoneType: { select: { id: true, name: true, slug: true } },
@@ -97,6 +107,8 @@ const selectStorefrontListing = {
   gemstoneTypeId: true,
   materialOptionId: true,
   status: true,
+  seoTitle: true,
+  seoDescription: true,
   isNew: true,
   isFeatured: true,
   price: true,
@@ -108,6 +120,7 @@ const selectStorefrontListing = {
   coverVideoUrl: true,
   stock: true,
   createdAt: true,
+  updatedAt: true,
   category: { select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true, status: true, sortOrder: true, pricingMode: true } },
   gemstoneType: { select: { id: true, name: true, slug: true } },
   materialOption: { select: { id: true, name: true, slug: true, scope: true, kind: true, active: true, sortOrder: true } },
@@ -601,12 +614,21 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (query.featured === "true") where.isFeatured = true;
     if (query.search) where.OR = [{ name: { contains: query.search, mode: "insensitive" } }, { sku: { contains: query.search, mode: "insensitive" } }];
     if (query.all !== "true") where.AND = (where.AND || []).concat(await this.storefrontProductVisibilityWhere());
-    const orderBy = [{ isNew: "desc" as const }, { createdAt: "desc" as const }];
+    const orderBy = [{ isNew: "desc" as const }, { createdAt: "desc" as const }, { id: "asc" as const }];
     const productLimit = query.all === "true" ? 5000 : 500;
     const take = Math.min(Math.max(Number(query.limit) || productLimit, 1), productLimit);
+    const skip = Math.min(Math.max(Math.floor(Number(query.offset) || 0), 0), 1_000_000);
+    if (query.view === "sitemap") {
+      const loadSitemapEntries = () => this.prisma.product.findMany({ where, select: { slug: true, createdAt: true, updatedAt: true }, orderBy, take, skip });
+      if (query.all === "true" || query.search) return loadSitemapEntries();
+      const cacheKey = JSON.stringify(Object.entries(query).sort(([left], [right]) => left.localeCompare(right)));
+      return this.cachedPublicProductRead(cacheKey, loadSitemapEntries);
+    }
     const load = () => query.view === "storefront-list"
-      ? this.prisma.product.findMany({ where, select: selectStorefrontListing, orderBy, take })
-      : this.prisma.product.findMany({ where, include: query.view === "storefront" ? includeStorefrontProduct : includeProduct, orderBy, take });
+      ? this.prisma.product.findMany({ where, select: selectStorefrontListing, orderBy, take, skip })
+      : query.view === "admin-summary"
+        ? this.prisma.product.findMany({ where, select: selectAdminProductSummary, orderBy, take, skip }).then((records) => records.map((record) => ({ ...record, adminSummary: true })))
+        : this.prisma.product.findMany({ where, include: query.view === "storefront" ? includeStorefrontProduct : includeProduct, orderBy, take, skip });
     if (query.all === "true" || query.search || !["storefront", "storefront-list"].includes(query.view)) return load();
     const cacheKey = JSON.stringify(Object.entries(query).sort(([left], [right]) => left.localeCompare(right)));
     return this.cachedPublicProductRead(cacheKey, load);
@@ -949,12 +971,20 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     monthStart.setHours(0, 0, 0, 0);
     const [products, soldItems, movements] = await Promise.all([
       this.prisma.product.findMany({
-        include: {
+        select: {
+          id: true,
+          sku: true,
+          name: true,
+          status: true,
+          stock: true,
+          minimumStock: true,
+          price: true,
+          kind: true,
           category: { select: { id: true, name: true, pricingMode: true } },
           gemstoneType: { select: { id: true, name: true } },
           materialOption: { select: { id: true, name: true, kind: true, scope: true } },
           images: { orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }], take: 1, select: { url: true, alt: true } },
-          variants: { orderBy: { sortOrder: "asc" }, select: { id: true, sku: true, quality: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, originalPrice: true, stock: true, imageUrls: true, videoUrl: true, sortOrder: true } },
+          variants: { orderBy: { sortOrder: "asc" }, select: { id: true, sku: true, quality: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, stock: true } },
         },
         orderBy: [{ updatedAt: "desc" }, { name: "asc" }],
         take: 5000,
@@ -2297,7 +2327,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       this.prisma.blogPost.findMany({
         where,
         select: { id: true, slug: true, title: true, summary: true, category: true, tags: true, content: true, coverImageUrl: true, publishedAt: true, createdAt: true, views: true, images: { orderBy: { sortOrder: "asc" }, take: 1, select: { url: true, alt: true, sortOrder: true } } },
-        orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }], take, skip,
+        orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }, { id: "asc" }], take, skip,
       }),
       this.prisma.blogPost.count({ where }),
       this.prisma.blogPost.groupBy({ by: ["category"], where: { status: "PUBLISHED" }, _count: { _all: true } }),
@@ -2316,10 +2346,15 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       categories: [...categories.entries()].sort(([left], [right]) => left.localeCompare(right, "vi")).map(([name, count]) => ({ name, count })),
       };
     });
+    if (query.view === "sitemap") return this.prisma.blogPost.findMany({
+      where,
+      select: { slug: true, createdAt: true, updatedAt: true, publishedAt: true },
+      orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }, { id: "asc" }], take, skip,
+    });
     if (query.view === "storefront-list") return this.prisma.blogPost.findMany({
       where,
-      select: { id: true, slug: true, title: true, summary: true, category: true, tags: true, coverImageUrl: true, publishedAt: true, createdAt: true, views: true, images: { orderBy: { sortOrder: "asc" }, take: 1, select: { url: true, alt: true, sortOrder: true } } },
-      orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }], take, skip,
+      select: { id: true, slug: true, title: true, summary: true, category: true, tags: true, coverImageUrl: true, publishedAt: true, createdAt: true, updatedAt: true, views: true, images: { orderBy: { sortOrder: "asc" }, take: 1, select: { url: true, alt: true, sortOrder: true } } },
+      orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }, { id: "asc" }], take, skip,
     });
     if (query.view === "admin-summary") return this.prisma.blogPost.findMany({
       where,

@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { SiteFooter } from "../../components/site-footer";
 import { SiteHeader } from "../../components/site-header";
+import { StructuredData } from "../../components/structured-data";
+import { absolutePublicImageUrl, absoluteSiteUrl } from "../../lib/seo";
 import { getGuideStone, guideStones } from "../stones";
 
 export function generateStaticParams() {
@@ -11,8 +13,17 @@ export function generateStaticParams() {
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
   const stone = getGuideStone(slug);
-  if (!stone) return { title: "Không tìm thấy bài viết | GEME" };
-  return { title: `${stone.name} — Cẩm nang đá quý | GEME`, description: stone.intro };
+  if (!stone) notFound();
+  const title = `${stone.name} — Cẩm nang đá quý`;
+  const canonical = `/cam-nang-da-quy/${encodeURIComponent(stone.slug)}`;
+  const image = absolutePublicImageUrl(stone.image);
+  return {
+    title,
+    description: stone.intro,
+    alternates: { canonical },
+    openGraph: { type: "article", siteName: "GEME", title, description: stone.intro, url: canonical, ...(image ? { images: [{ url: image, alt: stone.name }] } : {}) },
+    twitter: { card: image ? "summary_large_image" : "summary", title, description: stone.intro, ...(image ? { images: [image] } : {}) },
+  };
 }
 
 export default async function GemstoneArticlePage({ params }: { params: Promise<{ slug: string }> }) {
@@ -20,7 +31,13 @@ export default async function GemstoneArticlePage({ params }: { params: Promise<
   const stone = getGuideStone(slug);
   if (!stone) notFound();
   const related = guideStones.filter((item) => item.slug !== stone.slug).slice(0, 3);
+  const canonical = absoluteSiteUrl(`/cam-nang-da-quy/${encodeURIComponent(stone.slug)}`);
+  const image = absolutePublicImageUrl(stone.image);
+  const articleSchema = { "@context": "https://schema.org", "@type": "Article", headline: stone.name, description: stone.intro, ...(image ? { image } : {}), mainEntityOfPage: canonical, publisher: { "@id": `${absoluteSiteUrl("/")}#organization` } };
+  const breadcrumbSchema = { "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Trang chủ", item: absoluteSiteUrl("/") }, { "@type": "ListItem", position: 2, name: "Cẩm nang đá quý", item: absoluteSiteUrl("/cam-nang-da-quy") }, { "@type": "ListItem", position: 3, name: stone.name, item: canonical }] };
   return <>
+    <StructuredData value={articleSchema} />
+    <StructuredData value={breadcrumbSchema} />
     <SiteHeader searchPlaceholder="Tìm kiếm sản phẩm..." />
     <main className="stone-article-page">
       <nav className="stone-article-breadcrumb" aria-label="Đường dẫn"><a href="/">Trang chủ</a><span>›</span><a href="/cam-nang-da-quy">Cẩm nang đá quý</a><span>›</span><span>{stone.name}</span></nav>

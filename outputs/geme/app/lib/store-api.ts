@@ -10,6 +10,8 @@ export type StoreCategory = {
   level: number;
   parentId: string | null;
   description?: string | null;
+  seoTitle?: string | null;
+  seoDescription?: string | null;
   bannerUrl?: string | null;
   status: "ACTIVE" | "INACTIVE";
   sortOrder: number;
@@ -60,6 +62,8 @@ export type StoreProduct = {
   gemstoneTypeId?: string | null;
   materialOptionId?: string | null;
   description?: string | null;
+  seoTitle?: string | null;
+  seoDescription?: string | null;
   fullDescription?: string | null;
   coverVideoUrl?: string | null;
   technicalImageUrl?: string | null;
@@ -81,6 +85,7 @@ export type StoreProduct = {
   variants: StoreVariant[];
   reviews?: StoreReview[];
   createdAt?: string;
+  updatedAt?: string;
 };
 
 export type StorePromotion = {
@@ -99,6 +104,8 @@ export type StoreSalesProduct = {
   sold: number;
 };
 
+export type StoreSitemapEntry = { slug: string; createdAt?: string; updatedAt?: string; publishedAt?: string | null };
+
 // Server Components should call the API over Docker's private network when available.
 // The public URL remains the fallback for local runs outside Compose.
 const API_BASE = normalizeApiBaseUrl(process.env.GEME_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:4000/api/v1");
@@ -111,7 +118,7 @@ const STOREFRONT_REVALIDATE_SECONDS = (() => {
 })();
 const STOREFRONT_CACHE_TAG = "storefront-catalog";
 
-const requestApi = cache(async (path: string, revalidateSeconds = 0, cacheTag = ""): Promise<{ data: unknown | null; connected: boolean }> => {
+const requestApi = cache(async (path: string, revalidateSeconds = 0, cacheTag = ""): Promise<{ data: unknown | null; connected: boolean; status?: number }> => {
   try {
     const requestOptions: RequestInit & { next?: { revalidate: number; tags: string[] } } = revalidateSeconds > 0
       ? { next: { revalidate: revalidateSeconds, tags: cacheTag ? [cacheTag] : [] } }
@@ -120,15 +127,20 @@ const requestApi = cache(async (path: string, revalidateSeconds = 0, cacheTag = 
       ...requestOptions,
       signal: AbortSignal.timeout(5000),
     });
-    if (!response.ok) return { data: null, connected: false };
-    return { data: await response.json() as unknown, connected: true };
+    if (!response.ok) return { data: null, connected: false, status: response.status };
+    return { data: await response.json() as unknown, connected: true, status: response.status };
   } catch {
-    return { data: null, connected: false };
+    return { data: null, connected: false, status: 0 };
   }
 });
 
-async function readApi<T>(path: string, options?: { revalidateSeconds?: number; cacheTag?: string }): Promise<{ data: T | null; connected: boolean }> {
-  return await requestApi(path, options?.revalidateSeconds ?? STOREFRONT_REVALIDATE_SECONDS, options?.cacheTag ?? "") as { data: T | null; connected: boolean };
+async function readApi<T>(path: string, options?: { revalidateSeconds?: number; cacheTag?: string }): Promise<{ data: T | null; connected: boolean; status?: number }> {
+  return await requestApi(path, options?.revalidateSeconds ?? STOREFRONT_REVALIDATE_SECONDS, options?.cacheTag ?? "") as { data: T | null; connected: boolean; status?: number };
+}
+
+export function requireStoreApi<T extends { connected: boolean }>(result: T, resource: string): T {
+  if (!result.connected) throw new Error(`Không thể tải ${resource} từ GEME API.`);
+  return result;
 }
 
 export type StoreBanner = {
@@ -322,6 +334,8 @@ function asStoreProduct(value: any): StoreProduct {
     gemstoneTypeId: value.gemstoneTypeId ?? null,
     materialOptionId: value.materialOptionId ?? null,
     description: value.description ?? null,
+    seoTitle: value.seoTitle ?? null,
+    seoDescription: value.seoDescription ?? null,
     fullDescription: value.fullDescription ?? null,
     coverVideoUrl: typeof value.coverVideoUrl === "string" && value.coverVideoUrl ? value.coverVideoUrl : null,
     technicalImageUrl: value.technicalImageUrl ?? null,
@@ -337,6 +351,7 @@ function asStoreProduct(value: any): StoreProduct {
     originalPrice: variants.length && variantOriginalPrices.length ? Math.min(...variantOriginalPrices) : value.originalPrice == null ? null : Number(value.originalPrice),
     stock: Number(value.stock) || 0,
     createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
     category: value.category ? { id: value.category.id, name: value.category.name, slug: value.category.slug, kind: value.category.kind, usage: value.category.usage, level: Number(value.category.level) || 1, parentId: value.category.parentId ?? null, status: value.category.status, sortOrder: Number(value.category.sortOrder) || 0, pricingMode: value.category.pricingMode } : null,
     gemstoneType: value.gemstoneType ? { id: value.gemstoneType.id, name: value.gemstoneType.name, slug: value.gemstoneType.slug } : null,
     materialOption: value.materialOption ? { id: value.materialOption.id, name: value.materialOption.name, slug: value.materialOption.slug, scope: value.materialOption.scope, kind: value.materialOption.kind, active: Boolean(value.materialOption.active), sortOrder: Number(value.materialOption.sortOrder) || 0 } : null,
@@ -361,8 +376,10 @@ export async function getStoreProducts(options: {
   materialOptionId?: string;
   search?: string;
   limit?: number;
+  offset?: number;
 } = {}) {
   const params = new URLSearchParams({ view: "storefront-list", limit: String(options.limit ?? 500) });
+  if (options.offset && options.offset > 0) params.set("offset", String(Math.floor(options.offset)));
   if (options.kind) params.set("kind", options.kind);
   if (options.newOnly) params.set("new", "true");
   if (options.featuredOnly) params.set("featured", "true");
@@ -372,6 +389,11 @@ export async function getStoreProducts(options: {
   if (options.search?.trim()) params.set("search", options.search.trim());
   const result = await readApi<any[]>(`/products?${params.toString()}`, { cacheTag: STOREFRONT_CACHE_TAG });
   return { products: (result.data ?? []).map(asStoreProduct), connected: result.connected };
+}
+
+export async function getStoreSitemapProducts(limit = 500, offset = 0) {
+  const params = new URLSearchParams({ view: "sitemap", limit: String(Math.max(1, Math.min(500, Math.floor(limit)))), offset: String(Math.max(0, Math.floor(offset))) });
+  return await readApi<StoreSitemapEntry[]>(`/products?${params.toString()}`, { cacheTag: STOREFRONT_CACHE_TAG });
 }
 
 export async function getStoreSalesOverview() {
@@ -419,7 +441,7 @@ export async function getStoreFacets() {
     readApi<any[]>("/materials", { cacheTag: STOREFRONT_CACHE_TAG }),
   ]);
   return {
-    categories: (categories.data ?? []).map((item: any) => ({ id: item.id, name: item.name, slug: item.slug, kind: item.kind, usage: item.usage, level: Number(item.level) || 1, parentId: item.parentId ?? null, description: item.description ?? null, bannerUrl: item.bannerUrl ?? null, status: item.status, sortOrder: Number(item.sortOrder) || 0 })) as StoreCategory[],
+    categories: (categories.data ?? []).map((item: any) => ({ id: item.id, name: item.name, slug: item.slug, kind: item.kind, usage: item.usage, level: Number(item.level) || 1, parentId: item.parentId ?? null, description: item.description ?? null, bannerUrl: item.bannerUrl ?? null, seoTitle: item.seoTitle ?? null, seoDescription: item.seoDescription ?? null, status: item.status, sortOrder: Number(item.sortOrder) || 0 })) as StoreCategory[],
     materials: (materials.data ?? []).map((item: any) => ({ id: item.id, name: item.name, slug: item.slug, scope: item.scope, kind: item.kind, active: Boolean(item.active), imageUrl: item.imageUrl ?? null, sortOrder: Number(item.sortOrder) || 0 })) as StoreMaterial[],
     catalogConnected: categories.connected && materials.connected,
   };
@@ -432,6 +454,7 @@ export async function getStoreCatalog() {
 
 export async function getStoreProduct(slug: string) {
   const result = await readApi<any>(`/products/detail/${encodeURIComponent(slug)}`, { cacheTag: STOREFRONT_CACHE_TAG });
+  if (!result.connected && result.status !== 404) throw new Error("Không thể tải sản phẩm từ GEME API.");
   return { product: result.data ? asStoreProduct(result.data) : null, connected: result.connected };
 }
 
@@ -453,12 +476,13 @@ export type StoreBlogPost = {
   seoDescription?: string | null;
   publishedAt?: string | null;
   createdAt: string;
+  updatedAt?: string;
   views: number;
   images: Array<{ url: string; alt?: string | null; sortOrder: number }>;
   author?: { displayName: string } | null;
 };
 
-export type StoreBlogPostSummary = Pick<StoreBlogPost, "id" | "slug" | "title" | "summary" | "category" | "tags" | "coverImageUrl" | "publishedAt" | "createdAt" | "views" | "images">;
+export type StoreBlogPostSummary = Pick<StoreBlogPost, "id" | "slug" | "title" | "summary" | "category" | "tags" | "coverImageUrl" | "publishedAt" | "createdAt" | "updatedAt" | "views" | "images">;
 
 export type StoreBlogJournalPage = {
   posts: Array<StoreBlogPostSummary & { readingMinutes?: number }>;
@@ -466,9 +490,14 @@ export type StoreBlogJournalPage = {
   categories?: Array<{ name: string; count: number }>;
 };
 
-export async function getStoreBlogPosts(limit = 500) {
-  const result = await readApi<StoreBlogPostSummary[]>(`/blog?view=storefront-list&limit=${Math.max(1, Math.min(500, Math.floor(limit)))}`);
+export async function getStoreBlogPosts(limit = 500, offset = 0) {
+  const result = await readApi<StoreBlogPostSummary[]>(`/blog?view=storefront-list&limit=${Math.max(1, Math.min(500, Math.floor(limit)))}&offset=${Math.max(0, Math.floor(offset))}`);
   return { posts: result.data ?? [], connected: result.connected };
+}
+
+export async function getStoreSitemapBlogPosts(limit = 500, offset = 0) {
+  const params = new URLSearchParams({ view: "sitemap", limit: String(Math.max(1, Math.min(500, Math.floor(limit)))), offset: String(Math.max(0, Math.floor(offset))) });
+  return await readApi<StoreSitemapEntry[]>(`/blog?${params.toString()}`);
 }
 
 export async function getStoreBlogJournalPage(options: { limit?: number; offset?: number; search?: string; category?: string } = {}) {
@@ -504,6 +533,7 @@ export async function getStoreBlogArticle(slug: string) {
     revalidateSeconds: 5,
     cacheTag: `blog-article:${slug}`,
   });
+  if (!result.connected && result.status !== 404) throw new Error("Không thể tải bài viết từ GEME API.");
   return { article: result.data, connected: result.connected };
 }
 

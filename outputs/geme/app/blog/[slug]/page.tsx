@@ -7,6 +7,8 @@ import { SiteHeader } from "../../components/site-header";
 import { getStoreBlogArticle, type StoreBlogPostSummary } from "../../lib/store-api";
 import { BlogArticleReader } from "../article-reader";
 import { BlogShareButtons } from "../share-buttons";
+import { StructuredData } from "../../components/structured-data";
+import { absolutePublicImageUrl, absoluteSiteUrl, plainText, validDate } from "../../lib/seo";
 
 type Props = { params: Promise<{ slug: string }> };
 
@@ -42,8 +44,18 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const { article } = await getStoreBlogArticle(slug);
   const post = article?.post;
-  if (!post) return { title: "Bài viết | GEME" };
-  return { title: post.seoTitle || `${post.title} | GEME`, description: post.seoDescription || post.summary || undefined };
+  if (!post) notFound();
+  const title = plainText(post.seoTitle, 180) || `${plainText(post.title, 150)} | GEME`;
+  const description = plainText(post.seoDescription || post.summary || post.content, 320);
+  const canonical = `/blog/${encodeURIComponent(post.slug)}`;
+  const image = absolutePublicImageUrl(coverImage(post));
+  return {
+    title: { absolute: title },
+    description: description || undefined,
+    alternates: { canonical },
+    openGraph: { type: "article", siteName: "GEME", title, description, url: canonical, ...(image ? { images: [{ url: image, alt: coverAlt(post) }] } : {}) },
+    twitter: { card: image ? "summary_large_image" : "summary", title, description, ...(image ? { images: [image] } : {}) },
+  };
 }
 
 function RelatedPosts({ posts, currentSlug }: { posts: StoreBlogPostSummary[]; currentSlug: string }) {
@@ -77,8 +89,31 @@ export default async function BlogArticlePage({ params }: Props) {
   const { post, posts } = article;
   const publishedAt = post.publishedAt || post.createdAt;
   const image = coverImage(post);
+  const canonical = absoluteSiteUrl(`/blog/${encodeURIComponent(post.slug)}`);
+  const articleSchema = {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    headline: post.title,
+    ...(plainText(post.summary || post.content, 1000) ? { description: plainText(post.summary || post.content, 1000) } : {}),
+    ...(absolutePublicImageUrl(image) ? { image: absolutePublicImageUrl(image) } : {}),
+    ...(validDate(post.publishedAt) ? { datePublished: validDate(post.publishedAt)!.toISOString() } : {}),
+    mainEntityOfPage: canonical,
+    publisher: { "@id": `${absoluteSiteUrl("/")}#organization` },
+    ...(post.author?.displayName ? { author: { "@type": "Person", name: post.author.displayName } } : {}),
+  };
+  const breadcrumbSchema = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: "Trang chủ", item: absoluteSiteUrl("/") },
+      { "@type": "ListItem", position: 2, name: "GEME Journal", item: absoluteSiteUrl("/blog") },
+      { "@type": "ListItem", position: 3, name: post.title, item: canonical },
+    ],
+  };
 
   return <>
+    <StructuredData value={articleSchema} />
+    <StructuredData value={breadcrumbSchema} />
     <SiteHeader searchPlaceholder="Tìm kiếm bài viết..." activePage="blog"/>
     <main className="blog-page blog-article-page">
       <div className="blog-detail-container">

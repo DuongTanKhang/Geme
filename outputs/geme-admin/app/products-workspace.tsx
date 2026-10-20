@@ -9,6 +9,7 @@ import { TechnicalImagePicker } from "./technical-image-picker";
 export type AdminProduct = {
   id: string;
   apiId?: string;
+  detailsLoaded?: boolean;
   name: string;
   price: number;
   sold: number;
@@ -69,6 +70,7 @@ type Props = {
   onNotify: (message: string) => void;
   categories: AdminCategory[];
   materials: MaterialOption[];
+  onLoadDetails: (apiId: string) => Promise<void>;
 };
 
 const qualityPricing = (mode?: AdminProduct["categoryPricingMode"]) => mode === "QUALITY" || mode === "QUALITY_AND_BEAD_SIZE" || mode === "GEMSTONE_SIZE" || mode === "GEMSTONE_CARAT" || mode === "GEMSTONE_CARAT_AND_QUALITY";
@@ -115,7 +117,7 @@ const tabs = [
   { key: "history", label: "Lịch sử", icon: "clock" },
 ];
 
-export default function ProductsWorkspace({ products, categories: categoryRecords, materials, onSave, onDelete, onAdd, onNotify }: Props) {
+export default function ProductsWorkspace({ products, categories: categoryRecords, materials, onSave, onDelete, onAdd, onNotify, onLoadDetails }: Props) {
   const [catalogKind, setCatalogKind] = useState<"Trang sức" | "Đá quý">(products.some((item) => item.productType === "Trang sức") ? "Trang sức" : "Đá quý");
   const [selectedId, setSelectedId] = useState(products.find((item) => item.productType === "Trang sức")?.id ?? products[0]?.id ?? "");
   const [activeTab, setActiveTab] = useState("basic");
@@ -134,6 +136,9 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   const [saving, setSaving] = useState(false);
   const [busyActionId, setBusyActionId] = useState("");
   const [previewVariantImage, setPreviewVariantImage] = useState<{ src: string; alt: string } | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState("");
+  const [detailsRetry, setDetailsRetry] = useState(0);
 
   useEffect(() => {
     if (!previewVariantImage) return;
@@ -146,6 +151,27 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
 
   const selected = products.find((product) => product.id === selectedId);
   const product = selected ? { ...selected, ...draft } : undefined;
+  useEffect(() => {
+    if (!selectedId && products.length) {
+      setSelectedId(products.find((item) => item.productType === catalogKind)?.id ?? products[0].id);
+    }
+  }, [products, selectedId, catalogKind]);
+  useEffect(() => {
+    if (!selected?.apiId || selected.detailsLoaded) {
+      setDetailsLoading(false);
+      setDetailsError("");
+      return;
+    }
+    let active = true;
+    setDetailsLoading(true);
+    setDetailsError("");
+    void onLoadDetails(selected.apiId).catch((error) => {
+      if (active) setDetailsError(error instanceof Error ? error.message : "Không tải được chi tiết sản phẩm.");
+    }).finally(() => {
+      if (active) setDetailsLoading(false);
+    });
+    return () => { active = false; };
+  }, [selected?.apiId, selected?.detailsLoaded, detailsRetry, onLoadDetails]);
   const isGemstone = product?.productType === "Đá quý";
   const selectedCategory = product && (product.productType === "Đá quý"
     ? categoryRecords.find((item) => item.id === product.gemstoneTypeId) ?? categoryRecords.find((item) => item.id === product.categoryId)
@@ -484,7 +510,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
 
     {previewVariantImage && <div className="variant-image-lightbox" role="presentation" onClick={() => setPreviewVariantImage(null)}><div className="variant-image-lightbox-dialog" role="dialog" aria-modal="true" aria-label="Xem ảnh biến thể" onClick={(event) => event.stopPropagation()}><button type="button" className="variant-image-lightbox-close" aria-label="Đóng ảnh lớn" onClick={() => setPreviewVariantImage(null)}><Icon name="close"/></button><img src={previewVariantImage.src} alt={previewVariantImage.alt}/><span>{previewVariantImage.alt}</span></div></div>}
 
-    {product && <aside className="product-detail-panel">
+    {product && (product.detailsLoaded ? <aside className="product-detail-panel">
       <div className="product-detail-title"><h2>Chi tiết sản phẩm</h2><button className="product-close" aria-label="Đóng chi tiết" onClick={() => setSelectedId("")}><Icon name="close"/></button></div>
       <div className="product-overview">
         <div className="product-gallery-preview">{product.coverVideoUrl ? <video className="product-large-image" src={product.coverVideoUrl} muted autoPlay loop playsInline preload="metadata" aria-label={`${product.name} · video bìa`}/> : gallery.length ? <img className="product-large-image" src={gallery[imageIndex % gallery.length]} alt={product.name || "Ảnh sản phẩm"}/> : <div className="product-image-placeholder product-large-image">Chưa có ảnh sản phẩm</div>}<div className="product-gallery-thumbs">{gallery.slice(0, 4).map((src, index) => <button key={`${src}-${index}`} className={!product.coverVideoUrl && index === imageIndex ? "active" : ""} onClick={() => setImageIndex(index)} aria-label={`Xem ảnh ${index + 1}`}><img src={src} alt=""/></button>)}</div></div>
@@ -520,7 +546,11 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       {activeTab === "history" && <section className="product-tab-content"><div className="product-tab-title"><div><h3>Lịch sử cập nhật</h3><p>Các hoạt động gần đây của sản phẩm này.</p></div></div><div className="product-history product-history-empty">Chưa có lịch sử cập nhật.</div></section>}
 
       <div className="product-editor-actions"><button className="button button-quiet" disabled={saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={cancelChanges}>Hủy</button><button className="button button-primary" disabled={saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save()}>{saving ? "Đang lưu…" : uploadingImages || uploadingCoverVideo || uploadingTechnicalVideo ? "Đang tải media…" : "Lưu thay đổi"}</button></div>
-    </aside>}
+    </aside> : <aside className="product-detail-panel product-detail-loading" aria-live="polite">
+      <div className="product-detail-title"><h2>Chi tiết sản phẩm</h2><button className="product-close" aria-label="Đóng chi tiết" onClick={() => setSelectedId("")}><Icon name="close"/></button></div>
+      <div className="workspace-loading">{detailsLoading ? "Đang tải chi tiết sản phẩm…" : detailsError || "Đang chuẩn bị dữ liệu sản phẩm…"}</div>
+      {!detailsLoading && detailsError && <button type="button" className="button button-quiet" onClick={() => setDetailsRetry((value) => value + 1)}>Thử tải lại</button>}
+    </aside>)}
   </div>;
 }
 

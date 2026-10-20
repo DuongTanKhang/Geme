@@ -3,6 +3,13 @@ import { SiteFooter } from "../components/site-footer";
 import { SiteHeader } from "../components/site-header";
 import { getStoreSiteSettings } from "../lib/store-api";
 
+export const metadata: Metadata = {
+  title: "Liên hệ",
+  description: "Liên hệ GEME để được hỗ trợ về trang sức, sản phẩm và đơn hàng.",
+  alternates: { canonical: "/lien-he" },
+  openGraph: { type: "website", siteName: "GEME", title: "Liên hệ", description: "Liên hệ GEME để được hỗ trợ về trang sức, sản phẩm và đơn hàng.", url: "/lien-he" },
+};
+
 type ContactIconName = "location" | "phone" | "mail" | "chat";
 type SupportIconName = "gem" | "shield" | "return" | "help";
 
@@ -98,3 +105,4 @@ export default async function ContactPage() {
     <section className="contact-cta"><div className="contact-cta-inner contact-container"><h2>Vẫn còn thắc mắc?</h2><p>Đội ngũ của GEME luôn sẵn sàng hỗ trợ bạn tìm kiếm sản phẩm phù hợp và giải đáp mọi câu hỏi.</p><ContactJumpLink /></div></section>
   </main><SiteFooter variant="contact" /></>;
 }
+import type { Metadata } from "next";

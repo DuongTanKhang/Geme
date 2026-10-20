@@ -28,10 +28,10 @@ export class CommerceController {
   @Get("products")
   products(@Query() query: Record<string, string>) {
     const publicQuery: Record<string, string> = {};
-    for (const key of ["kind", "categoryId", "gemstoneTypeId", "materialOptionId", "new", "featured", "search", "limit"] as const) {
+    for (const key of ["kind", "categoryId", "gemstoneTypeId", "materialOptionId", "new", "featured", "search", "limit", "offset"] as const) {
       if (typeof query[key] === "string") publicQuery[key] = query[key];
     }
-    publicQuery.view = query.view === "storefront" ? "storefront" : "storefront-list";
+    publicQuery.view = query.view === "sitemap" ? "sitemap" : query.view === "storefront" ? "storefront" : "storefront-list";
     return this.commerce.products(publicQuery);
   }
 
@@ -84,7 +84,7 @@ export class CommerceController {
   @Get("blog") posts(@Query() query: Record<string, string>) {
     const publicQuery: Record<string, string> = {};
     for (const key of ["search", "category", "limit", "offset"] as const) if (typeof query[key] === "string") publicQuery[key] = query[key];
-    publicQuery.view = query.view === "storefront-journal" ? "storefront-journal" : "storefront-list";
+    publicQuery.view = query.view === "sitemap" ? "sitemap" : query.view === "storefront-journal" ? "storefront-journal" : "storefront-list";
     return this.commerce.posts(publicQuery);
   }
   @Get("admin/blog") @admin() adminPosts(@Query() query: Record<string, string>) { return this.commerce.posts(query); }

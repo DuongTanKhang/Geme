@@ -2,6 +2,13 @@ import { SiteFooter } from "../components/site-footer";
 import { SiteHeader } from "../components/site-header";
 import { getStoreBanner, getStoreSiteSettings } from "../lib/store-api";
 
+export const metadata: Metadata = {
+  title: "Về chúng tôi",
+  description: "Câu chuyện và tinh thần thiết kế của GEME — đá quý tự nhiên, phong cách riêng.",
+  alternates: { canonical: "/ve-geme" },
+  openGraph: { type: "website", siteName: "GEME", title: "Về chúng tôi", description: "Câu chuyện và tinh thần thiết kế của GEME — đá quý tự nhiên, phong cách riêng.", url: "/ve-geme" },
+};
+
 const values = [
   { icon: "✧", title: "Vẻ đẹp độc bản", copy: "Mỗi viên đá đều là duy nhất và không thể thay thế." },
   { icon: "◇", title: "Giá trị bền vững", copy: "Đá quý là tài sản tự nhiên có giá trị lâu dài." },
@@ -109,3 +116,4 @@ export default async function AboutPage() {
     <SiteFooter variant="catalog" />
   </>;
 }
+import type { Metadata } from "next";
