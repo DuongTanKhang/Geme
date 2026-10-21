@@ -7,6 +7,7 @@ import { Pos365Service } from "../pos365/pos365.service.js";
 import { MediaAssetsService } from "../media/media-assets.service.js";
 import { ensureCustomerForPaidOrder } from "./customer-profile.js";
 import { sanitizeBlogHtml } from "./blog-html.js";
+import { calculateCheckoutPrice, getCheckoutPromotionValue, type CheckoutPromotion } from "./checkout-pricing.js";
 
 type Input = Record<string, any>;
 const slugify = (value: string) => String(value || "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `item-${Date.now()}`;
@@ -1970,13 +1971,48 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.order.findMany({ select: selectAdminOrder, orderBy: { placedAt: "desc" }, take });
   }
 
+  private async releaseOrderReservation(tx: any, order: Input, changedProductIds: Set<string>) {
+    for (const item of order.items as any[]) {
+      if (!item.productId) continue;
+      if (item.variantId) {
+        const variant = await tx.productPriceVariant.findFirst({ where: { id: item.variantId, productId: item.productId }, select: { stock: true } });
+        if (!variant) continue;
+        await tx.productPriceVariant.update({ where: { id: item.variantId }, data: { stock: { increment: item.quantity } } });
+        const currentVariant = await tx.productPriceVariant.findUniqueOrThrow({ where: { id: item.variantId }, select: { stock: true } });
+        await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity }, soldOutAt: null } });
+        await tx.inventoryMovement.create({ data: {
+          productId: item.productId, variantId: item.variantId, productName: item.productName, productSku: item.productSku,
+          variantLabel: variantDisplayLabel(item), type: "IN", quantity: item.quantity,
+          stockBefore: currentVariant.stock - item.quantity, stockAfter: currentVariant.stock,
+          reference: order.code, note: "Hoàn tồn kho do hủy đơn trước khi xuất hàng",
+        } });
+      } else {
+        const product = await tx.product.findUnique({ where: { id: item.productId }, select: { stock: true } });
+        if (!product) continue;
+        await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity }, soldOutAt: null } });
+        const currentProduct = await tx.product.findUniqueOrThrow({ where: { id: item.productId }, select: { stock: true } });
+        await tx.inventoryMovement.create({ data: {
+          productId: item.productId, variantId: null, productName: item.productName, productSku: item.productSku,
+          variantLabel: null, type: "IN", quantity: item.quantity,
+          stockBefore: currentProduct.stock - item.quantity, stockAfter: currentProduct.stock,
+          reference: order.code, note: "Hoàn tồn kho do hủy đơn trước khi xuất hàng",
+        } });
+      }
+      changedProductIds.add(item.productId);
+    }
+  }
+
   async updateOrderStatus(id: string, statusInput: unknown) {
     const status = enumValue(statusInput, ["PENDING_CONFIRMATION", "PROCESSING", "SHIPPING", "DELIVERED", "CANCELLED"], "");
     if (!status) throw new BadRequestException("Trạng thái đơn hàng không hợp lệ.");
+    const changedProductIds = new Set<string>();
     try {
       const order = await this.prisma.$transaction(async (tx) => {
-        const current = await tx.order.findUnique({ where: { id }, include: { payments: true } });
+        const current = await tx.order.findUnique({ where: { id }, include: { payments: true, items: true } });
         if (!current) throw new NotFoundException("Không tìm thấy đơn hàng.");
+        if (current.status === "CANCELLED" && status !== "CANCELLED") throw new BadRequestException("Đơn đã hủy không thể mở lại. Hãy tạo đơn mới để giữ tồn kho chính xác.");
+        if (current.status === "DELIVERED" && status === "CANCELLED") throw new BadRequestException("Đơn đã giao cần xử lý theo quy trình trả hàng, không thể hủy trực tiếp.");
+        if (status === "CANCELLED" && current.inventoryCommittedAt) throw new BadRequestException("Đơn đã ghi nhận thanh toán hoặc xuất hàng. Hãy xử lý theo quy trình hoàn tiền/trả hàng.");
         if (current.shippingProvider === "VIETTEL_POST" && status === "SHIPPING" && current.carrierShipmentStatus !== "IN_TRANSIT") {
           throw new BadRequestException("Chỉ chuyển đơn Viettel Post sang Đang giao khi hãng đã xác nhận nhận kiện.");
         }
@@ -1994,16 +2030,47 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           customer = await ensureCustomerForPaidOrder(tx, current);
           await tx.payment.update({ where: { id: codPayment.id }, data: { status: "PAID", paidAt: new Date() } });
         }
+        let inventoryReleasedAt: Date | undefined;
+        let inventoryCommittedAt: Date | undefined;
+        if (status === "CANCELLED" && current.inventoryReservedAt && !current.inventoryCommittedAt && !current.inventoryReleasedAt
+          && ["PENDING_CONFIRMATION", "PROCESSING"].includes(current.status)) {
+          const releasedAt = new Date();
+          const claimed = await tx.order.updateMany({
+            where: { id, status: current.status, inventoryReleasedAt: null, inventoryCommittedAt: null },
+            data: { inventoryReleasedAt: releasedAt },
+          });
+          if (claimed.count === 1) {
+            await this.releaseOrderReservation(tx, current, changedProductIds);
+            inventoryReleasedAt = releasedAt;
+          } else {
+            throw new ConflictException("Trạng thái giữ tồn của đơn vừa thay đổi. Tải lại đơn hàng rồi thử lại.");
+          }
+        }
+        if (status === "DELIVERED" && current.inventoryReservedAt && !current.inventoryReleasedAt && !current.inventoryCommittedAt) {
+          const committedAt = new Date();
+          const claimed = await tx.order.updateMany({
+            where: { id, status: current.status, inventoryReleasedAt: null, inventoryCommittedAt: null },
+            data: { inventoryCommittedAt: committedAt },
+          });
+          if (claimed.count !== 1) throw new ConflictException("Trạng thái giữ tồn của đơn vừa thay đổi. Tải lại đơn hàng rồi thử lại.");
+          inventoryCommittedAt = committedAt;
+        }
         return tx.order.update({
           where: { id },
           data: {
             status: status as any,
+            ...(inventoryReleasedAt ? { inventoryReleasedAt } : {}),
+            ...(inventoryCommittedAt ? { inventoryCommittedAt } : {}),
             ...(markCodPaid && customer && !current.customerId ? { customer: { connect: { id: customer.id } } } : {}),
             ...(this.pos365.isSyncEnabled() ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: new Date(), pos365SyncError: null } : {}),
           },
           include: { items: true, payments: true, customer: true },
         });
       });
+      if (changedProductIds.size) {
+        await this.queueProductStockSync(this.prisma, changedProductIds).catch(() => undefined);
+        for (const productId of changedProductIds) this.publishCatalogChange("product", "updated", productId);
+      }
       if (this.pos365.isSyncEnabled()) void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đánh thức hàng đợi POS365 cho đơn ${order.code}.`, error));
       return order;
     }
@@ -2023,6 +2090,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         if (payment.method === "COD" && current.status !== "DELIVERED") throw new BadRequestException("Đơn COD chỉ được ghi nhận đã thanh toán sau khi giao thành công.");
         if (payment.status !== "PAID") await tx.payment.update({ where: { id: payment.id }, data: { status: "PAID", paidAt: new Date() } });
         const customer = await ensureCustomerForPaidOrder(tx, current);
+        if (current.inventoryReservedAt && !current.inventoryReleasedAt && !current.inventoryCommittedAt) {
+          const committed = await tx.order.updateMany({
+            where: { id, status: { not: "CANCELLED" }, inventoryReleasedAt: null, inventoryCommittedAt: null },
+            data: { inventoryCommittedAt: new Date() },
+          });
+          if (committed.count !== 1) throw new ConflictException("Không thể ghi nhận thanh toán vì trạng thái giữ tồn đơn hàng vừa thay đổi.");
+        }
         return tx.order.update({
           where: { id },
           data: {
@@ -2040,7 +2114,102 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async createOrder(input: Input, authenticatedCustomerId?: string, trustedStoreSale = false) {
+  private async activeStorePromotions(client: any, now = new Date()): Promise<CheckoutPromotion[]> {
+    const [promotions, categories] = await Promise.all([
+      client.promotion.findMany({
+        where: { visible: true, status: "ACTIVE", type: "PERCENTAGE", startsAt: { lte: now }, endsAt: { gte: now } },
+        select: { id: true, value: true, targets: { select: { categoryId: true, productId: true, excluded: true } } },
+        take: 500,
+      }),
+      client.category.findMany({ select: { id: true, parentId: true } }),
+    ]);
+    const descendantsOf = (roots: string[]) => {
+      const ids = new Set(roots);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const category of categories) {
+          if (category.parentId && ids.has(category.parentId) && !ids.has(category.id)) {
+            ids.add(category.id);
+            changed = true;
+          }
+        }
+      }
+      return [...ids];
+    };
+    return promotions.map((promotion: any) => {
+      const included = promotion.targets.filter((target: any) => !target.excluded);
+      const excluded = promotion.targets.filter((target: any) => target.excluded);
+      return {
+        id: promotion.id,
+        value: Number(promotion.value) || 0,
+        productIds: included.flatMap((target: any) => target.productId ? [target.productId] : []),
+        categoryIds: descendantsOf(included.flatMap((target: any) => target.categoryId ? [target.categoryId] : [])),
+        excludedProductIds: excluded.flatMap((target: any) => target.productId ? [target.productId] : []),
+        excludedCategoryIds: descendantsOf(excluded.flatMap((target: any) => target.categoryId ? [target.categoryId] : [])),
+      };
+    }).filter((promotion) => Number(promotion.value) > 0);
+  }
+
+  async quoteOrder(input: Input) {
+    const items = Array.isArray(input.items) ? input.items : [];
+    if (!items.length) throw new BadRequestException("Đơn hàng cần ít nhất một sản phẩm.");
+    const visibility = await this.storefrontProductVisibilityWhere();
+    return this.prisma.$transaction(async (tx) => {
+      const promotions = await this.activeStorePromotions(tx);
+      const requestedStock = new Map<string, number>();
+      const quotedItems: Array<Record<string, unknown>> = [];
+      let subtotal = 0;
+      let discountAmount = 0;
+      for (const line of items) {
+        const product = await tx.product.findFirst({
+          where: {
+            OR: [{ id: String(line.productId || "") }, { sku: String(line.sku || "") }],
+            status: "ACTIVE",
+            AND: visibility.AND,
+          },
+          include: { category: true, variants: { orderBy: { sortOrder: "asc" } } },
+        });
+        if (!product) throw new BadRequestException("Một sản phẩm trong giỏ không còn khả dụng.");
+        const variant = line.variantId ? product.variants.find((item: any) => item.id === String(line.variantId)) : null;
+        if (line.variantId && !variant) throw new BadRequestException(`Phiên bản của ${product.name} không còn khả dụng.`);
+        if (product.variants.length && !variant) throw new BadRequestException(`Chọn phiên bản cụ thể cho ${product.name}.`);
+        const quantity = Number(line.quantity);
+        if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) throw new BadRequestException("Số lượng mỗi dòng phải từ 1 đến 99.");
+        const stockKey = `${product.id}:${variant?.id || "base"}`;
+        const requested = (requestedStock.get(stockKey) || 0) + quantity;
+        const available = variant ? variant.stock : product.stock;
+        if (requested > available) throw new BadRequestException(`Không đủ tồn kho cho ${product.name}${variant ? ` (${variantDisplayLabel(variant)})` : ""}.`);
+        requestedStock.set(stockKey, requested);
+        const pricing = calculateCheckoutPrice(product, variant, getCheckoutPromotionValue(product, promotions));
+        if (pricing.listedUnitPrice <= 0) throw new BadRequestException(`Sản phẩm ${product.name} chưa có giá bán.`);
+        const lineTotal = pricing.saleUnitPrice * quantity;
+        const lineDiscount = pricing.promotionDiscountPerUnit * quantity;
+        subtotal += pricing.listedUnitPrice * quantity;
+        discountAmount += lineDiscount;
+        quotedItems.push({
+          productId: product.id,
+          variantId: variant?.id || null,
+          productName: product.name,
+          productSku: variant?.sku || product.sku,
+          quality: variant?.quality || null,
+          beadSize: variant?.beadSize || null,
+          carat: variant?.carat == null ? null : Number(variant.carat),
+          gemstoneQuality: variant?.gemstoneQuality || null,
+          quantity,
+          unitPrice: pricing.listedUnitPrice,
+          saleUnitPrice: pricing.saleUnitPrice,
+          lineDiscount,
+          lineTotal,
+          stock: available,
+        });
+      }
+      const shippingFee = Math.max(0, Number(input.shippingFee) || 0);
+      return { subtotal, discountAmount, shippingFee, totalAmount: subtotal - discountAmount + shippingFee, items: quotedItems };
+    });
+  }
+
+  async createOrder(input: Input, authenticatedCustomerId?: string, trustedStoreSale = false, idempotencyKeyInput?: string) {
     const items = Array.isArray(input.items) ? input.items : [];
     if (!items.length) throw new BadRequestException("Đơn hàng cần ít nhất một sản phẩm.");
     const storeSale = trustedStoreSale && (input.salesChannel === "STORE" || input.channel === "STORE");
@@ -2048,10 +2217,42 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const paid = storeSale && (input.paid === true || method === "COD");
     const code = `GME-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 5).toUpperCase()}`;
     const customerId = String(authenticatedCustomerId || input.customerId || "");
+    const idempotencyKey = String(idempotencyKeyInput || "").trim();
+    if (!storeSale && !idempotencyKey) throw new BadRequestException("Thiếu mã chống tạo đơn trùng. Hãy tải lại trang đặt hàng.");
+    if (idempotencyKey && !/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) throw new BadRequestException("Mã chống tạo đơn trùng không hợp lệ.");
+    const idempotencyRequestHash = idempotencyKey ? createHash("sha256").update(JSON.stringify({
+      customerId,
+      customerName: input.customerName,
+      phone: input.phone,
+      email: input.email,
+      shippingAddress: input.shippingAddress,
+      note: input.note,
+      paymentMethod: method,
+      expectedTotalAmount: input.expectedTotalAmount,
+      items: items.map((line: Input) => ({ productId: line.productId, variantId: line.variantId, sku: line.sku, quantity: line.quantity })),
+    })).digest("hex") : null;
+    const findIdempotentOrder = async (client: any) => idempotencyKey
+      ? client.order.findUnique({ where: { idempotencyKey }, include: { items: true, payments: true, customer: true } })
+      : null;
+    const verifyIdempotentOrder = (existing: any) => {
+      if (existing && existing.idempotencyRequestHash !== idempotencyRequestHash) {
+        throw new ConflictException("Mã yêu cầu đã được dùng cho một nội dung đặt hàng khác. Tải lại trang để tạo mã mới.");
+      }
+      return existing;
+    };
+    const priorOrder = verifyIdempotentOrder(await findIdempotentOrder(this.prisma));
+    if (priorOrder) return priorOrder;
     const changedProductIds = new Set<string>();
-    const order = await this.prisma.$transaction(async (tx) => {
+    let created = false;
+    let order: any;
+    try {
+    order = await this.prisma.$transaction(async (tx) => {
+      const existing = verifyIdempotentOrder(await findIdempotentOrder(tx));
+      if (existing) return existing;
       const customer = customerId ? await tx.customer.findUnique({ where: { id: customerId } }) : null;
       if (customerId && !customer) throw new BadRequestException("Không tìm thấy hồ sơ khách hàng đã chọn.");
+      const promotions = storeSale ? [] : await this.activeStorePromotions(tx);
+      const orderVisibility = storeSale ? null : await this.storefrontProductVisibilityWhere();
       const placedItems: Array<{ productId: string; variantId: string | null; productName: string; productSku: string; quality: string | null; beadSize: string | null; carat: number | null; gemstoneQuality: string | null; quantity: number; unitPrice: number; lineTotal: number }> = [];
       const outboundItems = new Map<string, {
         productId: string;
@@ -2068,7 +2269,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       }>();
       for (const line of items) {
         const product = await tx.product.findFirst({
-          where: { OR: [{ id: String(line.productId || "") }, { sku: String(line.sku || "") }], status: storeSale ? { not: "ARCHIVED" } : "ACTIVE" },
+          where: {
+            OR: [{ id: String(line.productId || "") }, { sku: String(line.sku || "") }],
+            status: storeSale ? { not: "ARCHIVED" } : "ACTIVE",
+            ...(orderVisibility ? { AND: orderVisibility.AND } : {}),
+          },
           include: { category: true, materialOption: true, gemstoneType: true, variants: { orderBy: { sortOrder: "asc" } } },
         });
         if (!product) throw new BadRequestException("Một sản phẩm trong giỏ không còn khả dụng.");
@@ -2077,32 +2282,41 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         if (product.variants.length && !variant) throw new BadRequestException(`Chọn phiên bản cụ thể cho ${product.name}.`);
         const quantity = Number(line.quantity);
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) throw new BadRequestException("Số lượng mỗi dòng phải từ 1 đến 99.");
-        const unitPrice = variantSellPrice(product, variant);
+        const promotionValue = storeSale ? 0 : getCheckoutPromotionValue(product, promotions);
+        const pricing = calculateCheckoutPrice(product, variant, promotionValue);
+        const unitPrice = pricing.listedUnitPrice;
+        const lineTotal = pricing.saleUnitPrice * quantity;
         if (!unitPrice) throw new BadRequestException(`Sản phẩm ${product.name} chưa có giá bán.`);
-        if (paid) {
+        const variantLabel = variantDisplayLabel(variant);
+        const shouldReserveInventory = !storeSale || paid;
+        if (shouldReserveInventory) {
           let stockBefore: number;
           let stockAfter: number;
-          const variantLabel = variantDisplayLabel(variant);
           if (variant) {
-            stockBefore = variant.stock;
-            stockAfter = stockBefore - quantity;
-            if (stockAfter < 0) throw new BadRequestException(`Không đủ tồn kho cho ${product.name} (${variantLabel}).`);
-            const updated = await tx.productPriceVariant.updateMany({ where: { id: variant.id, productId: product.id, stock: { gte: quantity } }, data: { stock: { decrement: quantity } } });
-            if (updated.count !== 1) throw new BadRequestException(`Tồn kho ${product.name} vừa thay đổi. Tải lại và thử lại.`);
-            const remaining = await tx.productPriceVariant.findMany({ where: { productId: product.id }, select: { stock: true } });
-            const totalStock = remaining.reduce((sum, row) => sum + row.stock, 0);
-            await tx.product.update({ where: { id: product.id }, data: { stock: totalStock, soldOutAt: totalStock === 0 ? product.soldOutAt ?? new Date() : null } });
+            const updatedVariant = await tx.productPriceVariant.updateMany({ where: { id: variant.id, productId: product.id, stock: { gte: quantity } }, data: { stock: { decrement: quantity } } });
+            if (updatedVariant.count !== 1) throw new BadRequestException(`Tồn kho ${product.name} (${variantLabel}) vừa thay đổi hoặc không đủ. Tải lại và thử lại.`);
+            const freshVariant = await tx.productPriceVariant.findUniqueOrThrow({ where: { id: variant.id }, select: { stock: true } });
+            stockAfter = freshVariant.stock;
+            stockBefore = stockAfter + quantity;
+            const updatedProduct = await tx.product.updateMany({ where: { id: product.id, stock: { gte: quantity } }, data: { stock: { decrement: quantity } } });
+            if (updatedProduct.count !== 1) throw new BadRequestException(`Tồn kho tổng của ${product.name} vừa thay đổi hoặc không đủ. Tải lại và thử lại.`);
           } else {
-            stockBefore = product.stock;
-            stockAfter = stockBefore - quantity;
-            if (stockAfter < 0) throw new BadRequestException(`Không đủ tồn kho cho ${product.name}.`);
-            const updated = await tx.product.updateMany({ where: { id: product.id, stock: { gte: quantity } }, data: { stock: { decrement: quantity }, ...(stockAfter === 0 ? { soldOutAt: product.soldOutAt ?? new Date() } : {}) } });
-            if (updated.count !== 1) throw new BadRequestException(`Tồn kho ${product.name} vừa thay đổi. Tải lại và thử lại.`);
+            const updatedProduct = await tx.product.updateMany({ where: { id: product.id, stock: { gte: quantity } }, data: { stock: { decrement: quantity } } });
+            if (updatedProduct.count !== 1) throw new BadRequestException(`Tồn kho ${product.name} vừa thay đổi hoặc không đủ. Tải lại và thử lại.`);
+            const freshProduct = await tx.product.findUniqueOrThrow({ where: { id: product.id }, select: { stock: true } });
+            stockAfter = freshProduct.stock;
+            stockBefore = stockAfter + quantity;
           }
+          await tx.product.updateMany({ where: { id: product.id, stock: 0 }, data: { soldOutAt: product.soldOutAt ?? new Date() } });
+          await tx.product.updateMany({ where: { id: product.id, stock: { gt: 0 } }, data: { soldOutAt: null } });
           await tx.inventoryMovement.create({ data: {
             productId: product.id, variantId: variant?.id || null, productName: product.name, productSku: variant?.sku || product.sku,
-            variantLabel, type: "OUT", quantity, stockBefore, stockAfter, reference: code, note: "Đơn hàng đã thanh toán",
+            variantLabel, type: "OUT", quantity, stockBefore, stockAfter, reference: code,
+            note: paid ? "Đơn hàng đã thanh toán" : storeSale ? "Giữ tồn kho cho đơn tại cửa hàng" : "Giữ tồn kho cho đơn online",
           } });
+          changedProductIds.add(product.id);
+        }
+        if (storeSale && paid) {
           const issueKey = `${product.id}:${variant?.id || "base"}`;
           const issueLine = outboundItems.get(issueKey);
           if (issueLine) {
@@ -2117,16 +2331,17 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
               kind: product.kind, quantity, unitPrice, lineTotal: unitPrice * quantity,
             });
           }
-          changedProductIds.add(product.id);
-        } else if (variant ? variant.stock < quantity : product.stock < quantity) {
-          throw new BadRequestException(`Không đủ tồn kho cho ${product.name}.`);
         }
-        placedItems.push({ productId: product.id, variantId: variant?.id || null, productName: product.name, productSku: variant?.sku || product.sku, quality: variant?.quality || null, beadSize: variant?.beadSize || null, carat: variant?.carat == null ? null : Number(variant.carat), gemstoneQuality: variant?.gemstoneQuality || null, quantity, unitPrice, lineTotal: unitPrice * quantity });
+        placedItems.push({ productId: product.id, variantId: variant?.id || null, productName: product.name, productSku: variant?.sku || product.sku, quality: variant?.quality || null, beadSize: variant?.beadSize || null, carat: variant?.carat == null ? null : Number(variant.carat), gemstoneQuality: variant?.gemstoneQuality || null, quantity, unitPrice, lineTotal });
       }
-      const subtotal = placedItems.reduce((sum, item) => sum + item.lineTotal, 0);
-      const discountAmount = Math.min(subtotal, Math.max(0, Number(input.discountAmount) || 0));
+      const subtotal = placedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+      const promotionDiscount = placedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity - item.lineTotal, 0);
+      const discountAmount = Math.min(subtotal, Math.max(0, storeSale ? Number(input.discountAmount) || 0 : promotionDiscount));
       const shippingFee = Math.max(0, Number(input.shippingFee) || 0);
       const totalAmount = subtotal - discountAmount + shippingFee;
+      if (input.expectedTotalAmount != null && Number(input.expectedTotalAmount) !== totalAmount) {
+        throw new ConflictException("Giá sản phẩm hoặc khuyến mãi vừa thay đổi. Hãy kiểm tra lại giỏ hàng trước khi đặt.");
+      }
       const customerName = String(input.customerName || input.name || "").trim() || customer?.name || "";
       if (!customerName && !storeSale) throw new BadRequestException("Nhập tên khách hàng hoặc chọn hồ sơ khách hàng.");
       const customerPhone = String(input.phone || "").trim() || customer?.phone || null;
@@ -2154,19 +2369,32 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         } });
       }
       const savedOrder = await tx.order.create({ data: {
-        code, customerName, customerEmail, customerPhone,
+        code,
+        ...(idempotencyKey ? { idempotencyKey, idempotencyRequestHash } : {}),
+        customerName, customerEmail, customerPhone,
         shippingAddress: String(input.shippingAddress || input.address || "").trim(),
         shippingMethod: storeSale ? "Bán trực tiếp tại cửa hàng" : input.shippingMethod || null,
         note: input.note || null, subtotal, discountAmount, shippingFee, totalAmount,
         status: paid ? "DELIVERED" as any : "PENDING_CONFIRMATION" as any,
+        ...(!paid && !storeSale ? { inventoryReservedAt: new Date() } : {}),
+        ...(paid ? { inventoryCommittedAt: new Date() } : {}),
         ...(this.pos365.isSyncEnabled() ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: new Date() } : {}),
         ...(orderCustomer ? { customer: { connect: { id: orderCustomer.id } } } : {}),
         items: { create: placedItems },
         payments: { create: { method: method as any, amount: totalAmount, status: paid ? "PAID" as any : "PENDING" as any, ...(paid ? { paidAt: new Date() } : {}) } },
       }, include: { items: true, payments: true, customer: true } });
       await this.queueProductStockSync(tx, changedProductIds);
+      created = true;
       return savedOrder;
     });
+    } catch (error: any) {
+      if (idempotencyKey) {
+        const existing = verifyIdempotentOrder(await findIdempotentOrder(this.prisma));
+        if (existing) return existing;
+      }
+      throw error;
+    }
+    if (!created) return order;
     for (const id of changedProductIds) this.publishCatalogChange("product", "updated", id);
     if (this.pos365.isSyncEnabled()) void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đánh thức hàng đợi POS365 cho đơn ${order.code}.`, error));
     if (!storeSale) void this.queueOrderConfirmationEmail(order);

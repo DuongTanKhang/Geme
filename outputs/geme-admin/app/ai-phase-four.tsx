@@ -16,6 +16,13 @@ type Analytics = { periodDays: number; sales: { totalQuestions: number; handoffC
 const channelLabels: Record<string, string> = { THREADS: "Threads", FACEBOOK: "Facebook", INSTAGRAM: "Instagram", BLOG: "Blog GEME", EMAIL: "Email draft", BANNER: "Banner" };
 const statusLabels: Record<string, string> = { QUEUED: "Đang chờ", RUNNING: "Đang tạo", GENERATING: "Đang tạo", DRAFT: "Chờ rà soát", APPROVED: "Đã duyệt nội dung", REJECTED: "Cần chỉnh sửa", FAILED: "Tạo thất bại", CANCELLED: "Đã hủy", ACTIVE: "Đang áp dụng", ARCHIVED: "Lưu phiên bản cũ" };
 
+function marketingFailureMessage(draft: MarketingDraft) {
+  if (draft.errorCode === "OPENAI_AGENT_REQUEST_REJECTED") return "OpenAI từ chối yêu cầu (HTTP 400), không phải lỗi hết tín dụng. Cần kiểm tra log AI Core để xem mã lỗi hoặc tham số bị từ chối.";
+  if (draft.errorCode === "OPENAI_AGENT_QUOTA_EXCEEDED") return "OpenAI báo hết quota/tín dụng hoặc chạm giới hạn ngân sách của project.";
+  if (draft.errorCode === "OPENAI_AGENT_AUTH_FAILED") return "OpenAI từ chối API key đang cấu hình cho AI Core.";
+  return draft.task?.errorMessage || draft.errorCode || "Không tạo được nội dung.";
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${apiBaseUrl}/admin/ai-studio/phase4/${path.replace(/^\//, "")}`, {
     ...init,
@@ -186,7 +193,7 @@ function MarketingComposer({ alerts, onOpenDrafts }: { alerts: Alerts; onOpenDra
 
   useEffect(() => {
     if (!draft || !["QUEUED", "GENERATING"].includes(draft.status)) return;
-    const timer = window.setInterval(() => { void request<MarketingDraft>(`marketing/drafts/${encodeURIComponent(draft.id)}`).then((fresh) => setDraft(fresh)).catch((error) => alerts.setError(error instanceof Error ? error.message : "Không tải được bản nháp.")); }, 1800);
+    const timer = window.setInterval(() => { void request<MarketingDraft>(`marketing/drafts/${encodeURIComponent(draft.id)}`).then((fresh) => { setDraft(fresh); if (fresh.task?.status) setTaskStatus(fresh.task.status); }).catch((error) => alerts.setError(error instanceof Error ? error.message : "Không tải được bản nháp.")); }, 1800);
     return () => window.clearInterval(timer);
   }, [draft, alerts.setError]);
 
@@ -201,6 +208,17 @@ function MarketingComposer({ alerts, onOpenDrafts }: { alerts: Alerts; onOpenDra
     finally { setBusy(false); }
   }
 
+  async function retryLatest() {
+    if (!draft || draft.status !== "FAILED" || busy) return;
+    setBusy(true); alerts.clear();
+    try {
+      const response = await request<{ task: { status: string }; draft: MarketingDraft }>(`marketing/drafts/${encodeURIComponent(draft.id)}/retry`, { method: "POST", body: "{}" });
+      setDraft(response.draft); setTaskStatus(response.task.status);
+      alerts.setNotice("Đã thử lại bản nháp hiện tại. Tác vụ đang được xử lý.");
+    } catch (error) { alerts.setError(error instanceof Error ? error.message : "Không thử lại được bản nháp."); }
+    finally { setBusy(false); }
+  }
+
   function toggle(id: string) { setSelectedIds((current) => current.includes(id) ? current.filter((value) => value !== id) : current.length >= 12 ? current : [...current, id]); }
 
   return <div className="ai-phase4-layout ai-phase4-marketing-layout">
@@ -212,7 +230,7 @@ function MarketingComposer({ alerts, onOpenDrafts }: { alerts: Alerts; onOpenDra
       <div className="ai-phase4-product-picker"><div className="ai-phase4-picker-head"><strong>Chọn sản phẩm có thể bán</strong><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm tên, SKU hoặc loại đá…" /></div>{searchLoading ? <div className="ai-phase4-empty">Đang tải…</div> : products.length ? <div className="ai-phase4-product-list">{products.map((product) => <label key={product.id} className={selectedIds.includes(product.id) ? "is-selected" : ""}><input type="checkbox" checked={selectedIds.includes(product.id)} disabled={!selectedIds.includes(product.id) && selectedIds.length >= 12} onChange={() => toggle(product.id)} /><span><strong>{product.name}</strong><small>{product.sku} · {[product.category, product.gemstone, product.material].filter(Boolean).join(" · ")}</small></span><em>Còn {product.availableQuantity}</em></label>)}</div> : <div className="ai-phase4-empty">Không tìm thấy sản phẩm ACTIVE còn hàng.</div>}</div>
       <div className="ai-phase4-safety"><b>◇</b><span>Nội dung chỉ là nháp. Agent không đăng bài, gửi email, thay giá hoặc tồn kho. Kiểm tra kỹ thông tin đá/chất liệu trước khi sử dụng.</span></div><button className="ai-submit-button" type="submit" disabled={busy || selectedIds.length < 1 || !objective.trim()}>{busy ? "Đang gửi vào hàng đợi…" : "Tạo bản nháp"}<b>→</b></button>
     </form>
-    <aside className="ai-phase4-aside"><section className="ai-phase4-panel"><div className="ai-phase4-section-head"><div><span className="ai-section-kicker">LATEST RESULT</span><h4>Kết quả tạo nội dung</h4></div></div>{draft ? <div className="ai-phase4-latest"><span className={`ai-phase4-tag ${draft.status.toLowerCase()}`}>{statusLabels[draft.status] || draft.status}</span>{draft.status === "FAILED" ? <p>{draft.task?.errorMessage || draft.errorCode || "Không tạo được nội dung."}</p> : draft.status === "QUEUED" || draft.status === "GENERATING" ? <div className="ai-phase4-running"><span className="ai-product-spinner"/> {statusLabels[draft.status]}</div> : <><strong>{draft.title || "Bản nháp đã sẵn sàng"}</strong><p>{draft.caption || draft.body}</p><button type="button" className="ai-phase4-link-button" onClick={onOpenDrafts}>Mở khu vực rà soát →</button></>}</div> : <div className="ai-phase4-empty">Bản nháp mới sẽ xuất hiện tại đây.</div>}{taskStatus && <small className="ai-phase4-muted">Tác vụ: {statusLabels[taskStatus] || taskStatus}</small>}</section><section className="ai-phase4-panel ai-phase4-safeguard"><span className="ai-section-kicker">TONE OF VOICE</span><h4>Thanh lịch, tự nhiên, tiết chế</h4><p>Đặt vẻ đẹp thật của sản phẩm làm trọng tâm. Không dùng từ ngữ phóng đại, lời hứa không có nguồn hoặc nhồi từ khóa.</p></section></aside>
+    <aside className="ai-phase4-aside"><section className="ai-phase4-panel"><div className="ai-phase4-section-head"><div><span className="ai-section-kicker">LATEST RESULT</span><h4>Kết quả tạo nội dung</h4></div></div>{draft ? <div className="ai-phase4-latest"><span className={`ai-phase4-tag ${draft.status.toLowerCase()}`}>{statusLabels[draft.status] || draft.status}</span>{draft.status === "FAILED" ? <><p>{marketingFailureMessage(draft)}</p><button type="button" className="ai-phase4-link-button" onClick={() => void retryLatest()} disabled={busy}>{busy ? "Đang thử lại…" : "Thử lại tác vụ này →"}</button></> : draft.status === "QUEUED" || draft.status === "GENERATING" ? <div className="ai-phase4-running"><span className="ai-product-spinner"/> {statusLabels[draft.status]}</div> : <><strong>{draft.title || "Bản nháp đã sẵn sàng"}</strong><p>{draft.caption || draft.body}</p><button type="button" className="ai-phase4-link-button" onClick={onOpenDrafts}>Mở khu vực rà soát →</button></>}</div> : <div className="ai-phase4-empty">Bản nháp mới sẽ xuất hiện tại đây.</div>}{taskStatus && <small className="ai-phase4-muted">Tác vụ: {statusLabels[taskStatus] || taskStatus}</small>}</section><section className="ai-phase4-panel ai-phase4-safeguard"><span className="ai-section-kicker">TONE OF VOICE</span><h4>Thanh lịch, tự nhiên, tiết chế</h4><p>Đặt vẻ đẹp thật của sản phẩm làm trọng tâm. Không dùng từ ngữ phóng đại, lời hứa không có nguồn hoặc nhồi từ khóa.</p></section></aside>
   </div>;
 }
 

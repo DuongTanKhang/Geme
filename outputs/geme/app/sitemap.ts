@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
-import { getStoreSitemapBlogPosts, getStoreSitemapProducts, requireStoreApi } from "./lib/store-api";
-import { guideStones } from "./cam-nang-da-quy/stones";
-import { absoluteSiteUrl, validDate } from "./lib/seo";
+import { getStoreSitemapBlogPosts, getStoreSitemapProducts, requireStoreApi } from "./lib/store-api.ts";
+import { guideStones } from "./cam-nang-da-quy/stones.ts";
+import { absoluteSiteUrl, validDate } from "./lib/seo.ts";
 
 export const dynamic = "force-dynamic";
 const PAGE_SIZE = 500;

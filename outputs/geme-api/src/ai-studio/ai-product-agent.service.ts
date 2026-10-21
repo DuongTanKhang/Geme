@@ -21,6 +21,17 @@ const editableFields = {
 } as const;
 
 export type ProductDraftSubmission = { imageItemIds: string[]; idempotencyKey: string; manifestHash: string };
+type VerifiedLegacyProduct = { sku: string; productId: string };
+
+export function verifiedLegacyProduct(report: Prisma.JsonValue | null): VerifiedLegacyProduct | null {
+  if (!report || typeof report !== "object" || Array.isArray(report)) return null;
+  const data = report as Record<string, Prisma.JsonValue>;
+  if (data.source !== "LEGACY_SQL" || typeof data.verifiedSku !== "string" || typeof data.verifiedProductId !== "string") return null;
+  const sku = data.verifiedSku.trim();
+  const productId = data.verifiedProductId.trim();
+  if (!sku || sku.length > 64 || !/^[0-9a-f-]{36}$/i.test(productId)) return null;
+  return { sku, productId };
+}
 
 type PageCursor = { createdAt: Date; id: string };
 
@@ -147,10 +158,29 @@ export class AiProductAgentService {
         outputAsset: { is: { isPrivate: true } },
         batch: { purpose: "PRODUCT_PHOTO" },
       },
-      select: { id: true, originalFilename: true },
+      select: { id: true, originalFilename: true, qcReport: true },
     });
     if (selected.length !== submission.imageItemIds.length) {
       throw new ConflictException("Mỗi ảnh phải là ảnh sản phẩm đã được duyệt và còn lưu riêng trong Image Studio.");
+    }
+    const verifiedByImage = new Map<string, VerifiedLegacyProduct>();
+    const legacyMatches = selected.flatMap((item) => {
+      const match = verifiedLegacyProduct(item.qcReport);
+      if (match) verifiedByImage.set(item.id, match);
+      return match ? [match] : [];
+    });
+    if (legacyMatches.length) {
+      const products = await this.prisma.product.findMany({
+        where: { sku: { in: [...new Set(legacyMatches.map(({ sku }) => sku))] } },
+        select: { id: true, sku: true, status: true },
+      });
+      const productBySku = new Map(products.map((product) => [product.sku.toLocaleUpperCase("en"), product]));
+      for (const [imageId, match] of verifiedByImage) {
+        const product = productBySku.get(match.sku.toLocaleUpperCase("en"));
+        if (!product || product.id !== match.productId || product.status !== "DRAFT") {
+          throw new ConflictException(`SKU ${match.sku} không còn khớp hồ sơ sản phẩm bản nháp. Tải lại danh sách trước khi tạo mô tả.`);
+        }
+      }
     }
     const inProgress = await this.prisma.aiProductDraft.findFirst({
       where: { sourceImageItemId: { in: submission.imageItemIds }, status: { in: [...activelyBeingWorked] } },
@@ -184,7 +214,14 @@ export class AiProductAgentService {
               requestedByAdminId: actor.id,
               type: "PRODUCT_DRAFT_GENERATION",
               title: `Product Agent · ${selected.find((item) => item.id === itemId)?.originalFilename || itemId}`.slice(0, 120),
-              input: { imageItemId: itemId, productDraftId: draftId },
+              input: {
+                imageItemId: itemId,
+                productDraftId: draftId,
+                ...(verifiedByImage.has(itemId) ? {
+                  verifiedProductSku: verifiedByImage.get(itemId)!.sku,
+                  verifiedProductId: verifiedByImage.get(itemId)!.productId,
+                } : {}),
+              },
             },
           });
           await transaction.aiProductDraft.create({ data: { id: draftId, batchId: createdBatch.id, taskId: task.id, sourceImageItemId: itemId } });

@@ -1,5 +1,31 @@
 import type { NextConfig } from "next";
 
+function getRemoteImagePatterns() {
+  const urls = [process.env.GEME_SITE_URL, process.env.MEDIA_PUBLIC_BASE_URL]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .flatMap((value) => {
+      try {
+        const url = new URL(value);
+        if (url.hostname === "geme.vn" || url.hostname === "www.geme.vn") {
+          const alias = new URL(url.href);
+          alias.hostname = url.hostname === "geme.vn" ? "www.geme.vn" : "geme.vn";
+          return [url, alias];
+        }
+        return [url];
+      } catch {
+        return [];
+      }
+    });
+  const seen = new Set<string>();
+  return urls.flatMap((url) => {
+    if (url.protocol !== "https:" && url.protocol !== "http:") return [];
+    const key = `${url.protocol}//${url.host}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ protocol: url.protocol.slice(0, -1) as "https" | "http", hostname: url.hostname, port: url.port, pathname: "/**" }];
+  });
+}
+
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
@@ -13,6 +39,12 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   devIndicators: false,
   allowedDevOrigins: ["127.0.0.1", "localhost"],
+  images: {
+    remotePatterns: getRemoteImagePatterns(),
+    formats: ["image/webp"],
+    qualities: [75, 80],
+    minimumCacheTTL: 3600,
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

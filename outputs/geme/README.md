@@ -19,6 +19,8 @@ Storefront dùng canonical không có dấu `/` cuối (ngoại trừ trang ch�
 
 `/sitemap.xml` lấy tất cả sản phẩm đang công khai và bài viết đã xuất bản qua API theo từng lô. Nếu API không truy cập được, sitemap trả lỗi để báo hỏng thay vì công bố sitemap rỗng. API công khai nhận `offset` để phân trang ổn định.
 
+Checkout gọi API để nhận báo giá mới nhất theo giá/khuyến mãi và tồn kho hiện tại; tổng tiền được API tính lại khi tạo đơn. Mỗi lần gửi dùng `Idempotency-Key` để gửi lại cùng một yêu cầu không tạo đơn hoặc giữ tồn lần thứ hai.
+
 ## Build production
 
 Đặt `GEME_SITE_URL`, `GEME_API_BASE_URL`, `NEXT_PUBLIC_API_BASE_URL` và `AEGIS_AUTH_API_URL` trước khi build. Dockerfile kiểm tra các biến bắt buộc.

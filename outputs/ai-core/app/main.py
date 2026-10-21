@@ -153,6 +153,7 @@ async def generate_internal_product_draft(
     category_options: str = Form(..., max_length=48_000),
     material_options: str = Form(..., max_length=48_000),
     gemstone_options: str = Form(..., max_length=48_000),
+    verified_product_json: str | None = Form(default=None, max_length=4_000),
     supplied_key: str = Header(default="", alias="X-AI-Core-Key"),
 ) -> dict[str, Any]:
     require_internal_key(supplied_key)
@@ -169,6 +170,23 @@ async def generate_internal_product_draft(
             raise HTTPException(status_code=422, detail="INVALID_CATALOG_OPTIONS")
         return result
 
+    def parse_verified_product(value: str | None) -> dict[str, str] | None:
+        if not value:
+            return None
+        try:
+            result = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise HTTPException(status_code=422, detail="INVALID_VERIFIED_PRODUCT") from error
+        allowed = {"sku", "name", "category", "gemstone", "material"}
+        if not isinstance(result, dict) or set(result) - allowed:
+            raise HTTPException(status_code=422, detail="INVALID_VERIFIED_PRODUCT")
+        limits = {"sku": 64, "name": 180, "category": 160, "gemstone": 160, "material": 160}
+        if any(not isinstance(key, str) or not isinstance(item, str) or len(item) > limits[key] for key, item in result.items()):
+            raise HTTPException(status_code=422, detail="INVALID_VERIFIED_PRODUCT")
+        if not result.get("sku") or not result.get("name"):
+            raise HTTPException(status_code=422, detail="INVALID_VERIFIED_PRODUCT")
+        return result
+
     try:
         result = await generate_product_draft(
             image_bytes=image_bytes,
@@ -177,6 +195,7 @@ async def generate_internal_product_draft(
             materials=parse_options(material_options),
             gemstones=parse_options(gemstone_options),
             api_key=os.getenv("OPENAI_API_KEY", "").strip(),
+            verified_product=parse_verified_product(verified_product_json),
         )
     except ProductAgentError as error:
         status = {

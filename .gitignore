@@ -21,3 +21,6 @@ coverage/
 *.log.*
 .DS_Store
 Thumbs.db
+
+# Local legacy media migration artifacts (includes private rclone config)
+.rclone-migration/

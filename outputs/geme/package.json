@@ -7,7 +7,8 @@
     "dev": "node scripts/dev-warmup.mjs --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start --hostname 0.0.0.0",
-    "test:seo": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test scripts/seo.test.mjs"
+    "test:seo": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test scripts/seo.test.mjs",
+    "test:commerce": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test scripts/commerce-pricing.test.mjs"
   },
   "dependencies": {
     "next": "16.3.8",

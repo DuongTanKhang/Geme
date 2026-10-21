@@ -26,6 +26,31 @@ const priceOptions = [
   ["over10", "Trên 10.000.000 ₫"],
 ] as const;
 
+function compareNewestByGemstone(a: StoreProduct, b: StoreProduct) {
+  const newProductOrder = Number(b.isNew) - Number(a.isNew);
+  if (newProductOrder) return newProductOrder;
+
+  const stoneA = (a.materialOption?.kind === "STONE" ? a.materialOption.name : a.gemstoneType?.name || "").trim();
+  const stoneB = (b.materialOption?.kind === "STONE" ? b.materialOption.name : b.gemstoneType?.name || "").trim();
+  if (!stoneA && stoneB) return 1;
+  if (stoneA && !stoneB) return -1;
+
+  const gemstoneOrder = stoneA.localeCompare(stoneB, "vi", { sensitivity: "base", numeric: true });
+  if (gemstoneOrder) return gemstoneOrder;
+
+  const dateA = new Date(a.createdAt || 0).getTime() || 0;
+  const dateB = new Date(b.createdAt || 0).getTime() || 0;
+  return dateB - dateA || a.id.localeCompare(b.id);
+}
+
+function compareNewestFirst(a: StoreProduct, b: StoreProduct) {
+  const newProductOrder = Number(b.isNew) - Number(a.isNew);
+  if (newProductOrder) return newProductOrder;
+  const dateA = new Date(a.createdAt || 0).getTime() || 0;
+  const dateB = new Date(b.createdAt || 0).getTime() || 0;
+  return dateB - dateA || a.id.localeCompare(b.id);
+}
+
 function FilterChevron() {
   return <svg className="catalog-facet-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.25" /></svg>;
 }
@@ -143,7 +168,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
       const matchesPrice = !priceRange || (priceRange === "under2" ? product.price < 2_000_000 : priceRange === "2to5" ? product.price >= 2_000_000 && product.price <= 5_000_000 : priceRange === "5to10" ? product.price > 5_000_000 && product.price <= 10_000_000 : product.price > 10_000_000);
       return matchesType && matchesStone && matchesSize && matchesPrice;
     });
-    return filtered.sort((a, b) => sort === "price-asc" ? a.price - b.price : sort === "price-desc" ? b.price - a.price : sort === "best-selling" ? (bestSellerRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (bestSellerRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER) : new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    return filtered.sort((a, b) => sort === "price-asc" ? a.price - b.price : sort === "price-desc" ? b.price - a.price : sort === "best-selling" ? (bestSellerRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (bestSellerRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER) : selectedTypes.length ? compareNewestByGemstone(a, b) : compareNewestFirst(a, b));
   }, [products, categoryDescendants, selectedTypes, selectedStones, selectedSizes, priceRange, sort, bestSellerRanks]);
 
   const toggle = (value: string, current: string[], update: (next: string[]) => void) => update(current.includes(value) ? current.filter((item) => item !== value) : [...current, value]);

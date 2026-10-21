@@ -48,6 +48,10 @@ export class MediaStorageService {
     return Buffer.from(await response.arrayBuffer());
   }
 
+  async headPublicObject(objectKey: string) {
+    return this.request("HEAD", objectKey);
+  }
+
   async putPrivateObject(objectKey: string, bytes: Uint8Array, mimeType: string) {
     if (!this.privateBucket) throw new ServiceUnavailableException("R2_PRIVATE_BUCKET_NAME chưa được cấu hình.");
     const response = await this.request("PUT", objectKey, bytes, mimeType, this.privateBucket);
@@ -84,7 +88,7 @@ export class MediaStorageService {
     }
   }
 
-  private async request(method: "GET" | "PUT" | "DELETE", objectKey: string, body?: Uint8Array, mimeType?: string, selectedBucket?: string) {
+  private async request(method: "GET" | "HEAD" | "PUT" | "DELETE", objectKey: string, body?: Uint8Array, mimeType?: string, selectedBucket?: string) {
     const accountId = process.env.R2_ACCOUNT_ID?.trim();
     const bucket = selectedBucket || process.env.R2_BUCKET_NAME?.trim();
     const accessKeyId = process.env.R2_ACCESS_KEY_ID?.trim();

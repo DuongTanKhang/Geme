@@ -1,4 +1,4 @@
-import type { StoreProduct, StorePromotion } from "./store-api";
+import type { StoreProduct, StorePromotion, StoreVariant } from "./store-api";
 
 export function getStoreProductPromotion(product: StoreProduct, promotions: StorePromotion[]) {
   const productId = String(product.id);
@@ -17,6 +17,31 @@ export function getStoreProductPromotion(product: StoreProduct, promotions: Stor
       return !excluded && applicable && Number(promotion.value) > 0;
     })
     .sort((a, b) => Number(b.value) - Number(a.value))[0];
+}
+
+/** Keep card, detail, cart and product schema prices aligned. A promotion is
+ * applied to GEME's selling price; originalPrice is only a compare-at price. */
+export function getStoreProductPrice(product: StoreProduct, promotions: StorePromotion[], variant?: StoreVariant | null) {
+  const caratPricing = product.kind === "GEMSTONE"
+    && ["GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"].includes(product.category?.pricingMode || "");
+  const multiplier = caratPricing && variant ? Math.max(0, Number(variant.carat) || 0) : 1;
+  const listedPrice = Math.max(0, Math.round((Number(variant?.price ?? product.price) || 0) * multiplier));
+  const configuredOriginalPrice = Math.max(0, Math.round((Number(variant?.originalPrice ?? product.originalPrice) || 0) * multiplier));
+  const promotion = getStoreProductPromotion(product, promotions);
+  const discountPercent = promotion ? Math.min(100, Math.max(0, Number(promotion.value) || 0)) : 0;
+  const salePrice = discountPercent > 0 ? Math.max(0, Math.round(listedPrice * (1 - discountPercent / 100))) : listedPrice;
+  const originalPrice = promotion
+    ? Math.max(listedPrice, configuredOriginalPrice)
+    : configuredOriginalPrice > salePrice ? configuredOriginalPrice : 0;
+  const displayedDiscountPercent = discountPercent || (originalPrice > salePrice ? Math.round((1 - salePrice / originalPrice) * 100) : 0);
+  return {
+    listedPrice,
+    salePrice,
+    originalPrice,
+    discountPercent: displayedDiscountPercent,
+    promotion,
+    promotionDiscount: Math.max(0, listedPrice - salePrice),
+  };
 }
 
 export function formatStorePromotionPeriod(promotion: StorePromotion) {

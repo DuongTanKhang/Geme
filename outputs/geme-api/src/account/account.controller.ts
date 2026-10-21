@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Patch, Post, Req, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, Headers, Patch, Post, Req, UseGuards } from "@nestjs/common";
 import { AegisCustomerGuard, type AegisCustomerIdentity } from "../auth/aegis-customer.guard.js";
 import { CommerceService } from "../commerce/commerce.service.js";
 import { onlineOrderInput } from "../commerce/online-order-input.js";
@@ -53,8 +53,8 @@ export class AccountController {
   }
 
   @Post("orders")
-  async createOrder(@Req() request: AuthenticatedRequest, @Body() body: Record<string, any>) {
+  async createOrder(@Req() request: AuthenticatedRequest, @Body() body: Record<string, any>, @Headers("idempotency-key") idempotencyKey?: string) {
     const customerId = await this.account.customerId(request.customerIdentity);
-    return this.commerce.createOrder(onlineOrderInput(body), customerId);
+    return this.commerce.createOrder(onlineOrderInput(body), customerId, false, idempotencyKey);
   }
 }

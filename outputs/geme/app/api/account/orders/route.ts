@@ -43,7 +43,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const upstream = await callGemeApi("/account/orders", accessToken, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": request.headers.get("idempotency-key") || "",
+      },
       body: JSON.stringify(body),
     });
     if (!upstream.ok) return await forwardError(upstream, "Không tạo được đơn hàng.");

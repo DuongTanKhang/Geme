@@ -1,5 +1,5 @@
 import { cache } from "react";
-import { normalizeApiBaseUrl } from "./api-base";
+import { normalizeApiBaseUrl } from "./api-base.ts";
 
 export type StoreCategory = {
   id: string;

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Header, NotFoundException, Param, Patch, Post, Query, Req, Res, Sse, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Header, Headers, NotFoundException, Param, Patch, Post, Query, Req, Res, Sse, UseGuards } from "@nestjs/common";
 import { AdminAuthGuard } from "../admin-auth/admin-auth.guard.js";
 import { AdminAuthService } from "../admin-auth/admin-auth.service.js";
 import { CommerceService } from "./commerce.service.js";
@@ -68,8 +68,11 @@ export class CommerceController {
 
   @Get("orders") @admin() orders(@Query() query: Record<string, string>) { return this.commerce.orders(query); }
   // Guest checkout remains public. POS orders use the separately protected admin route below.
-  @Post("orders") createStoreOrder(@Body() body: Record<string, any>) {
-    return this.commerce.createOrder(onlineOrderInput(body));
+  @Post("orders/quote") quoteStoreOrder(@Body() body: Record<string, any>) {
+    return this.commerce.quoteOrder(onlineOrderInput(body));
+  }
+  @Post("orders") createStoreOrder(@Body() body: Record<string, any>, @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.commerce.createOrder(onlineOrderInput(body), undefined, false, idempotencyKey);
   }
   @Post("admin/orders") @admin() createAdminOrder(@Body() body: Record<string, any>) { return this.commerce.createOrder(body, undefined, true); }
   @Patch("orders/:id/status") @admin() orderStatus(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.updateOrderStatus(id, body.status); }

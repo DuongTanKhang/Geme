@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { BadRequestException } from "@nestjs/common";
-import { normalizeProductDraftPatch, normalizeProductDraftSubmission } from "./ai-product-agent.service.js";
+import { normalizeProductDraftPatch, normalizeProductDraftSubmission, verifiedLegacyProduct } from "./ai-product-agent.service.js";
 
 const imageA = "0f8fad5b-d9cb-469f-a165-70867728950e";
 const imageB = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
@@ -29,4 +29,13 @@ test("draft edit contract permits content only and rejects price, stock, and pub
   assert.throws(() => normalizeProductDraftPatch({ stock: 1 }), BadRequestException);
   assert.throws(() => normalizeProductDraftPatch({ status: "ACTIVE" }), BadRequestException);
   assert.throws(() => normalizeProductDraftPatch({ productName: "" }), BadRequestException);
+});
+
+test("legacy product facts are trusted only when an imported image carries an exact SKU and product ID", () => {
+  assert.deepEqual(verifiedLegacyProduct({ source: "LEGACY_SQL", verifiedSku: "NSSREM043", verifiedProductId: imageA } as never), {
+    sku: "NSSREM043",
+    productId: imageA,
+  });
+  assert.equal(verifiedLegacyProduct({ source: "USER_INPUT", verifiedSku: "NSSREM043", verifiedProductId: imageA } as never), null);
+  assert.equal(verifiedLegacyProduct({ source: "LEGACY_SQL", verifiedSku: "NSSREM043", verifiedProductId: "../product" } as never), null);
 });

@@ -25,6 +25,7 @@ export function onlineOrderInput(body: Record<string, any>) {
     paid: false,
     discountAmount: 0,
     shippingFee: 0,
+    expectedTotalAmount: Number.isFinite(Number(body.expectedTotalAmount)) && Number(body.expectedTotalAmount) >= 0 ? Math.round(Number(body.expectedTotalAmount)) : undefined,
     shippingMethod: "Giao hàng",
   };
 }

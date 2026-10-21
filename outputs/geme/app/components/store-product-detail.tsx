@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Image from "next/image";
 import type { StoreCategory, StoreProduct, StorePromotion } from "../lib/store-api";
 import { formatStorePrice } from "../lib/store-format";
-import { formatStorePromotionPeriod, getStoreProductPromotion } from "../lib/store-promotion";
+import { formatStorePromotionPeriod, getStoreProductPrice } from "../lib/store-promotion";
 import { useWishlist } from "./wishlist-provider";
 
 type DetailTab = "description" | "reviews";
@@ -14,9 +15,9 @@ function HeartIcon() {
   return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20.8 8.8c0 5-8.8 10.3-8.8 10.3S3.2 13.8 3.2 8.8A4.5 4.5 0 0 1 12 6.5a4.5 4.5 0 0 1 8.8 2.3Z" /></svg>;
 }
 
-function ProductPhoto({ url, alt, className = "", loading = "lazy" }: { url?: string; alt: string; className?: string; loading?: "eager" | "lazy" }) {
+function ProductPhoto({ url, alt, className = "", loading = "lazy", sizes = "(max-width: 760px) 100vw, 50vw" }: { url?: string; alt: string; className?: string; loading?: "eager" | "lazy"; sizes?: string }) {
   return url
-    ? <img className={className} src={url} alt={alt} loading={loading} decoding="async" />
+    ? <Image className={className} src={url} alt={alt} width={1200} height={1200} sizes={sizes} quality={80} loading={loading} fetchPriority={loading === "eager" ? "high" : undefined} />
     : <div className={`${className} detail-photo-empty`} role="img" aria-label={`${alt} — chưa có ảnh`}>Chưa có ảnh</div>;
 }
 
@@ -24,7 +25,7 @@ function RelatedProductCard({ product }: { product: StoreProduct }) {
   const image = product.images[0];
   return <article>
     <a className="detail-related-photo" href={`/san-pham/${encodeURIComponent(product.slug)}`} aria-label={`Xem ${product.name}`}>
-      <ProductPhoto url={image?.url} alt={image?.alt || product.name} />
+      <ProductPhoto url={image?.url} alt={image?.alt || product.name} sizes="(max-width: 640px) 42vw, 200px" />
       {product.isNew && <span className="detail-related-new">Mới</span>}
     </a>
     <a className="detail-related-name" href={`/san-pham/${encodeURIComponent(product.slug)}`}>{product.name}</a>
@@ -83,15 +84,9 @@ export function StoreProductDetail({
   const selectedGemstoneQuality = selectedVariant?.gemstoneQuality || gemstoneQualities[0];
   const sizesForQuality = availableVariants.filter((variant) => variant.quality === selectedQuality && variant.beadSize);
   const caratsForSelection = availableVariants.filter((variant) => variant.quality === selectedQuality && (!gemstoneCaratQualityPricing || variant.gemstoneQuality === selectedGemstoneQuality) && variant.carat != null);
-  const listedPrice = selectedVariant ? Math.round(selectedVariant.price * (gemstoneCaratPricing ? Number(selectedVariant.carat || 0) : 1)) : product.price;
-  const configuredOriginalPrice = selectedVariant?.originalPrice ? Math.round(selectedVariant.originalPrice * (gemstoneCaratPricing ? Number(selectedVariant.carat || 0) : 1)) : product.originalPrice || null;
-  const activePromotion = getStoreProductPromotion(product, promotions);
+  const priceDetails = getStoreProductPrice(product, promotions, selectedVariant);
+  const { salePrice: price, originalPrice, promotion: activePromotion } = priceDetails;
   const promotionPeriod = activePromotion ? formatStorePromotionPeriod(activePromotion) : "";
-  const regularPrice = activePromotion ? Math.max(listedPrice, Number(configuredOriginalPrice) || 0) : listedPrice;
-  const price = activePromotion
-    ? Math.max(0, Math.round(regularPrice * (1 - Math.min(activePromotion.value, 100) / 100)))
-    : listedPrice;
-  const originalPrice = activePromotion ? regularPrice : configuredOriginalPrice;
   const stock = selectedVariant ? selectedVariant.stock : product.stock;
   const material = product.materialOption?.name || product.gemstoneType?.name;
   const variantImages = (selectedVariant?.imageUrls || []).map((url, index) => ({ url, alt: product.name + " · " + selectedVariant?.quality + (selectedVariant?.beadSize ? " · " + selectedVariant.beadSize : ""), sortOrder: index, isPrimary: index === 0 }));
@@ -204,7 +199,7 @@ export function StoreProductDetail({
         <div className={"detail-gallery" + (galleryMedia.length > 1 ? " has-thumbnails" : "")}>
           {galleryMedia.length > 1 && <div className="detail-thumbnails" aria-label="Ảnh và video sản phẩm">
             {galleryMedia.map((media, index) => <button type="button" key={media.kind + index} className={activeImageIndex === index ? "is-active" : ""} onClick={() => setActiveImage(index)} aria-label={media.kind === "variant-video" ? "Xem video biến thể" : "Xem ảnh " + (index + 1)}>
-              {media.kind === "image" ? <ProductPhoto url={media.image.url} alt={media.image.alt || product.name} loading="lazy" /> : <span className="detail-video-thumbnail" aria-hidden="true">▶</span>}
+              {media.kind === "image" ? <ProductPhoto url={media.image.url} alt={media.image.alt || product.name} loading="lazy" sizes="66px" /> : <span className="detail-video-thumbnail" aria-hidden="true">▶</span>}
             </button>)}
           </div>}
           <div className="detail-main-image">
@@ -226,7 +221,7 @@ export function StoreProductDetail({
           <div className="detail-price-line">
             {activePromotion && <span className="detail-promo-badge">−{activePromotion.value}%</span>}
             <strong>{price ? formatStorePrice(price) : "Liên hệ"}</strong>
-            {originalPrice && originalPrice > price && <del>{formatStorePrice(originalPrice)}</del>}
+            {originalPrice > price && <del>{formatStorePrice(originalPrice)}</del>}
           </div>
           {promotionPeriod && <small className="detail-promo-period">{promotionPeriod}</small>}
           {(material || product.isNew) && <div className="detail-meta-chip-list">
@@ -296,7 +291,7 @@ export function StoreProductDetail({
             <h2>{product.name}</h2>
             {detailDescription ? <p className="detail-full-description">{detailDescription}</p> : <p>Chưa có mô tả chi tiết cho sản phẩm này.</p>}
           </div>
-          {technicalVideo ? <video className="detail-story-image detail-story-video" src={technicalVideo} controls playsInline preload="metadata" aria-label={`${product.name} — video kỹ thuật`} /> : technicalImage && <ProductPhoto className="detail-story-image" url={technicalImage} alt={`${product.name} — ảnh kỹ thuật`} />}
+          {technicalVideo ? <video className="detail-story-image detail-story-video" src={technicalVideo} controls playsInline preload="metadata" aria-label={`${product.name} — video kỹ thuật`} /> : technicalImage && <ProductPhoto className="detail-story-image" url={technicalImage} alt={`${product.name} — ảnh kỹ thuật`} sizes="(max-width: 760px) 90vw, 35vw" />}
           <div className="detail-specs">
             <h3>THÔNG SỐ KỸ THUẬT</h3>
             <table><tbody>

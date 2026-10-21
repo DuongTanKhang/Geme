@@ -39,6 +39,35 @@ class ProductAgentContractTests(unittest.TestCase):
         self.assertNotIn("Amethyst", draft["detailed_description"])
         self.assertIn("UNVERIFIED_PRODUCT_CLAIM_REMOVED", draft["review_reasons"])
 
+    def test_exact_sku_verified_facts_are_allowed_in_product_copy(self):
+        verified = {
+            "sku": "NSSREM043",
+            "name": "Nhẫn Emerald",
+            "category": "Nhẫn",
+            "gemstone": "Emerald",
+            "material": "Bạc",
+        }
+        draft = normalize_product_draft(
+            self.sample(
+                product_name="Nhẫn Emerald",
+                short_description="Thiết kế nhẫn Bạc điểm Emerald ở vị trí trung tâm.",
+                detailed_description="Nhẫn Bạc với Emerald tạo điểm nhấn thanh lịch, đường nét cân đối và tinh tế.",
+            ),
+            ["Nhẫn"], ["Bạc"], ["Emerald"], verified_product=verified,
+        )
+        self.assertEqual(draft["short_description"], "Thiết kế nhẫn Bạc điểm Emerald ở vị trí trung tâm.")
+        self.assertIn("đường nét cân đối", draft["detailed_description"])
+        self.assertNotIn("UNVERIFIED_PRODUCT_CLAIM_REMOVED", draft["review_reasons"])
+
+    def test_verified_facts_do_not_allow_unverified_purity_or_certification(self):
+        verified = {"sku": "NSSREM043", "name": "Nhẫn Emerald", "category": "Nhẫn", "gemstone": "Emerald", "material": "Bạc"}
+        draft = normalize_product_draft(
+            self.sample(detailed_description="Nhẫn Bạc 925 đính Emerald, có chứng nhận."),
+            ["Nhẫn"], ["Bạc"], ["Emerald"], verified_product=verified,
+        )
+        self.assertEqual(draft["detailed_description"], "Bản mô tả trung tính dựa trên hình ảnh đã duyệt. Vui lòng bổ sung chất liệu và loại đá từ hồ sơ sản phẩm đã xác minh trước khi sử dụng.")
+        self.assertIn("UNVERIFIED_PRODUCT_CLAIM_REMOVED", draft["review_reasons"])
+
     def test_unknown_category_is_rejected_and_flagged(self):
         draft = normalize_product_draft(self.sample(category_suggestion="Vòng cổ"), ["Nhẫn"], [], [])
         self.assertIsNone(draft["category_suggestion"])
@@ -51,6 +80,15 @@ class ProductAgentContractTests(unittest.TestCase):
         self.assertIn("Never claim authenticity, certification", prompt)
         self.assertIn("Do not invent gemstone identity or material", prompt)
         self.assertIn('"Amethyst"', prompt)
+
+    def test_prompt_uses_exact_sku_matched_product_facts_and_limits_ai_to_descriptions(self):
+        prompt = build_product_agent_prompt(
+            ["Nhẫn"], ["Bạc"], ["Emerald"],
+            {"sku": "NSSREM043", "name": "Nhẫn Emerald", "category": "Nhẫn", "gemstone": "Emerald", "material": "Bạc"},
+        )
+        self.assertIn("matched by exact SKU", prompt)
+        self.assertIn('"sku": "NSSREM043"', prompt)
+        self.assertIn("Only generate short_description and detailed_description", prompt)
 
     def test_rate_limit_and_quota_responses_are_classified_without_logging_provider_messages(self):
         rate_limit = classify_provider_error(429, {"error": {"type": "requests", "code": "rate_limit_exceeded", "message": "private provider message"}})

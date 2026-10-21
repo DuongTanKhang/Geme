@@ -113,7 +113,24 @@ async def _request_json(instructions: str, payload: dict[str, Any]) -> dict[str,
         raise PhaseFourAgentError("OPENAI_AGENT_UNAVAILABLE") from error
     if response.status_code >= 400:
         code = _provider_error(response)
-        logger.warning(json.dumps({"event": "ai_core.phase_four_provider_rejected", "status": response.status_code, "code": code}))
+        # Keep provider diagnostics useful without logging prompts, product facts,
+        # API keys, or the provider's free-form error message.
+        diagnostics: dict[str, str] = {"model": model}
+        try:
+            provider_error = response.json().get("error", {})
+            if isinstance(provider_error, dict):
+                for field in ("code", "type", "param"):
+                    value = provider_error.get(field)
+                    if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value):
+                        diagnostics[f"provider_{field}"] = value
+        except (ValueError, AttributeError):
+            pass
+        logger.warning(json.dumps({
+            "event": "ai_core.phase_four_provider_rejected",
+            "status": response.status_code,
+            "code": code,
+            **diagnostics,
+        }))
         raise PhaseFourAgentError(code)
     return _json_object(response)
 

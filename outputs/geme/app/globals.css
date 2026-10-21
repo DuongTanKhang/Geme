@@ -1404,7 +1404,9 @@ img { display: block; max-width: 100%; }
 .checkout-line-quantity button { height: 100%; border: 0; background: transparent; color: #625e57; cursor: pointer; }
 .checkout-line-quantity button:disabled { color: #c5c1b9; cursor: not-allowed; }
 .checkout-line-quantity span { font-size: 10px; }
-.checkout-total { display: flex; justify-content: space-between; margin-top: 17px; color: #625e57; font-size: 11px; }
+.checkout-total { display: grid; gap: 8px; margin-top: 17px; color: #625e57; font-size: 11px; }
+.checkout-total-row { display: flex; justify-content: space-between; gap: 16px; }
+.checkout-total-row.is-grand-total { margin-top: 4px; padding-top: 11px; border-top: 1px solid #dfe5df; color: #143f34; font-size: 13px; }
 .checkout-total strong { color: #373a32; font-size: 14px; }
 .checkout-form { display: grid; gap: 13px; }
 .checkout-form h2 { margin: 0 0 3px; font: 400 21px/1.2 var(--serif); }

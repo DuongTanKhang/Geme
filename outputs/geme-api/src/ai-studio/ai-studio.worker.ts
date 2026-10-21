@@ -68,6 +68,9 @@ function imageFailureMessage(code: string, technicalDrawingTask: boolean) {
   if (code === "OPENAI_AGENT_RATE_LIMITED") return "OpenAI đang giới hạn tốc độ. Chờ giới hạn được gỡ rồi thử lại thủ công.";
   if (code === "OPENAI_AGENT_AUTH_FAILED") return "OpenAI từ chối API key. Kiểm tra key trong cấu hình AI Core.";
   if (code === "OPENAI_AGENT_ACCESS_DENIED" || code === "OPENAI_AGENT_MODEL_UNAVAILABLE") return "Project OpenAI hiện chưa được phép dùng model đã cấu hình cho Agent này.";
+  if (code === "OPENAI_AGENT_REQUEST_REJECTED") return "OpenAI từ chối yêu cầu (HTTP 400), không phải lỗi hết tín dụng. Cần kiểm tra log AI Core để xem mã lỗi hoặc tham số bị từ chối.";
+  if (code === "OPENAI_AGENT_NOT_CONFIGURED") return "AI Core chưa nhận được OpenAI API key. Kiểm tra cấu hình GEME_OPENAI_API_KEY trên server.";
+  if (code === "OPENAI_AGENT_INVALID_RESPONSE") return "OpenAI đã phản hồi nhưng nội dung không đúng định dạng JSON mà Agent yêu cầu. Có thể thử tạo lại bản nháp.";
   if (code.startsWith("OPENAI_AGENT_")) return "AI Agent chưa tạo được kết quả. Kiểm tra cấu hình AI Core rồi thử lại.";
   if (code.startsWith("OPENAI_PRODUCT_") || code.startsWith("PRODUCT_DRAFT_")) return "Product Agent chưa tạo được bản nháp. Kiểm tra cấu hình AI Core rồi thử lại.";
   if (technicalDrawingTask) return "Tạo ảnh kỹ thuật chưa thành công. Hãy kiểm tra khóa/dịch vụ rồi thử lại thủ công để tránh phát sinh lượt gọi lặp ngoài ý muốn.";
@@ -256,8 +259,8 @@ async function processTask(job: Job<AiQueuePayload>) {
             altText: value.altText,
             confidenceScore: value.confidenceScore,
             categoryConfidence: value.categoryConfidence,
-            materialConfidence: null,
-            gemstoneConfidence: null,
+            materialConfidence: value.materialConfidence,
+            gemstoneConfidence: value.gemstoneConfidence,
             needsReview: value.needsReview,
             reviewReasons: value.reviewReasons,
             evidence: value.evidence as Prisma.InputJsonValue,
@@ -568,6 +571,8 @@ type ProductDraftResult = {
   altText: string;
   confidenceScore: number;
   categoryConfidence: number | null;
+  materialConfidence: number | null;
+  gemstoneConfidence: number | null;
   needsReview: boolean;
   reviewReasons: string[];
   evidence: string[];
@@ -609,6 +614,20 @@ async function processProductDraft(task: { id: string; input: Prisma.JsonValue }
   if (!imageBytes) throw new Error("PRODUCT_DRAFT_IMAGE_UNAVAILABLE");
   if (imageBytes.byteLength > 8 * 1024 * 1024) throw new Error("PRODUCT_DRAFT_IMAGE_TOO_LARGE");
 
+  const verifiedProductSku = typeof input.verifiedProductSku === "string" ? input.verifiedProductSku.trim() : "";
+  const verifiedProductId = typeof input.verifiedProductId === "string" ? input.verifiedProductId.trim() : "";
+  const verifiedProduct = verifiedProductSku ? await prisma.product.findUnique({
+    where: { sku: verifiedProductSku },
+    select: {
+      id: true, sku: true, name: true, kind: true, status: true,
+      category: { select: { name: true } }, gemstoneType: { select: { name: true } },
+      materialOption: { select: { name: true, kind: true } },
+    },
+  }) : null;
+  if (verifiedProductSku && (!verifiedProduct || verifiedProduct.id !== verifiedProductId || verifiedProduct.status !== "DRAFT")) {
+    throw new Error("PRODUCT_DRAFT_VERIFIED_SKU_MISMATCH");
+  }
+
   const [categories, materials, gemstoneCategories, gemstones] = await Promise.all([
     prisma.category.findMany({ where: { status: "ACTIVE", usage: "PRODUCT_CATEGORY", level: { lte: 2 } }, select: { name: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }], take: 300 }),
     prisma.materialOption.findMany({ where: { active: true, kind: "MATERIAL" }, select: { name: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }], take: 300 }),
@@ -623,6 +642,15 @@ async function processProductDraft(task: { id: string; input: Prisma.JsonValue }
   form.append("category_options", JSON.stringify(categoryOptions));
   form.append("material_options", JSON.stringify(materialOptions));
   form.append("gemstone_options", JSON.stringify(gemstoneOptions));
+  if (verifiedProduct) {
+    const productFacts: Record<string, string> = { sku: verifiedProduct.sku, name: verifiedProduct.name };
+    if (verifiedProduct.category?.name) productFacts.category = verifiedProduct.category.name;
+    const verifiedGemstone = verifiedProduct.gemstoneType?.name || (verifiedProduct.materialOption?.kind === "STONE" ? verifiedProduct.materialOption.name : null);
+    if (verifiedGemstone) productFacts.gemstone = verifiedGemstone;
+    const verifiedMaterial = verifiedProduct.kind === "JEWELRY" ? "Bạc" : verifiedProduct.materialOption?.name;
+    if (verifiedMaterial) productFacts.material = verifiedMaterial;
+    form.append("verified_product_json", JSON.stringify(productFacts));
+  }
   const response = await fetch(`${coreUrl}/internal/products/generate-draft`, {
     method: "POST",
     headers: { "X-AI-Core-Key": coreSecret },
@@ -645,31 +673,41 @@ async function processProductDraft(task: { id: string; input: Prisma.JsonValue }
   };
   const text = (key: string, max: number, fallback: string) => typeof result[key] === "string" ? (result[key] as string).trim().slice(0, max) || fallback : fallback;
   const score = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : 0;
-  const categorySuggestion = canonical(result.category_suggestion, categoryOptions);
+  const generatedCategorySuggestion = canonical(result.category_suggestion, categoryOptions);
+  const categorySuggestion = verifiedProduct?.category?.name || generatedCategorySuggestion;
   const reasons = Array.isArray(result.review_reasons) ? result.review_reasons.filter((value): value is string => typeof value === "string").map((value) => value.trim().slice(0, 180)).filter(Boolean).slice(0, 14) : [];
-  if (result.category_suggestion && !categorySuggestion) reasons.push("CATEGORY_NOT_IN_ACTIVE_CATALOG");
+  if (!verifiedProduct && result.category_suggestion && !categorySuggestion) reasons.push("CATEGORY_NOT_IN_ACTIVE_CATALOG");
   // An image cannot verify metal purity or gemstone identity. Keep these fields
-  // blank until a human adds facts from a trusted product record.
-  if (result.material_suggestion || result.gemstone_suggestion) reasons.push("MATERIAL_AND_GEMSTONE_REQUIRE_VERIFIED_PRODUCT_DATA");
+  // blank unless the image has an exact-SKU match to a trusted product record.
+  if (!verifiedProduct && (result.material_suggestion || result.gemstone_suggestion)) reasons.push("MATERIAL_AND_GEMSTONE_REQUIRE_VERIFIED_PRODUCT_DATA");
   reasons.push("PRODUCT_CONTENT_REQUIRES_ADMIN_REVIEW");
   const confidence = result.confidence && typeof result.confidence === "object" && !Array.isArray(result.confidence) ? result.confidence as Record<string, unknown> : {};
-  const categoryConfidence = categorySuggestion ? score(confidence.category) : null;
+  const categoryConfidence = verifiedProduct ? 100 : categorySuggestion ? score(confidence.category) : null;
   const evidence = Array.isArray(result.visible_evidence) ? result.visible_evidence.filter((value): value is string => typeof value === "string").map((value) => value.trim().slice(0, 180)).filter(Boolean).slice(0, 12) : [];
+  if (verifiedProduct) evidence.unshift(`SKU ${verifiedProduct.sku} khớp chính xác hồ sơ mới; tên, danh mục, loại đá và chất liệu lấy từ database.`);
   const distinctReasons = [...new Set(reasons)].slice(0, 16);
-  const confidenceScore = categoryConfidence ?? 0;
+  const verifiedMaterial = verifiedProduct?.kind === "JEWELRY" ? "Bạc" : verifiedProduct?.materialOption?.name || null;
+  const verifiedGemstone = verifiedProduct?.gemstoneType?.name || (verifiedProduct?.materialOption?.kind === "STONE" ? verifiedProduct.materialOption.name : null) || null;
+  const materialConfidence = verifiedProduct && verifiedMaterial ? 100 : null;
+  const gemstoneConfidence = verifiedProduct && verifiedGemstone ? 100 : null;
+  const confidenceScore = verifiedProduct ? 100 : categoryConfidence ?? 0;
+  const shortDescription = text("short_description", 500, "Sản phẩm GEME cần được đối chiếu với thông tin đã xác minh.");
+  const productName = verifiedProduct?.name || text("product_name", 180, "Trang sức cần rà soát");
   const value: ProductDraftResult = {
-    productName: text("product_name", 180, "Trang sức cần rà soát"),
-    shortDescription: text("short_description", 500, "Sản phẩm GEME cần được đối chiếu với thông tin đã xác minh."),
+    productName,
+    shortDescription,
     detailedDescription: text("detailed_description", 6000, "Bản mô tả được tạo từ ảnh đã duyệt và cần quản trị viên rà soát trước khi sử dụng."),
     categorySuggestion,
-    materialSuggestion: null,
-    gemstoneSuggestion: null,
-    seoTitle: text("seo_title", 180, "Trang sức GEME"),
-    seoMetaDescription: text("seo_meta_description", 320, "Khám phá thiết kế trang sức GEME với thông tin đã được quản trị viên kiểm duyệt."),
-    altText: text("alt_text", 500, "Hình ảnh sản phẩm trang sức GEME"),
+    materialSuggestion: verifiedProduct ? verifiedMaterial : null,
+    gemstoneSuggestion: verifiedProduct ? verifiedGemstone : null,
+    seoTitle: verifiedProduct ? productName.slice(0, 180) : text("seo_title", 180, "Trang sức GEME"),
+    seoMetaDescription: verifiedProduct ? shortDescription.slice(0, 320) : text("seo_meta_description", 320, "Khám phá thiết kế trang sức GEME với thông tin đã được quản trị viên kiểm duyệt."),
+    altText: verifiedProduct ? productName.slice(0, 500) : text("alt_text", 500, "Hình ảnh sản phẩm trang sức GEME"),
     confidenceScore,
     categoryConfidence,
-    needsReview: Boolean(result.needs_review) || distinctReasons.length > 0,
+    materialConfidence,
+    gemstoneConfidence,
+    needsReview: true,
     reviewReasons: distinctReasons,
     evidence,
   };

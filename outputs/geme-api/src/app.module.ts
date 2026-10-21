@@ -9,8 +9,9 @@ import { Pos365Module } from "./pos365/pos365.module.js";
 import { ViettelPostModule } from "./viettel-post/viettel-post.module.js";
 import { AdminAuthModule } from "./admin-auth/admin-auth.module.js";
 import { AiStudioModule } from "./ai-studio/ai-studio.module.js";
+import { SocialModule } from "./social/social.module.js";
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, AdminAuthModule, AiStudioModule, HealthModule, MaterialsModule, CommerceModule, AccountModule, Pos365Module, ViettelPostModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, AdminAuthModule, AiStudioModule, SocialModule, HealthModule, MaterialsModule, CommerceModule, AccountModule, Pos365Module, ViettelPostModule],
 })
 export class AppModule {}

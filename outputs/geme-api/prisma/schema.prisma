@@ -151,6 +151,52 @@ enum AiMarketingDraftStatus {
   @@map("ai_marketing_draft_status")
 }
 
+enum SocialPlatform {
+  FACEBOOK_PAGE
+  INSTAGRAM
+  @@map("social_platform")
+}
+
+enum SocialConnectionStatus {
+  ACTIVE
+  REAUTH_REQUIRED
+  DISCONNECTED
+  @@map("social_connection_status")
+}
+
+enum SocialPostStatus {
+  DRAFT
+  APPROVED
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  PARTIAL
+  FAILED
+  UNKNOWN
+  CANCELLED
+  @@map("social_post_status")
+}
+
+enum SocialTargetStatus {
+  DRAFT
+  APPROVED
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  UNKNOWN
+  CANCELLED
+  @@map("social_target_status")
+}
+
+enum SocialAttemptStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  UNKNOWN
+  @@map("social_attempt_status")
+}
+
 enum CustomerStatus {
   ACTIVE
   INACTIVE
@@ -303,6 +349,11 @@ model AdminUser {
   aiSalesKnowledgeReviewed AiSalesKnowledgeSource[] @relation("AiSalesKnowledgeReviewer")
   aiMarketingDraftsCreated AiMarketingDraft[] @relation("AiMarketingDraftCreator")
   aiMarketingDraftsReviewed AiMarketingDraft[] @relation("AiMarketingDraftReviewer")
+  socialOAuthStates SocialOAuthState[]
+  socialConnectionsCreated SocialConnection[] @relation("SocialConnectionCreator")
+  socialPostsCreated SocialPost[] @relation("SocialPostCreator")
+  socialPostsApproved SocialPost[] @relation("SocialPostApprover")
+  socialPostsUpdated SocialPost[] @relation("SocialPostUpdater")
 
   @@map("admin_users")
 }
@@ -439,6 +490,7 @@ model Product {
   inventoryIssueItems   InventoryIssueItem[]
   aiTechnicalImageBatches AiImageBatch[]      @relation("AiTechnicalImageTarget")
   mediaAssets           ProductMediaAsset[]
+  socialPostSources     SocialPost[]
 
   @@index([kind, status, createdAt(sort: Desc)])
   @@index([status, isNew, createdAt(sort: Desc)])
@@ -549,6 +601,8 @@ model CustomerFavorite {
 model Order {
   id              String          @id @default(uuid()) @db.Uuid
   code            String          @unique @db.VarChar(40)
+  idempotencyKey String?         @unique @map("idempotency_key") @db.VarChar(128)
+  idempotencyRequestHash String?  @map("idempotency_request_hash") @db.VarChar(64)
   customerId      String?         @map("customer_id") @db.Uuid
   status          OrderStatus     @default(PENDING_CONFIRMATION)
   customerName    String          @map("customer_name") @db.VarChar(160)
@@ -571,6 +625,9 @@ model Order {
   carrierFee       Decimal?       @map("carrier_fee") @db.Decimal(14, 0)
   subtotal        Decimal         @db.Decimal(14, 0)
   discountAmount  Decimal         @default(0) @map("discount_amount") @db.Decimal(14, 0)
+  inventoryReservedAt DateTime?   @map("inventory_reserved_at") @db.Timestamptz(3)
+  inventoryCommittedAt DateTime?  @map("inventory_committed_at") @db.Timestamptz(3)
+  inventoryReleasedAt DateTime?   @map("inventory_released_at") @db.Timestamptz(3)
   shippingFee     Decimal         @default(0) @map("shipping_fee") @db.Decimal(14, 0)
   totalAmount     Decimal         @map("total_amount") @db.Decimal(14, 0)
   note            String?         @db.Text
@@ -597,6 +654,7 @@ model Order {
   @@index([placedAt(sort: Desc), status])
   @@index([pos365SyncStatus, pos365SyncNextAttemptAt])
   @@index([trackingCode])
+  @@index([inventoryReservedAt, inventoryCommittedAt, inventoryReleasedAt])
   @@map("orders")
 }
 
@@ -887,6 +945,7 @@ model MediaAsset {
   aiImageOutputs   AiImageItem[] @relation("AiImageOutput")
   aiImagePublishedOutputs AiImageItem[] @relation("AiImagePublishedOutput")
   productLinks    ProductMediaAsset[]
+  socialPostTargets SocialPostTarget[]
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -1122,6 +1181,7 @@ model AiMarketingDraft {
   task              AiTask                 @relation(fields: [taskId], references: [id], onDelete: Cascade)
   createdBy         AdminUser              @relation("AiMarketingDraftCreator", fields: [createdByAdminId], references: [id], onDelete: Restrict)
   reviewedBy        AdminUser?             @relation("AiMarketingDraftReviewer", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+  socialPosts       SocialPost[]
 
   @@index([status, updatedAt(sort: Desc)])
   @@index([createdByAdminId, createdAt(sort: Desc)])
@@ -1142,4 +1202,137 @@ model AiSalesMetric {
   @@index([createdAt(sort: Desc)])
   @@index([needsHandoff, createdAt(sort: Desc)])
   @@map("ai_sales_metrics")
+}
+
+model SocialOAuthState {
+  stateHash  String    @id @map("state_hash") @db.Char(64)
+  adminId    String    @map("admin_id") @db.Uuid
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  admin      AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("social_oauth_states")
+}
+
+model SocialConnection {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  metaUserId            String                 @map("meta_user_id") @db.VarChar(100)
+  displayName           String                 @map("display_name") @db.VarChar(180)
+  userTokenCiphertext   String                 @map("user_token_ciphertext") @db.Text
+  userTokenExpiresAt    DateTime?              @map("user_token_expires_at") @db.Timestamptz(3)
+  scopes                String[]               @default([])
+  status                SocialConnectionStatus @default(ACTIVE)
+  createdByAdminId      String                 @map("created_by_admin_id") @db.Uuid
+  disconnectedAt        DateTime?              @map("disconnected_at") @db.Timestamptz(3)
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy             AdminUser              @relation("SocialConnectionCreator", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+  accounts              SocialAccount[]
+
+  @@index([status, updatedAt(sort: Desc)])
+  @@map("social_connections")
+}
+
+model SocialAccount {
+  id                    String           @id @default(uuid()) @db.Uuid
+  connectionId          String           @map("connection_id") @db.Uuid
+  platform              SocialPlatform
+  remoteAccountId       String           @map("remote_account_id") @db.VarChar(100)
+  displayName           String           @map("display_name") @db.VarChar(180)
+  username              String?          @db.VarChar(180)
+  linkedPageId          String?          @map("linked_page_id") @db.VarChar(100)
+  accessTokenCiphertext String           @map("access_token_ciphertext") @db.Text
+  selected              Boolean          @default(false)
+  active                Boolean          @default(true)
+  createdAt             DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  connection            SocialConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  targets               SocialPostTarget[]
+
+  @@unique([platform, remoteAccountId])
+  @@index([connectionId, active, selected])
+  @@map("social_accounts")
+}
+
+model SocialPost {
+  id                    String          @id @default(uuid()) @db.Uuid
+  title                 String          @db.VarChar(180)
+  status                SocialPostStatus @default(DRAFT)
+  revision              Int             @default(1)
+  approvedRevision      Int?            @map("approved_revision")
+  approvedSnapshotHash  String?         @map("approved_snapshot_hash") @db.Char(64)
+  approvedAt            DateTime?       @map("approved_at") @db.Timestamptz(3)
+  approvedByAdminId     String?         @map("approved_by_admin_id") @db.Uuid
+  createdByAdminId      String          @map("created_by_admin_id") @db.Uuid
+  updatedByAdminId      String?         @map("updated_by_admin_id") @db.Uuid
+  sourceProductId       String?         @map("source_product_id") @db.Uuid
+  sourceMarketingDraftId String?        @map("source_marketing_draft_id") @db.Uuid
+  approvedSnapshot      Json?           @map("approved_snapshot")
+  lastErrorCode         String?         @map("last_error_code") @db.VarChar(80)
+  createdAt             DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy             AdminUser       @relation("SocialPostCreator", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+  approvedBy            AdminUser?      @relation("SocialPostApprover", fields: [approvedByAdminId], references: [id], onDelete: SetNull)
+  updatedBy             AdminUser?      @relation("SocialPostUpdater", fields: [updatedByAdminId], references: [id], onDelete: SetNull)
+  sourceProduct         Product?        @relation(fields: [sourceProductId], references: [id], onDelete: SetNull)
+  sourceMarketingDraft  AiMarketingDraft? @relation(fields: [sourceMarketingDraftId], references: [id], onDelete: SetNull)
+  targets               SocialPostTarget[]
+
+  @@index([status, updatedAt(sort: Desc)])
+  @@index([sourceProductId, createdAt(sort: Desc)])
+  @@map("social_posts")
+}
+
+model SocialPostTarget {
+  id                   String             @id @default(uuid()) @db.Uuid
+  postId               String             @map("post_id") @db.Uuid
+  accountId            String?            @map("account_id") @db.Uuid
+  mediaAssetId         String?            @map("media_asset_id") @db.Uuid
+  platform             SocialPlatform
+  caption              String             @default("") @db.VarChar(2200)
+  linkUrl              String?            @map("link_url") @db.VarChar(1000)
+  status               SocialTargetStatus @default(DRAFT)
+  approvedRevision     Int?               @map("approved_revision")
+  approvedPayloadHash  String?            @map("approved_payload_hash") @db.Char(64)
+  scheduledAt          DateTime?           @map("scheduled_at") @db.Timestamptz(3)
+  nextAttemptAt        DateTime?           @map("next_attempt_at") @db.Timestamptz(3)
+  publishRequestedAt   DateTime?           @map("publish_requested_at") @db.Timestamptz(3)
+  attemptCount          Int                @default(0) @map("attempt_count")
+  remoteContainerId     String?            @map("remote_container_id") @db.VarChar(140)
+  remoteMediaId         String?            @map("remote_media_id") @db.VarChar(140)
+  permalink             String?            @db.Text
+  publishedAt           DateTime?          @map("published_at") @db.Timestamptz(3)
+  lastErrorCode         String?            @map("last_error_code") @db.VarChar(80)
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  post                  SocialPost         @relation(fields: [postId], references: [id], onDelete: Cascade)
+  account               SocialAccount?     @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  mediaAsset            MediaAsset?        @relation(fields: [mediaAssetId], references: [id], onDelete: Restrict)
+  attempts              SocialPublishAttempt[]
+
+  @@unique([postId, accountId])
+  @@index([status, scheduledAt])
+  @@index([publishRequestedAt, status])
+  @@map("social_post_targets")
+}
+
+model SocialPublishAttempt {
+  id                  String              @id @default(uuid()) @db.Uuid
+  targetId            String              @map("target_id") @db.Uuid
+  revision            Int
+  attemptNumber       Int                 @map("attempt_number")
+  idempotencyKey      String              @unique @map("idempotency_key") @db.VarChar(180)
+  status              SocialAttemptStatus @default(RUNNING)
+  errorCode           String?             @map("error_code") @db.VarChar(80)
+  remoteContainerId   String?             @map("remote_container_id") @db.VarChar(140)
+  remoteMediaId       String?             @map("remote_media_id") @db.VarChar(140)
+  startedAt           DateTime            @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt          DateTime?           @map("finished_at") @db.Timestamptz(3)
+  target              SocialPostTarget    @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([targetId, revision, attemptNumber])
+  @@index([targetId, startedAt(sort: Desc)])
+  @@map("social_publish_attempts")
 }
