@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./social-workspace.css";
 
 export const metadata: Metadata = {
   title: "GEME Admin — Quản trị cửa hàng",

@@ -30,7 +30,7 @@ export class SocialService {
       encryptionConfigured: this.encryptionConfigured(),
       permissionsRequired: requiredScopes,
       accounts: connections.flatMap((connection) => connection.accounts.map((account) => ({ ...account, connectionId: connection.id, connectionName: connection.displayName, connectionStatus: connection.status, scopes: connection.scopes, missingScopes: (account.platform === "INSTAGRAM" ? requiredScopes : requiredScopes.slice(0, 3)).filter((scope) => !connection.scopes.includes(scope)) }))),
-      metrics: { drafts: byStatus.DRAFT || 0, scheduled: byStatus.SCHEDULED || 0, published: byStatus.PUBLISHED || 0, failed: byStatus.FAILED || 0, unknown: byStatus.UNKNOWN || 0 },
+      metrics: { drafts: byStatus.DRAFT || 0, scheduled: byStatus.SCHEDULED || 0, published: byStatus.PUBLISHED || 0, partial: byStatus.PARTIAL || 0, failed: byStatus.FAILED || 0, unknown: byStatus.UNKNOWN || 0 },
     };
   }
 

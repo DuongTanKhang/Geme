@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server.js";
+import { buildAdminApiTarget, hasSameOrigin, prepareAdminProxyRequest, requiresSameOrigin } from "../../../../lib/social-proxy.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -9,22 +10,6 @@ type RouteContext = { params: Promise<{ path: string[] }> };
 function apiBaseUrl() {
   const value = process.env.GEME_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:4000/api/v1";
   return value.replace(/\/+$/, "");
-}
-
-function hasSameOrigin(request: NextRequest) {
-  const origin = request.headers.get("origin");
-  if (!origin) return false;
-  const host = request.headers.get("host");
-  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim();
-  const protocol = forwardedProto === "https" || forwardedProto === "http"
-    ? forwardedProto
-    : request.nextUrl.protocol.replace(/:$/, "");
-  if (!host || (protocol !== "http" && protocol !== "https")) return false;
-  try {
-    return new URL(origin).origin === `${protocol}://${host}`;
-  } catch {
-    return false;
-  }
 }
 
 function jsonError(message: string, status: number) {
@@ -84,28 +69,17 @@ async function proxy(request: NextRequest, context: RouteContext) {
 
   if (path.join("/") === "auth/login" && request.method === "POST") return login(request);
   if (path.join("/") === "auth/logout" && request.method === "POST") return logout(request);
-  if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !hasSameOrigin(request)) return jsonError("Yêu cầu không hợp lệ.", 403);
+  if (requiresSameOrigin(request.method) && !hasSameOrigin(request)) return jsonError("Yêu cầu không hợp lệ.", 403);
 
   const token = request.cookies.get(ADMIN_COOKIE)?.value;
   if (!token) return jsonError("Phiên quản trị đã hết hạn. Vui lòng đăng nhập lại.", 401);
 
-  const targetUrl = `${apiBaseUrl()}/${path.map((part) => encodeURIComponent(part)).join("/")}${request.nextUrl.search}`;
-  const headers = new Headers({
-    Accept: request.headers.get("accept") || "application/json",
-    Authorization: `Bearer ${token}`,
-  });
-  for (const name of ["content-type", "accept-language", "last-event-id", "idempotency-key"]) {
-    const value = request.headers.get(name);
-    if (value) headers.set(name, value);
-  }
+  const targetUrl = buildAdminApiTarget(apiBaseUrl(), path, request.nextUrl.search);
 
   try {
-    const hasBody = !["GET", "HEAD"].includes(request.method);
+    const init = await prepareAdminProxyRequest(request, token);
     const upstream = await fetch(targetUrl, {
-      method: request.method,
-      headers,
-      body: hasBody ? await request.arrayBuffer() : undefined,
-      cache: "no-store",
+      ...init,
       signal: AbortSignal.timeout(30_000),
     });
     const responseHeaders = new Headers({ "Cache-Control": "no-store" });

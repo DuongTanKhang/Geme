@@ -36,10 +36,11 @@ export class CommerceController {
   }
 
   @Get("admin/products") @admin() adminProducts(@Query() query: Record<string, string>) { return this.commerce.products(query); }
+  // Keep static paths before the `:id` matcher so "events" isn't parsed as a UUID.
+  @Sse("products/events") productEvents() { return this.commerce.catalogEvents(); }
   @Get("products/:id") @admin() adminProduct(@Param("id") id: string) { return this.commerce.adminProduct(id); }
   @Get("products/detail/:slug/related") relatedProducts(@Param("slug") slug: string, @Query("limit") limit?: string) { return this.commerce.relatedProducts(slug, limit); }
   @Get("products/detail/:slug") product(@Param("slug") slug: string) { return this.commerce.product(slug); }
-  @Sse("products/events") productEvents() { return this.commerce.catalogEvents(); }
   @Post("products") @admin() createProduct(@Body() body: Record<string, any>) { return this.commerce.saveProduct(body); }
   @Patch("products/by-sku/:sku") @admin() updateProductBySku(@Param("sku") sku: string, @Body() body: Record<string, any>) { return this.commerce.saveProductBySku(body, sku); }
   @Patch("products/:id") @admin() updateProduct(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.saveProduct(body, id); }
