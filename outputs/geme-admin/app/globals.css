@@ -1286,3 +1286,8 @@
 .workspace-loading{min-height:180px;display:grid;place-items:center;color:var(--muted);font-size:13px}
 
 .receipt-bangle-sku-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.receipt-bangle-sku-fields select{width:100%;min-height:33px;padding:7px;border:1px solid #e3e9e5;border-radius:5px;color:#405047;background:#fff;font-size:9px}.receipt-bangle-sku-fields label>small{color:#89958e;font-size:8px;line-height:1.4}@media(max-width:720px){.receipt-bangle-sku-fields{grid-template-columns:1fr}}
+/* Shopee is an isolated order source; keep the switch visually secondary to the order table. */
+.shopee-source-switch{display:flex;align-items:center;gap:8px;margin:0 0 18px;padding:5px;width:max-content;border:1px solid var(--line,#dfe5e1);border-radius:999px;background:#f4f6f4}
+.shopee-source-switch button{display:inline-flex;align-items:center;gap:8px;border:0;border-radius:999px;padding:9px 14px;background:transparent;color:var(--muted,#65716a);font:inherit;cursor:pointer}
+.shopee-source-switch button.is-active{background:#fff;color:var(--ink,#18231f);box-shadow:0 1px 4px #18231f14}
+.shopee-source-switch button span{font-size:11px;opacity:.72}

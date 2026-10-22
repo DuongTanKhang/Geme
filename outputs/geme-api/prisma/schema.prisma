@@ -377,6 +377,8 @@ model AdminUser {
   socialPostsUpdated SocialPost[] @relation("SocialPostUpdater")
   socialTargetReconciliations SocialTargetReconciliation[] @relation("SocialTargetReconciliationActor")
   socialReconciliationClaims SocialPostTarget[] @relation("SocialTargetReconciliationClaim")
+  shopeeOAuthStates ShopeeOAuthState[] @relation("ShopeeOAuthStateAdmin")
+  shopeeConnectionsCreated ShopeeConnection[] @relation("ShopeeConnectionCreator")
 
   @@map("admin_users")
 }
@@ -514,6 +516,8 @@ model Product {
   aiTechnicalImageBatches AiImageBatch[]      @relation("AiTechnicalImageTarget")
   mediaAssets           ProductMediaAsset[]
   socialPostSources     SocialPost[]
+  shopeeMappings        ShopeeItemMapping[] @relation("ShopeeMappingProduct")
+  shopeeImportedItems   ShopeeImportedOrderItem[] @relation("ShopeeImportedMappedProduct")
 
   @@index([kind, status, createdAt(sort: Desc)])
   @@index([status, isNew, createdAt(sort: Desc)])
@@ -586,6 +590,8 @@ model ProductPriceVariant {
   inventoryReceiptItems InventoryReceiptItem[]
   inventoryIssueItems   InventoryIssueItem[]
   socialPostSources     SocialPost[]
+  shopeeMappings        ShopeeItemMapping[] @relation("ShopeeMappingVariant")
+  shopeeImportedItems   ShopeeImportedOrderItem[] @relation("ShopeeImportedMappedVariant")
 
   @@unique([productId, optionKey])
   @@index([productId, sortOrder])
@@ -1241,6 +1247,166 @@ model SocialOAuthState {
 
   @@index([expiresAt])
   @@map("social_oauth_states")
+}
+
+// Marketplace orders are intentionally isolated from the website Order model:
+// importing a Shopee order must not reserve stock, create payments, sync POS365,
+// trigger Viettel Post, or affect website revenue reports.
+model ShopeeOAuthState {
+  stateHash  String       @id @map("state_hash") @db.Char(64)
+  adminId    String       @map("admin_id") @db.Uuid
+  environment String      @db.VarChar(20)
+  expiresAt  DateTime     @map("expires_at") @db.Timestamptz(3)
+  consumedAt DateTime?    @map("consumed_at") @db.Timestamptz(3)
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  admin      AdminUser    @relation("ShopeeOAuthStateAdmin", fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("shopee_oauth_states")
+}
+
+model ShopeeConnection {
+  id                       String             @id @default(uuid()) @db.Uuid
+  environment              String             @db.VarChar(20)
+  shopId                   String             @map("shop_id") @db.VarChar(40)
+  shopName                 String?            @map("shop_name") @db.VarChar(180)
+  status                   String             @default("ACTIVE") @db.VarChar(20)
+  accessTokenCiphertext    String             @map("access_token_ciphertext") @db.Text
+  refreshTokenCiphertext   String             @map("refresh_token_ciphertext") @db.Text
+  accessTokenExpiresAt     DateTime           @map("access_token_expires_at") @db.Timestamptz(3)
+  refreshTokenExpiresAt    DateTime?          @map("refresh_token_expires_at") @db.Timestamptz(3)
+  refreshLeaseUntil        DateTime?          @map("refresh_lease_until") @db.Timestamptz(3)
+  syncCursorAt             DateTime?          @map("sync_cursor_at") @db.Timestamptz(3)
+  lastSyncStartedAt        DateTime?          @map("last_sync_started_at") @db.Timestamptz(3)
+  lastSyncCompletedAt      DateTime?          @map("last_sync_completed_at") @db.Timestamptz(3)
+  lastErrorCode            String?            @map("last_error_code") @db.VarChar(80)
+  createdByAdminId         String             @map("created_by_admin_id") @db.Uuid
+  disconnectedAt           DateTime?          @map("disconnected_at") @db.Timestamptz(3)
+  createdAt                DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy                AdminUser          @relation("ShopeeConnectionCreator", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+  orders                   ShopeeImportedOrder[]
+  mappings                 ShopeeItemMapping[]
+  syncRuns                 ShopeeSyncRun[]
+
+  @@unique([environment, shopId])
+  @@index([status, lastSyncCompletedAt])
+  @@map("shopee_connections")
+}
+
+model ShopeeImportedOrder {
+  id                    String                    @id @default(uuid()) @db.Uuid
+  connectionId          String                    @map("connection_id") @db.Uuid
+  orderSn               String                    @map("order_sn") @db.VarChar(80)
+  status                String                    @db.VarChar(40)
+  currency              String?                   @db.VarChar(12)
+  totalAmount           Decimal?                  @map("total_amount") @db.Decimal(14, 2)
+  estimatedShippingFee  Decimal?                  @map("estimated_shipping_fee") @db.Decimal(14, 2)
+  actualShippingFee     Decimal?                  @map("actual_shipping_fee") @db.Decimal(14, 2)
+  cod                   Boolean?
+  paymentMethod         String?                   @map("payment_method") @db.VarChar(100)
+  shippingCarrier       String?                   @map("shipping_carrier") @db.VarChar(120)
+  createTime            DateTime                  @map("create_time") @db.Timestamptz(3)
+  shopeeUpdatedAt       DateTime                  @map("shopee_updated_at") @db.Timestamptz(3)
+  payTime               DateTime?                 @map("pay_time") @db.Timestamptz(3)
+  recipientAddress      Json?                     @map("recipient_address")
+  messageToSeller       String?                   @map("message_to_seller") @db.Text
+  createdAt             DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  connection            ShopeeConnection          @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  items                 ShopeeImportedOrderItem[]
+  statusHistory         ShopeeOrderStatusHistory[]
+
+  @@unique([connectionId, orderSn])
+  @@index([connectionId, createTime(sort: Desc)])
+  @@index([connectionId, status, createTime(sort: Desc)])
+  @@map("shopee_imported_orders")
+}
+
+model ShopeeImportedOrderItem {
+  id                       String                 @id @default(uuid()) @db.Uuid
+  orderId                  String                 @map("order_id") @db.Uuid
+  itemId                   String                 @map("item_id") @db.VarChar(40)
+  modelId                  String                 @default("") @map("model_id") @db.VarChar(40)
+  itemName                 String                 @map("item_name") @db.VarChar(255)
+  itemSku                  String?                @map("item_sku") @db.VarChar(120)
+  modelSku                 String?                @map("model_sku") @db.VarChar(120)
+  quantity                 Int
+  unitPrice                Decimal?               @map("unit_price") @db.Decimal(14, 2)
+  variationDiscountedPrice Decimal?               @map("variation_discounted_price") @db.Decimal(14, 2)
+  currency                 String?                @db.VarChar(12)
+  mappedSku                String?                @map("mapped_sku") @db.VarChar(64)
+  mappedProductId          String?                @map("mapped_product_id") @db.Uuid
+  mappedVariantId          String?                @map("mapped_variant_id") @db.Uuid
+  mappingId                String?                @map("mapping_id") @db.Uuid
+  createdAt                DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  order                    ShopeeImportedOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  mapping                  ShopeeItemMapping?     @relation(fields: [mappingId], references: [id], onDelete: SetNull)
+  mappedProduct            Product?               @relation("ShopeeImportedMappedProduct", fields: [mappedProductId], references: [id], onDelete: SetNull)
+  mappedVariant            ProductPriceVariant?   @relation("ShopeeImportedMappedVariant", fields: [mappedVariantId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([mappingId])
+  @@index([mappedSku])
+  @@map("shopee_imported_order_items")
+}
+
+model ShopeeItemMapping {
+  id             String                    @id @default(uuid()) @db.Uuid
+  connectionId   String                    @map("connection_id") @db.Uuid
+  itemId         String                    @map("item_id") @db.VarChar(40)
+  modelId        String                    @default("") @map("model_id") @db.VarChar(40)
+  productId      String                    @map("product_id") @db.Uuid
+  variantId      String?                   @map("variant_id") @db.Uuid
+  sku            String                    @db.VarChar(64)
+  createdAt      DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  connection     ShopeeConnection          @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  product        Product                   @relation("ShopeeMappingProduct", fields: [productId], references: [id], onDelete: Restrict)
+  variant        ProductPriceVariant?      @relation("ShopeeMappingVariant", fields: [variantId], references: [id], onDelete: Restrict)
+  importedItems  ShopeeImportedOrderItem[]
+
+  @@unique([connectionId, itemId, modelId])
+  @@index([productId])
+  @@index([variantId])
+  @@map("shopee_item_mappings")
+}
+
+model ShopeeOrderStatusHistory {
+  id                String                 @id @default(uuid()) @db.Uuid
+  orderId           String                 @map("order_id") @db.Uuid
+  status            String                 @db.VarChar(40)
+  shopeeUpdatedAt   DateTime               @map("shopee_updated_at") @db.Timestamptz(3)
+  observedAt        DateTime               @default(now()) @map("observed_at") @db.Timestamptz(3)
+  order             ShopeeImportedOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, status, shopeeUpdatedAt])
+  @@index([orderId, observedAt(sort: Desc)])
+  @@map("shopee_order_status_history")
+}
+
+model ShopeeSyncRun {
+  id             String           @id @default(uuid()) @db.Uuid
+  connectionId   String           @map("connection_id") @db.Uuid
+  status         String           @default("QUEUED") @db.VarChar(20)
+  fromTime       DateTime?        @map("from_time") @db.Timestamptz(3)
+  toTime         DateTime?        @map("to_time") @db.Timestamptz(3)
+  ordersRead     Int              @default(0) @map("orders_read")
+  ordersCreated  Int              @default(0) @map("orders_created")
+  ordersUpdated  Int              @default(0) @map("orders_updated")
+  startedAt      DateTime?        @map("started_at") @db.Timestamptz(3)
+  finishedAt     DateTime?        @map("finished_at") @db.Timestamptz(3)
+  errorCode      String?          @map("error_code") @db.VarChar(80)
+  retryOfId      String?          @map("retry_of_id") @db.Uuid
+  createdByAdminId String?        @map("created_by_admin_id") @db.Uuid
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  connection     ShopeeConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([connectionId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("shopee_sync_runs")
 }
 
 model SocialConnection {

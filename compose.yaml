@@ -89,6 +89,14 @@ services:
       SOCIAL_META_ADMIN_RETURN_URL: ${SOCIAL_META_ADMIN_RETURN_URL:-http://localhost:3001/}
       SOCIAL_META_ADMIN_ORIGINS: ${SOCIAL_META_ADMIN_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
       SOCIAL_META_ENCRYPTION_KEY: ${SOCIAL_META_ENCRYPTION_KEY:-}
+      SHOPEE_ENVIRONMENT: ${SHOPEE_ENVIRONMENT:-sandbox}
+      SHOPEE_PARTNER_ID: ${SHOPEE_PARTNER_ID:-}
+      SHOPEE_PARTNER_KEY: ${SHOPEE_PARTNER_KEY:-}
+      SHOPEE_REDIRECT_URI: ${SHOPEE_REDIRECT_URI:-}
+      SHOPEE_ADMIN_RETURN_URL: ${SHOPEE_ADMIN_RETURN_URL:-http://localhost:3001/?view=shopee}
+      SHOPEE_TOKEN_ENCRYPTION_KEY: ${SHOPEE_TOKEN_ENCRYPTION_KEY:-}
+      SHOPEE_INITIAL_SYNC_DAYS: ${SHOPEE_INITIAL_SYNC_DAYS:-30}
+      SHOPEE_POLL_INTERVAL_MINUTES: ${SHOPEE_POLL_INTERVAL_MINUTES:-5}
       GEME_SITE_URL: ${GEME_SITE_URL:-https://geme.vn}
       MEDIA_STORAGE_PROVIDER: ${MEDIA_STORAGE_PROVIDER:-database}
       R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
@@ -221,8 +229,49 @@ services:
         condition: service_healthy
       ai-redis:
         condition: service_healthy
+    networks:
+      - default
+      - ai_internal
     restart: unless-stopped
     command: pnpm social:worker
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  shopee-worker:
+    build:
+      context: ./outputs/geme-api
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: development
+      CI: "true"
+      DATABASE_URL: ${GEME_DATABASE_URL:?Set GEME_DATABASE_URL in .env.docker}
+      REDIS_URL: redis://ai-redis:6379/0
+      SHOPEE_ENVIRONMENT: ${SHOPEE_ENVIRONMENT:-sandbox}
+      SHOPEE_PARTNER_ID: ${SHOPEE_PARTNER_ID:-}
+      SHOPEE_PARTNER_KEY: ${SHOPEE_PARTNER_KEY:-}
+      SHOPEE_REDIRECT_URI: ${SHOPEE_REDIRECT_URI:-}
+      SHOPEE_ADMIN_RETURN_URL: ${SHOPEE_ADMIN_RETURN_URL:-http://localhost:3001/?view=shopee}
+      SHOPEE_TOKEN_ENCRYPTION_KEY: ${SHOPEE_TOKEN_ENCRYPTION_KEY:-}
+      SHOPEE_INITIAL_SYNC_DAYS: ${SHOPEE_INITIAL_SYNC_DAYS:-30}
+      SHOPEE_POLL_INTERVAL_MINUTES: ${SHOPEE_POLL_INTERVAL_MINUTES:-5}
+      SHOPEE_WORKER_CONCURRENCY: ${SHOPEE_WORKER_CONCURRENCY:-2}
+    volumes:
+      - ./outputs/geme-api:/app
+      - geme_api_node_modules_v2:/app/node_modules
+    depends_on:
+      geme-api:
+        condition: service_healthy
+      ai-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    command: pnpm shopee:worker
+    networks:
+      - default
+      - ai_internal
     healthcheck:
       test: ["CMD", "node", "-e", "process.kill(1, 0)"]
       interval: 30s
