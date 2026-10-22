@@ -28,6 +28,7 @@ type ImagePlanRow = {
 type ProductImagePlan = { images: ImagePlanRow[] };
 const planPath = process.argv.find((value) => value.endsWith(".json")) || "/tmp/legacy-product-image-plan.json";
 const apply = process.argv.includes("--apply");
+const attachOnly = process.argv.includes("--attach-only");
 const MAX_HEADS = 12;
 const PUBLIC_SOURCE_PREFIX = "legacy-sql/product-image/";
 const PRIVATE_SOURCE_PREFIX = "legacy-sql/product-agent-input/";
@@ -108,7 +109,7 @@ async function main() {
     return selected ? [selected] : [];
   });
   if (!apply) {
-    console.log(JSON.stringify({ mode: "dry-run", exactSkuMatches: grouped.size, productImageRows: rows.length, r2ObjectsVerified: verifiedObjects, productDraftsToGenerate: descriptionRows.length, skippedAgentImagesOver8MiB: grouped.size - descriptionRows.length }));
+    console.log(JSON.stringify({ mode: "dry-run", attachOnly, exactSkuMatches: grouped.size, productImageRows: rows.length, r2ObjectsVerified: verifiedObjects, productDraftsToGenerate: attachOnly ? 0 : descriptionRows.length, skippedAgentImagesOver8MiB: attachOnly ? 0 : grouped.size - descriptionRows.length }));
     return;
   }
 
@@ -117,8 +118,9 @@ async function main() {
 
   const publicSourceKeys = [...new Set(rows.map(({ productId, filename }) => `${PUBLIC_SOURCE_PREFIX}${productId}/${filename}`))];
   const publicAssetsBefore = await prisma.mediaAsset.findMany({ where: { sourceKey: { in: publicSourceKeys } }, select: { id: true, filename: true, sourceKey: true, storageProvider: true, objectKey: true, isPrivate: true } });
+  const expectedPublicObjectBySource = new Map(rows.map((row) => [`${PUBLIC_SOURCE_PREFIX}${row.productId}/${row.filename}`, row.objectKey]));
   for (const asset of publicAssetsBefore) {
-    if (asset.storageProvider !== "r2" || !asset.objectKey?.startsWith("legacy-product-images/") || asset.isPrivate) throw new Error(`Existing public media mapping conflicts for ${asset.filename}.`);
+    if (asset.storageProvider !== "r2" || asset.objectKey !== expectedPublicObjectBySource.get(asset.sourceKey!) || asset.isPrivate) throw new Error(`Existing public media mapping conflicts for ${asset.filename}.`);
   }
   const assetIdByFilename = new Map(publicAssetsBefore.map((asset) => [asset.sourceKey!.slice(PUBLIC_SOURCE_PREFIX.length), asset.id]));
 
@@ -175,6 +177,21 @@ async function main() {
       const previous = primaryImageByProduct.get(row.productId);
       const withinAgentLimit = row.size <= 8 * 1024 * 1024;
       if (withinAgentLimit && (!previous || row.isPrimary)) primaryImageByProduct.set(row.productId, { row, assetId });
+    }
+
+    if (attachOnly) {
+      if (attached) {
+        await transaction.auditLog.create({
+          data: {
+            adminId: admin.id,
+            action: "LEGACY_PRODUCT_IMAGE_IMPORT",
+            entityType: "product_image_migration",
+            entityId: [...grouped.keys()][0],
+            after: { products: grouped.size, productImages: attached, matching: "EXACT_SKU", status: "DRAFT_ONLY", aiDraftsQueued: 0 },
+          },
+        });
+      }
+      return { attached, newAiImageItems: 0, taskRows: [] as { id: string; draftId: string; itemId: string }[] };
     }
 
     const importItemRows: { row: ImagePlanRow; publicAssetId: string; privateAssetId: string }[] = [];
@@ -315,13 +332,15 @@ async function main() {
     return { attached, newAiImageItems: newItems.length, taskRows };
   }, { timeout: 120_000, maxWait: 20_000 });
 
-  const queue = new Queue(AI_STUDIO_QUEUE, { connection: redisConnectionOptions(), defaultJobOptions: AI_QUEUE_DEFAULT_JOB_OPTIONS });
-  try {
-    if (summary.taskRows.length) await queue.addBulk(summary.taskRows.map(({ id }) => ({ name: "process-task", data: { taskId: id }, opts: { jobId: id } })));
-  } finally {
-    await queue.close();
+  if (summary.taskRows.length) {
+    const queue = new Queue(AI_STUDIO_QUEUE, { connection: redisConnectionOptions(), defaultJobOptions: AI_QUEUE_DEFAULT_JOB_OPTIONS });
+    try {
+      await queue.addBulk(summary.taskRows.map(({ id }) => ({ name: "process-task", data: { taskId: id }, opts: { jobId: id } })));
+    } finally {
+      await queue.close();
+    }
   }
-  console.log(JSON.stringify({ mode: "applied", exactSkuMatches: grouped.size, productImageRowsAdded: summary.attached, r2ObjectsVerified: verifiedObjects, aiImageItemsAdded: summary.newAiImageItems, productDescriptionDraftsQueued: summary.taskRows.length, skippedAgentImagesOver8MiB: grouped.size - descriptionRows.length, publishedProductsChanged: 0, priceOrStockChanged: 0 }));
+  console.log(JSON.stringify({ mode: "applied", attachOnly, exactSkuMatches: grouped.size, productImageRowsAdded: summary.attached, r2ObjectsVerified: verifiedObjects, aiImageItemsAdded: summary.newAiImageItems, productDescriptionDraftsQueued: summary.taskRows.length, skippedAgentImagesOver8MiB: attachOnly ? 0 : grouped.size - descriptionRows.length, publishedProductsChanged: 0, priceOrStockChanged: 0 }));
 }
 
 try {

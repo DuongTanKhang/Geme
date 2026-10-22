@@ -23,6 +23,37 @@ export type CheckoutPromotion = {
   excludedCategoryIds: string[];
 };
 
+export async function loadActiveStorePromotions(client: any, now = new Date()): Promise<CheckoutPromotion[]> {
+  const [promotions, categories] = await Promise.all([
+    client.promotion.findMany({
+      where: { visible: true, status: "ACTIVE", type: "PERCENTAGE", startsAt: { lte: now }, endsAt: { gte: now } },
+      select: { id: true, value: true, targets: { select: { categoryId: true, productId: true, excluded: true } } },
+      take: 500,
+    }),
+    client.category.findMany({ select: { id: true, parentId: true } }),
+  ]) as [Array<{ id: string; value: unknown; targets: Array<{ categoryId: string | null; productId: string | null; excluded: boolean }> }>, Array<{ id: string; parentId: string | null }>];
+  const descendantsOf = (roots: string[]) => {
+    const ids = new Set(roots);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const category of categories) if (category.parentId && ids.has(category.parentId) && !ids.has(category.id)) { ids.add(category.id); changed = true; }
+    }
+    return [...ids];
+  };
+  return promotions.map((promotion) => {
+    const included = promotion.targets.filter((target) => !target.excluded);
+    const excluded = promotion.targets.filter((target) => target.excluded);
+    return {
+      id: promotion.id, value: Number(promotion.value) || 0,
+      productIds: included.flatMap((target) => target.productId ? [target.productId] : []),
+      categoryIds: descendantsOf(included.flatMap((target) => target.categoryId ? [target.categoryId] : [])),
+      excludedProductIds: excluded.flatMap((target) => target.productId ? [target.productId] : []),
+      excludedCategoryIds: descendantsOf(excluded.flatMap((target) => target.categoryId ? [target.categoryId] : [])),
+    };
+  }).filter((promotion) => Number(promotion.value) > 0);
+}
+
 const asPositiveNumber = (value: unknown) => {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : 0;

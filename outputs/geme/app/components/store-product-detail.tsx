@@ -9,7 +9,8 @@ import { useWishlist } from "./wishlist-provider";
 
 type DetailTab = "description" | "reviews";
 
-const variantKey = (variant: NonNullable<StoreProduct["variants"]>[number]) => `${variant.quality}::${variant.beadSize ?? ""}::${variant.carat ?? ""}::${variant.gemstoneQuality ?? ""}`;
+const variantKey = (variant: NonNullable<StoreProduct["variants"]>[number]) => `${variant.shape ?? ""}::${variant.quality}::${variant.beadSize ?? ""}::${variant.carat ?? ""}::${variant.gemstoneQuality ?? ""}`;
+const bangleShapeName = (shape?: string | null) => ({ ROUND: "Tròn", OVAL: "Oval", SQUARE: "Vuông" } as Record<string, string>)[String(shape || "").toUpperCase()] || "";
 
 function HeartIcon() {
   return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20.8 8.8c0 5-8.8 10.3-8.8 10.3S3.2 13.8 3.2 8.8A4.5 4.5 0 0 1 12 6.5a4.5 4.5 0 0 1 8.8 2.3Z" /></svg>;
@@ -75,22 +76,30 @@ export function StoreProductDetail({
   const selectedVariant = availableVariants.find(
     (variant) => variantKey(variant) === selectedVariantKey,
   ) ?? availableVariants[0];
+  const normalizedCategoryPath = [...categoryTrail.map((category) => category.name), product.category?.name || ""].join(" ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi");
+  const normalizedProductName = product.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi");
+  const bangleProduct = normalizedCategoryPath.includes("vong kieng") || normalizedProductName.includes("kieng");
+  const bangleVariants = bangleProduct && productVariants.some((variant) => Boolean(variant.shape));
+  const bangleShapes = [...new Set(availableVariants.map((variant) => variant.shape).filter((shape): shape is string => Boolean(shape)))];
+  const selectedShape = selectedVariant?.shape || bangleShapes[0] || "";
   const gemstonePricingMode = product.category?.pricingMode || "GEMSTONE_SIZE";
   const gemstoneCaratPricing = product.kind === "GEMSTONE" && ["GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"].includes(gemstonePricingMode);
   const gemstoneCaratQualityPricing = product.kind === "GEMSTONE" && gemstonePricingMode === "GEMSTONE_CARAT_AND_QUALITY";
-  const qualities = [...new Set(availableVariants.map((variant) => variant.quality))];
+  const variantsForShape = bangleVariants ? availableVariants.filter((variant) => variant.shape === selectedShape) : availableVariants;
+  const qualities = [...new Set(variantsForShape.map((variant) => variant.quality))];
   const selectedQuality = selectedVariant?.quality ?? qualities[0];
   const gemstoneQualities = [...new Set(availableVariants.map((variant) => variant.gemstoneQuality).filter((quality): quality is string => Boolean(quality)))];
   const selectedGemstoneQuality = selectedVariant?.gemstoneQuality || gemstoneQualities[0];
-  const sizesForQuality = availableVariants.filter((variant) => variant.quality === selectedQuality && variant.beadSize);
+  const sizesForQuality = variantsForShape.filter((variant) => variant.quality === selectedQuality && variant.beadSize);
   const caratsForSelection = availableVariants.filter((variant) => variant.quality === selectedQuality && (!gemstoneCaratQualityPricing || variant.gemstoneQuality === selectedGemstoneQuality) && variant.carat != null);
   const priceDetails = getStoreProductPrice(product, promotions, selectedVariant);
   const { salePrice: price, originalPrice, promotion: activePromotion } = priceDetails;
   const promotionPeriod = activePromotion ? formatStorePromotionPeriod(activePromotion) : "";
   const stock = selectedVariant ? selectedVariant.stock : product.stock;
   const material = product.materialOption?.name || product.gemstoneType?.name;
-  const variantImages = (selectedVariant?.imageUrls || []).map((url, index) => ({ url, alt: product.name + " · " + selectedVariant?.quality + (selectedVariant?.beadSize ? " · " + selectedVariant.beadSize : ""), sortOrder: index, isPrimary: index === 0 }));
-  const displayImages = (variantImages.length ? variantImages : images).slice(0, 10);
+  const variantImages = (selectedVariant?.imageUrls || []).map((url, index) => ({ url, alt: [product.name, bangleShapeName(selectedVariant?.shape), selectedVariant?.quality, selectedVariant?.beadSize].filter(Boolean).join(" · "), sortOrder: index, isPrimary: index === 0 }));
+  const fallbackImages = bangleProduct ? images.slice(0, 1) : images;
+  const displayImages = (variantImages.length ? variantImages : fallbackImages).slice(0, bangleProduct ? 1 : 10);
   const galleryMedia = [
     ...displayImages.map((image) => ({ kind: "image" as const, image })),
     ...(selectedVariant?.videoUrl ? [{ kind: "variant-video" as const, url: selectedVariant.videoUrl }] : []),
@@ -107,7 +116,6 @@ export function StoreProductDetail({
   const hasTechnicalMedia = Boolean(technicalVideo || technicalImage);
   const beadSizes = [...new Set(productVariants.map((variant) => variant.beadSize).filter((size): size is string => Boolean(size)))];
   const qualityNames = [...new Set(productVariants.map((variant) => variant.quality))];
-  const normalizedCategoryPath = [...categoryTrail.map((category) => category.name), product.category?.name || ""].join(" ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi");
   const sizeOnlyVariants = normalizedCategoryPath.includes("vong tay") || normalizedCategoryPath.includes("lac tay")
     ? productVariants.length > 0 && productVariants.every((variant) => variant.quality === "Kích thước")
     : false;
@@ -119,7 +127,7 @@ export function StoreProductDetail({
   const formattedWeight = product.weightGrams == null ? null : new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 2 }).format(product.weightGrams);
 
   const setQuality = (quality: string) => {
-    const next = availableVariants.find((variant) => variant.quality === quality);
+    const next = availableVariants.find((variant) => (!bangleVariants || variant.shape === selectedShape) && variant.quality === quality);
     if (next) {
       setSelectedVariantKey(variantKey(next));
       setQuantity(1);
@@ -127,12 +135,16 @@ export function StoreProductDetail({
     }
   };
   const setSize = (beadSize: string) => {
-    const next = availableVariants.find((variant) => variant.quality === selectedQuality && variant.beadSize === beadSize);
+    const next = availableVariants.find((variant) => (!bangleVariants || variant.shape === selectedShape) && variant.quality === selectedQuality && variant.beadSize === beadSize);
     if (next) {
       setSelectedVariantKey(variantKey(next));
       setQuantity(1);
       setActiveImage(0);
     }
+  };
+  const setBangleShape = (shape: string) => {
+    const next = availableVariants.find((variant) => variant.shape === shape);
+    if (next) { setSelectedVariantKey(variantKey(next)); setQuantity(1); setActiveImage(0); }
   };
   const setGemstoneQuality = (quality: string) => {
     const next = availableVariants.find((variant) => variant.quality === selectedQuality && variant.gemstoneQuality === quality && (!gemstoneCaratPricing || variant.carat === selectedVariant?.carat))
@@ -154,6 +166,7 @@ export function StoreProductDetail({
       name: product.name,
       sku: selectedVariant?.sku || product.sku,
       price,
+      shape: selectedVariant?.shape || null,
       quality: sizeOnlyVariants ? null : selectedVariant?.quality || null,
       beadSize: selectedVariant?.beadSize || null,
       carat: selectedVariant?.carat ?? null,
@@ -231,14 +244,18 @@ export function StoreProductDetail({
           <p className="detail-summary">{product.description || product.fullDescription || "Sản phẩm được tuyển chọn và giới thiệu bởi GEME."}</p>
 
           <div className="detail-guarantees">
-            <div><span aria-hidden="true">◇</span><strong>Thông tin sản phẩm</strong><small>Mã {product.sku}</small></div>
+            <div><span aria-hidden="true">◇</span><strong>Thông tin sản phẩm</strong><small>Mã {selectedVariant?.sku || product.sku}</small></div>
             <div><span aria-hidden="true">◉</span><strong>Giá theo phiên bản</strong><small>Cập nhật từ dữ liệu sản phẩm</small></div>
             <div><span aria-hidden="true">⌕</span><strong>Tư vấn lựa chọn</strong><small>Hỗ trợ chọn biến thể phù hợp</small></div>
             <div><span aria-hidden="true">♡</span><strong>Hỗ trợ khách hàng</strong><small>Liên hệ GEME khi cần</small></div>
           </div>
 
-          {qualities.length > 1 && <fieldset className="detail-size-picker">
-            <legend>{product.kind === "GEMSTONE" ? "Dạng cắt" : "Chất lượng"}: <strong>{selectedQuality}</strong></legend>
+          {bangleVariants && bangleShapes.length > 0 && <fieldset className="detail-size-picker">
+            <legend>Dáng kiềng: <strong>{bangleShapeName(selectedShape)}</strong></legend>
+            <div className="store-detail-quality-list">{bangleShapes.map((shape) => <button type="button" key={shape} className={selectedShape === shape ? "is-selected" : ""} onClick={() => setBangleShape(shape)}>{bangleShapeName(shape)}</button>)}</div>
+          </fieldset>}
+          {qualities.length > 0 && <fieldset className="detail-size-picker">
+            <legend>{bangleVariants ? "Chất lượng kiềng" : product.kind === "GEMSTONE" ? "Dạng cắt" : "Chất lượng"}: <strong>{selectedQuality}</strong></legend>
             <div className="store-detail-quality-list">{qualities.map((quality) => <button type="button" key={quality} className={selectedQuality === quality ? "is-selected" : ""} onClick={() => setQuality(quality)}>{quality}</button>)}</div>
           </fieldset>}
           {gemstoneQualities.length > 0 && <fieldset className="detail-size-picker">
@@ -250,7 +267,7 @@ export function StoreProductDetail({
             <div className="store-detail-quality-list">{caratsForSelection.map((variant) => <button type="button" key={variantKey(variant)} className={Number(selectedVariant?.carat) === Number(variant.carat) ? "is-selected" : ""} onClick={() => setCarat(Number(variant.carat))}>{variant.carat} ct</button>)}</div>
           </fieldset>}
           {sizesForQuality.length > 0 && <fieldset className="detail-size-picker">
-            <legend>{sizeOnlyVariants ? "Kích thước vòng" : product.kind === "GEMSTONE" ? "Size mặt đá" : "Kích thước hạt"}: <strong>{selectedVariant?.beadSize}</strong></legend>
+            <legend>{bangleVariants ? "Size kiềng" : sizeOnlyVariants ? "Kích thước vòng" : product.kind === "GEMSTONE" ? "Size mặt đá" : "Kích thước hạt"}: <strong>{selectedVariant?.beadSize}</strong></legend>
             <div>{sizesForQuality.map((variant) => <button type="button" key={variant.beadSize} className={selectedVariant?.beadSize === variant.beadSize ? "is-selected" : ""} onClick={() => setSize(variant.beadSize || "")} title={`${variant.stock} sản phẩm còn hàng`}>
               {variant.beadSize}
             </button>)}</div>
@@ -296,14 +313,17 @@ export function StoreProductDetail({
             <h3>THÔNG SỐ KỸ THUẬT</h3>
             <table><tbody>
               <tr><th>Tên sản phẩm</th><td>{product.name}</td></tr>
-              <tr><th>Mã sản phẩm</th><td>{product.sku}</td></tr>
+              <tr><th>Mã sản phẩm</th><td>{selectedVariant?.sku || product.sku}</td></tr>
               {material && <tr><th>{product.kind === "GEMSTONE" ? "Loại đá" : "Chất liệu / đá"}</th><td>{material}</td></tr>}
               {categoryName && <tr><th>Danh mục</th><td>{categoryTrail.map((category) => category.name).join(" / ") || categoryName}</td></tr>}
               {formattedWeight !== null && <tr><th>Khối lượng</th><td>{formattedWeight} g</td></tr>}
               {hasDimensions && <tr><th>Kích thước (dài × rộng × cao)</th><td>{formattedDimensions} cm</td></tr>}
-              {qualityNames.length > 0 && !sizeOnlyVariants && <tr><th>{product.kind === "GEMSTONE" ? "Dạng cắt" : "Chất lượng"}</th><td>{qualityNames.join(", ")}</td></tr>}
+              {bangleProduct && <tr><th>Dáng kiềng</th><td>{bangleShapeName(selectedVariant?.shape) || "Chưa cập nhật"}</td></tr>}
+              {bangleProduct && <tr><th>Chất lượng</th><td>{selectedVariant?.quality || "Chưa cập nhật"}</td></tr>}
+              {bangleProduct && <tr><th>Size</th><td>{selectedVariant?.beadSize || "Chưa cập nhật"}</td></tr>}
+              {qualityNames.length > 0 && !sizeOnlyVariants && !bangleVariants && <tr><th>{product.kind === "GEMSTONE" ? "Dạng cắt" : "Chất lượng"}</th><td>{qualityNames.join(", ")}</td></tr>}
               {gemstoneQualities.length > 0 && <tr><th>Chất lượng đá</th><td>{gemstoneQualities.join(", ")}</td></tr>}
-              {beadSizes.length > 0 && <tr><th>{sizeOnlyVariants ? "Kích thước vòng" : product.kind === "GEMSTONE" ? "Size mặt đá" : "Kích thước hạt"}</th><td>{beadSizes.join(" / ")}</td></tr>}
+              {beadSizes.length > 0 && !bangleVariants && <tr><th>{sizeOnlyVariants ? "Kích thước vòng" : product.kind === "GEMSTONE" ? "Size mặt đá" : "Kích thước hạt"}</th><td>{beadSizes.join(" / ")}</td></tr>}
               {gemstoneCaratPricing && <tr><th>Carat</th><td>{[...new Set(productVariants.map((variant) => variant.carat).filter((carat): carat is number => carat != null))].join(" / ")} ct</td></tr>}
               {minVariantPrice > 0 && <tr><th>Khoảng giá phiên bản</th><td>{minVariantPrice === maxVariantPrice ? formatStorePrice(minVariantPrice) : `${formatStorePrice(minVariantPrice)} – ${formatStorePrice(maxVariantPrice)}`}</td></tr>}
             </tbody></table>

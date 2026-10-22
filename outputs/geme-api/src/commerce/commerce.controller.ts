@@ -51,7 +51,7 @@ export class CommerceController {
   @Get("inventory/movements") @admin() inventoryMovements(@Query("limit") limit?: string) { return this.commerce.inventoryMovements(limit); }
   @Get("inventory/sku-rules") @admin() inventorySkuRules() { return this.commerce.inventorySkuRules(); }
   @Patch("inventory/sku-rules") @admin() saveInventorySkuRules(@Body() body: Record<string, any>) { return this.commerce.saveInventorySkuRules(body); }
-  @Get("inventory/sku-next") @admin() nextInventorySku(@Query("categoryId") categoryId?: string, @Query("materialOptionId") materialOptionId?: string, @Query("sequence") sequence?: string) { return this.commerce.nextInventorySku(categoryId || "", materialOptionId, sequence); }
+  @Get("inventory/sku-next") @admin() nextInventorySku(@Query("categoryId") categoryId?: string, @Query("materialOptionId") materialOptionId?: string, @Query("sequence") sequence?: string, @Query("bangleShape") bangleShape?: string, @Query("bangleQuality") bangleQuality?: string, @Query("bangleSizeMm") bangleSizeMm?: string) { return this.commerce.nextInventorySku(categoryId || "", materialOptionId, sequence, { bangleShape, bangleQuality, bangleSizeMm }); }
   @Get("inventory/receipts/next-number") @admin() nextInventoryReceiptNumber(@Query("date") date?: string) { return this.commerce.nextInventoryReceiptNumber(date); }
   @Get("inventory/receipts") @admin() inventoryReceipts(@Query("limit") limit?: string) { return this.commerce.inventoryReceipts(limit); }
   @Get("inventory/receipts/:id") @admin() inventoryReceipt(@Param("id") id: string) { return this.commerce.inventoryReceipt(id); }

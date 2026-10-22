@@ -5,9 +5,10 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { MediaStorageService } from "../media/media-storage.service.js";
 import { redisConnectionOptions } from "../ai-studio/ai-studio.queue.js";
-import { approvedSnapshotHash, socialPayloadHash } from "./social.contract.js";
+import { approvedSnapshotHash, socialCommerceSnapshot, socialCommerceSnapshotHash, socialPayloadHash } from "./social.contract.js";
 import { decryptMetaToken, MetaRequestError, SocialMetaClient, type MetaPublishResult } from "./social-meta.client.js";
 import { SOCIAL_PUBLISH_QUEUE, type SocialPublishPayload } from "./social.queue.js";
+import { loadActiveStorePromotions } from "../commerce/checkout-pricing.js";
 
 const logger = new Logger("SocialPublishWorker");
 const databaseUrl = process.env.DATABASE_URL;
@@ -44,7 +45,7 @@ async function publish(job: Job<SocialPublishPayload>) {
     if (!postLock.length) return null;
     const locked = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM "social_post_targets" WHERE id = ${targetId}::uuid FOR UPDATE SKIP LOCKED`;
     if (!locked.length) return null;
-    const target = await tx.socialPostTarget.findUnique({ where: { id: targetId }, include: { post: { include: { sourceProduct: { select: { id: true, status: true, stock: true, variants: { select: { stock: true } } } } } }, account: { include: { connection: true } }, mediaAsset: true } });
+    const target = await tx.socialPostTarget.findUnique({ where: { id: targetId }, include: { post: { include: { sourceProduct: { select: { id: true, status: true, stock: true, variants: { select: { id: true, stock: true } } } } } }, account: { include: { connection: true } }, mediaAsset: true } });
     const account = target?.account;
     if (!target || target.status !== "SCHEDULED" || !target.publishRequestedAt || !target.accountId || !account || target.approvedRevision !== revision || target.post.revision !== revision || target.post.approvedRevision !== revision) return null;
     if (target.nextAttemptAt && target.nextAttemptAt > new Date()) return null;
@@ -53,7 +54,7 @@ async function publish(job: Job<SocialPublishPayload>) {
       await refreshPost(tx, target.postId, code);
       return null;
     };
-    const currentHash = socialPayloadHash({ accountId: target.accountId, platform: target.platform, caption: target.caption, linkUrl: target.linkUrl, mediaAssetId: target.mediaAssetId });
+    const currentHash = socialPayloadHash({ accountId: target.accountId, platform: target.platform, caption: target.caption, linkUrl: target.linkUrl, linkSource: target.linkSource, mediaAssetId: target.mediaAssetId });
     const approvedTargets = await tx.socialPostTarget.findMany({ where: { postId: target.postId }, select: { accountId: true, platform: true, caption: true, linkUrl: true, mediaAssetId: true } });
     const snapshotHash = approvedSnapshotHash(approvedTargets.map((item) => ({ accountId: item.accountId || "", platform: item.platform, caption: item.caption, linkUrl: item.linkUrl, mediaAssetId: item.mediaAssetId })));
     if (!target.approvedPayloadHash || target.approvedPayloadHash !== currentHash || !target.post.approvedSnapshotHash || target.post.approvedSnapshotHash !== snapshotHash) return rejectTarget("APPROVAL_SNAPSHOT_STALE");
@@ -64,7 +65,22 @@ async function publish(job: Job<SocialPublishPayload>) {
     if (requiredScopes.some((scope) => !account.connection.scopes.includes(scope))) {
       return rejectTarget("META_PERMISSION_MISSING");
     }
-    if (target.post.sourceProductId && (!target.post.sourceProduct || target.post.sourceProduct.status !== "ACTIVE" || !(target.post.sourceProduct.stock > 0 || target.post.sourceProduct.variants.some((variant) => variant.stock > 0)))) return rejectTarget("SOCIAL_PRODUCT_UNAVAILABLE");
+    const approvedCommerce = target.post.approvedCommerceSnapshot && typeof target.post.approvedCommerceSnapshot === "object" ? target.post.approvedCommerceSnapshot as Record<string, unknown> : null;
+    const approvedProductId = typeof approvedCommerce?.productId === "string" ? approvedCommerce.productId : null;
+    if ((approvedProductId && approvedProductId !== target.post.sourceProductId) || (target.linkSource === "PRODUCT" && !target.post.sourceProductId)) return rejectTarget("SOCIAL_PRODUCT_UNAVAILABLE");
+    if (target.post.sourceProductId) {
+      if (!target.post.approvedCommerceSnapshot || !target.post.approvedCommerceSnapshotHash) return rejectTarget("SOCIAL_PRICE_REVIEW_REQUIRED");
+      const selectedVariant = target.post.sourceProductVariantId ? target.post.sourceProduct?.variants.find((variant) => variant.id === target.post.sourceProductVariantId) : null;
+      if (target.post.sourceProductVariantId && !selectedVariant) return rejectTarget("SOCIAL_PRODUCT_VARIANT_UNAVAILABLE");
+      if (selectedVariant && selectedVariant.stock <= 0) return rejectTarget("SOCIAL_PRODUCT_VARIANT_UNAVAILABLE");
+      if (!target.post.sourceProduct || target.post.sourceProduct.status !== "ACTIVE" || !(target.post.sourceProductVariantId ? target.post.sourceProduct.variants.some((variant) => variant.id === target.post.sourceProductVariantId && variant.stock > 0) : (target.post.sourceProduct.stock > 0 || target.post.sourceProduct.variants.some((variant) => variant.stock > 0)))) return rejectTarget("SOCIAL_PRODUCT_UNAVAILABLE");
+      const product = await tx.product.findUnique({ where: { id: target.post.sourceProductId }, select: { id: true, sku: true, name: true, price: true, originalPrice: true, kind: true, categoryId: true, gemstoneTypeId: true, category: { select: { pricingMode: true } }, variants: { select: { id: true, sku: true, price: true, originalPrice: true, carat: true, stock: true } } } });
+      const variant = target.post.sourceProductVariantId ? product?.variants.find((item) => item.id === target.post.sourceProductVariantId) : null;
+      if (!product || (target.post.sourceProductVariantId && !variant)) return rejectTarget("SOCIAL_PRICE_REVIEW_REQUIRED");
+      const promotions = await loadActiveStorePromotions(tx);
+      const currentCommerce = socialCommerceSnapshot(product, variant, promotions);
+      if (socialCommerceSnapshotHash(currentCommerce) !== target.post.approvedCommerceSnapshotHash) return rejectTarget("SOCIAL_PRICE_CHANGED_AFTER_APPROVAL");
+    }
     if (target.mediaAsset) {
       if (target.mediaAsset.isPrivate || target.mediaAsset.storageProvider !== "r2" || !target.mediaAsset.objectKey || !["image/jpeg", "image/png"].includes(target.mediaAsset.mimeType)) return rejectTarget("SOCIAL_MEDIA_NOT_PUBLIC");
       if (target.platform === "INSTAGRAM" && (target.mediaAsset.mimeType !== "image/jpeg" || target.mediaAsset.size > 8 * 1024 * 1024)) return rejectTarget("SOCIAL_INSTAGRAM_IMAGE_UNSUPPORTED");
@@ -75,7 +91,7 @@ async function publish(job: Job<SocialPublishPayload>) {
       if (!approvedOutput && !approvedProductImage) return rejectTarget("SOCIAL_MEDIA_APPROVAL_REVOKED");
     }
     const attemptNumber = target.attemptCount + 1;
-    await tx.socialPostTarget.update({ where: { id: targetId }, data: { status: "PUBLISHING", attemptCount: attemptNumber } });
+    await tx.socialPostTarget.update({ where: { id: targetId }, data: { status: "PUBLISHING", attemptCount: attemptNumber, remoteContainerId: null, remoteMediaId: null, permalink: null, publishedAt: null } });
     await tx.socialPublishAttempt.create({ data: { targetId, revision, attemptNumber, idempotencyKey: `${targetId}:${revision}:${attemptNumber}`, status: "RUNNING" } });
     await tx.socialPost.update({ where: { id: target.postId }, data: { status: "PUBLISHING" } });
     return { ...target, account, attemptNumber };
@@ -88,7 +104,13 @@ async function publish(job: Job<SocialPublishPayload>) {
     const imageUrl = claim.mediaAsset ? media.publicUrl(claim.mediaAsset.objectKey || "") : null;
     if (claim.mediaAsset && !imageUrl) throw new MetaRequestError("SOCIAL_MEDIA_CDN_NOT_CONFIGURED", false);
     externalResult = claim.platform === "INSTAGRAM"
-      ? await meta.publishInstagram({ instagramId: claim.account.remoteAccountId, token, caption: claim.caption, imageUrl: imageUrl! })
+      ? await meta.publishInstagram({ instagramId: claim.account.remoteAccountId, token, caption: claim.caption, imageUrl: imageUrl!, onContainerCreated: async (containerId) => {
+        await prisma.$transaction(async (tx) => {
+          const targetSaved = await tx.socialPostTarget.updateMany({ where: { id: targetId, status: "PUBLISHING", approvedRevision: revision }, data: { remoteContainerId: containerId } });
+          const attemptSaved = await tx.socialPublishAttempt.updateMany({ where: { targetId, revision, attemptNumber: claim.attemptNumber, status: "RUNNING" }, data: { remoteContainerId: containerId } });
+          if (targetSaved.count !== 1 || attemptSaved.count !== 1) throw new Error("SOCIAL_CONTAINER_AUDIT_SAVE_FAILED");
+        });
+      } })
       : await meta.publishFacebook({ pageId: claim.account.remoteAccountId, token, caption: claim.caption, linkUrl: claim.linkUrl, imageUrl });
     let permalink: string | null = null;
     try { permalink = await meta.permalink(externalResult.mediaId, token); } catch { /* The publish result remains successful if permalink lookup fails. */ }

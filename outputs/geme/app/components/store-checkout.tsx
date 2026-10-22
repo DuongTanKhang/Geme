@@ -12,6 +12,7 @@ type CheckoutLine = {
   name: string;
   sku: string;
   price: number;
+  shape?: string | null;
   quality: string | null;
   beadSize: string | null;
   carat?: number | null;
@@ -220,7 +221,7 @@ export function StoreCheckout() {
         {lines.map((line) => {
           const quoted = activeQuote?.items.find((item) => item.productId === line.productId && item.variantId === line.variantId);
           return <article className="checkout-line" key={line.key}>
-            <div className="checkout-line-copy"><a href={`/san-pham/${encodeURIComponent(line.slug)}`}>{line.name}</a><small>SKU {line.sku}{line.quality ? ` · ${line.quality}` : ""}{line.beadSize ? ` · ${line.beadSize}` : ""}{line.carat != null ? ` · ${line.carat} ct` : ""}{line.gemstoneQuality ? ` · Chất lượng ${line.gemstoneQuality}` : ""}</small>{quoted ? <><strong>{formatStorePrice(quoted.saleUnitPrice)}</strong>{quoted.saleUnitPrice < quoted.unitPrice && <del>{formatStorePrice(quoted.unitPrice)}</del>}</> : <small>{quoteLoading ? "Đang xác nhận giá…" : "Chưa xác nhận giá"}</small>}</div>
+            <div className="checkout-line-copy"><a href={`/san-pham/${encodeURIComponent(line.slug)}`}>{line.name}</a><small>SKU {line.sku}{line.shape ? ` · ${{ ROUND: "Tròn", OVAL: "Oval", SQUARE: "Vuông" }[line.shape] || line.shape}` : ""}{line.quality ? ` · ${line.quality}` : ""}{line.beadSize ? ` · ${line.beadSize}` : ""}{line.carat != null ? ` · ${line.carat} ct` : ""}{line.gemstoneQuality ? ` · Chất lượng ${line.gemstoneQuality}` : ""}</small>{quoted ? <><strong>{formatStorePrice(quoted.saleUnitPrice)}</strong>{quoted.saleUnitPrice < quoted.unitPrice && <del>{formatStorePrice(quoted.unitPrice)}</del>}</> : <small>{quoteLoading ? "Đang xác nhận giá…" : "Chưa xác nhận giá"}</small>}</div>
             <div className="checkout-line-quantity"><button type="button" onClick={() => changeQuantity(line.key, -1)} aria-label={`Giảm số lượng ${line.name}`}>−</button><span>{line.quantity}</span><button type="button" onClick={() => changeQuantity(line.key, 1)} disabled={line.quantity >= line.stock} aria-label={`Tăng số lượng ${line.name}`}>+</button></div>
           </article>;
         })}

@@ -1,0 +1,1346 @@
+{
+  "sourceSql": "phelieug_geme_1792061935.sql",
+  "category": "Bông tai",
+  "categoryPrefix": "NSSE",
+  "quantityPerSku": 2,
+  "costRule": "round(salePrice / 3) to nearest VND; half up",
+  "scope": "First 10 groups from the legacy earrings list; only product rows grouped by legacy category plus unclassified Emerald row matched by name.",
+  "groups": [
+    {
+      "name": "Amethyst",
+      "code": "PA",
+      "sourceCategoryIds": [
+        "231"
+      ],
+      "sourceRowCount": 9,
+      "skuCount": 9,
+      "items": [
+        {
+          "sku": "NSSEPA022",
+          "quantity": 2,
+          "salePrice": 690000,
+          "unitCost": 230000,
+          "sourceIds": [
+            5863
+          ],
+          "selectedSourceId": 5863,
+          "sourceName": "Hoa Tai Đá Amethyst 6*8mm Bạc 925 - PA022",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6826720634861f956603ac7b2fa4d26d1219e1bb0187b-1027.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPA023",
+          "quantity": 2,
+          "salePrice": 660000,
+          "unitCost": 220000,
+          "sourceIds": [
+            5856
+          ],
+          "selectedSourceId": 5856,
+          "sourceName": "Hoa Tai Đá Amethyst 4*6mm Bạc 925 - PA023",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6826720281818fb10d522bc67eb0d455bbf57433cc8b7-9928.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPA026",
+          "quantity": 2,
+          "salePrice": 450000,
+          "unitCost": 150000,
+          "sourceIds": [
+            5855
+          ],
+          "selectedSourceId": 5855,
+          "sourceName": "Hoa Tai Đá Amethyst 3mm Bạc 925 - PA026",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z682672031214349e1ca6f93e744775282172250289d5a-4762.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPA028",
+          "quantity": 2,
+          "salePrice": 570000,
+          "unitCost": 190000,
+          "sourceIds": [
+            5864
+          ],
+          "selectedSourceId": 5864,
+          "sourceName": "Hoa Tai Đá Amethyst 5mm Bạc 925 - PA028",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6826720737921dbae0db2310e6fd096449744d2855cf1-8613.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPA029",
+          "quantity": 2,
+          "salePrice": 390000,
+          "unitCost": 130000,
+          "sourceIds": [
+            5860
+          ],
+          "selectedSourceId": 5860,
+          "sourceName": "Hoa Tai Đá Amethyst 5mm Bạc 925 - PA029",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6826720533461a0bd2caac197d025b8f2201ff7d250f5-8123.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPA031",
+          "quantity": 2,
+          "salePrice": 630000,
+          "unitCost": 210000,
+          "sourceIds": [
+            5857
+          ],
+          "selectedSourceId": 5857,
+          "sourceName": "Hoa Tai Đá Amethyst 3*5mm Bạc 925 - PA031",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6826720384687792db751ef9f05c1ceab17fae26be494-1449.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPA032",
+          "quantity": 2,
+          "salePrice": 690000,
+          "unitCost": 230000,
+          "sourceIds": [
+            5861
+          ],
+          "selectedSourceId": 5861,
+          "sourceName": "Hoa Tai Đá Amethyst 3mm Bạc 925 - PA032",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z682672057937522c79afe7f16c8dd0367a36800c325b7-9661.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPA033",
+          "quantity": 2,
+          "salePrice": 510000,
+          "unitCost": 170000,
+          "sourceIds": [
+            5859
+          ],
+          "selectedSourceId": 5859,
+          "sourceName": "Hoa Tai Đá Amethyst 4*6mm Bạc 925 - PA033",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6826720441602c989090d3ec51d870c9b375100b89178-6275.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPA034",
+          "quantity": 2,
+          "salePrice": 540000,
+          "unitCost": 180000,
+          "sourceIds": [
+            5866
+          ],
+          "selectedSourceId": 5866,
+          "sourceName": "Hoa Tai Đá Amethyst 5mm Bạc 925 - PA034",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6826724654613d5c004ecec955300396f7a8385da0a53-7872.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Aquamarine",
+      "code": "AF",
+      "sourceCategoryIds": [
+        "234"
+      ],
+      "sourceRowCount": 1,
+      "skuCount": 1,
+      "items": [
+        {
+          "sku": "NSSEAF001",
+          "quantity": 2,
+          "salePrice": 480000,
+          "unitCost": 160000,
+          "sourceIds": [
+            4150
+          ],
+          "selectedSourceId": 4150,
+          "sourceName": "Hoa Tai Đá Aquamarine 3mm Bạc 925 - EAF001",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-aquamarine-3mm-bac-925-eaf001-9726.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Citrine",
+      "code": "CT",
+      "sourceCategoryIds": [
+        "228"
+      ],
+      "sourceRowCount": 5,
+      "skuCount": 5,
+      "items": [
+        {
+          "sku": "NSSECT001",
+          "quantity": 2,
+          "salePrice": 1360000,
+          "unitCost": 453333,
+          "sourceIds": [
+            3903
+          ],
+          "selectedSourceId": 3903,
+          "sourceName": "Bông tai Đá Citrine 6*8mm Bạc 925 - ECT001",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-citrine-68mm-bac-925-ect001-7279.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSECT056",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5226
+          ],
+          "selectedSourceId": 5226,
+          "sourceName": "Hoa tai đá Citrine Bạc 925 - ECT056",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z678025100177303f7bed71f355f1044028c1f51691aa0-4160.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSECT057",
+          "quantity": 2,
+          "salePrice": 660000,
+          "unitCost": 220000,
+          "sourceIds": [
+            5224
+          ],
+          "selectedSourceId": 5224,
+          "sourceName": "Hoa tai đá Citrine Bạc 925 - ECT057",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780249754088dd9a3781e260e751ea1d77e39821f7bc-7902.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSECT058",
+          "quantity": 2,
+          "salePrice": 630000,
+          "unitCost": 210000,
+          "sourceIds": [
+            5225
+          ],
+          "selectedSourceId": 5225,
+          "sourceName": "Hoa tai đá Citrine Bạc 925 - ECT058",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z678024971244218f485b3d45f59983f1eb87de514829b-4342.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSECT059",
+          "quantity": 2,
+          "salePrice": 630000,
+          "unitCost": 210000,
+          "sourceIds": [
+            5227
+          ],
+          "selectedSourceId": 5227,
+          "sourceName": "Hoa tai đá Citrine Bạc 925 - ECT059",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67802510535179184e432abae550e10113c172d98d3eb-8085.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Các Loại Đá Quý Khác",
+      "code": null,
+      "sourceCategoryIds": [
+        "213"
+      ],
+      "sourceRowCount": 0,
+      "skuCount": 0,
+      "items": []
+    },
+    {
+      "name": "Diopsite",
+      "code": "DO",
+      "sourceCategoryIds": [
+        "233"
+      ],
+      "sourceRowCount": 0,
+      "skuCount": 0,
+      "items": []
+    },
+    {
+      "name": "Emerald",
+      "code": "EM",
+      "sourceCategoryIds": [
+        "230"
+      ],
+      "sourceRowCount": 2,
+      "skuCount": 2,
+      "items": [
+        {
+          "sku": "NSSEEM001",
+          "quantity": 2,
+          "salePrice": 1980000,
+          "unitCost": 660000,
+          "sourceIds": [
+            807
+          ],
+          "selectedSourceId": 807,
+          "sourceName": "Hoa Tai bạc 92.5 gắn đá Emerald",
+          "skuOrigin": "next_sequence",
+          "legacyImageName": "z39826272859449e10c61212ba7cc96a18aef688fd5bc9-7300.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEEM003",
+          "quantity": 2,
+          "salePrice": 1280000,
+          "unitCost": 426667,
+          "sourceIds": [
+            3882
+          ],
+          "selectedSourceId": 3882,
+          "sourceName": "Bông Tai Đá Emerald 3mm Bạc 925 - EEM003",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-emerald-3mm-bac-925-eem003-8855.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Garnet",
+      "code": "GN",
+      "sourceCategoryIds": [
+        "218"
+      ],
+      "sourceRowCount": 34,
+      "skuCount": 34,
+      "items": [
+        {
+          "sku": "NSSEGN003",
+          "quantity": 2,
+          "salePrice": 760000,
+          "unitCost": 253333,
+          "sourceIds": [
+            3986
+          ],
+          "selectedSourceId": 3986,
+          "sourceName": "Hoa Tai Đá Garnet Tím 3mm Bạc 925 - EGN003",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-tim-3mm-bac-925-egn003-1-5602.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN004",
+          "quantity": 2,
+          "salePrice": 660000,
+          "unitCost": 220000,
+          "sourceIds": [
+            3996
+          ],
+          "selectedSourceId": 3996,
+          "sourceName": "Hoa Tai Đá Garnet 4mm Bạc 925 - EGN004",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-4mm-bac-925-egn004-6616.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN06",
+          "quantity": 2,
+          "salePrice": 580000,
+          "unitCost": 193333,
+          "sourceIds": [
+            3702
+          ],
+          "selectedSourceId": 3702,
+          "sourceName": "Hoa Tai Đá Garnet 6mm Bạc 925 - EGN06",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-6mm-bac-925-egn07-4423.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN07",
+          "quantity": 2,
+          "salePrice": 560000,
+          "unitCost": 186667,
+          "sourceIds": [
+            3701
+          ],
+          "selectedSourceId": 3701,
+          "sourceName": "Hoa Tai Đá Garnet 5mm Bạc 925 - EGN07",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-5mm-bac-925-egn07-5142.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN08",
+          "quantity": 2,
+          "salePrice": 560000,
+          "unitCost": 186667,
+          "sourceIds": [
+            3793
+          ],
+          "selectedSourceId": 3793,
+          "sourceName": "Hoa Tai Đá Garnet 5mm Bạc 925 - EGN08",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-5mm-bac-925-egn08-3797.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN09",
+          "quantity": 2,
+          "salePrice": 760000,
+          "unitCost": 253333,
+          "sourceIds": [
+            3792
+          ],
+          "selectedSourceId": 3792,
+          "sourceName": "Hoa Tai Đá Garnet 4mm Bạc 925 - EGN09",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-4mm-bac-925-egn09-2836.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN10",
+          "quantity": 2,
+          "salePrice": 560000,
+          "unitCost": 186667,
+          "sourceIds": [
+            3795
+          ],
+          "selectedSourceId": 3795,
+          "sourceName": "Hoa Tai Đá Garnet 5mm Bạc 925 - EGN10",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-5mm-bac-925-egn10-8550.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN11",
+          "quantity": 2,
+          "salePrice": 660000,
+          "unitCost": 220000,
+          "sourceIds": [
+            3794
+          ],
+          "selectedSourceId": 3794,
+          "sourceName": "Hoa Tai Đá Garnet 4*6mm Bạc 925 - EGN11",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-46mm-bac-925-egn11-7202.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN14",
+          "quantity": 2,
+          "salePrice": 790000,
+          "unitCost": 263333,
+          "sourceIds": [
+            3998
+          ],
+          "selectedSourceId": 3998,
+          "sourceName": "Hoa Tai Đá Garnet 5*7mm Bạc 925 - EGN14",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-57mm-bac-925-egn14-7701.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN15",
+          "quantity": 2,
+          "salePrice": 580000,
+          "unitCost": 193333,
+          "sourceIds": [
+            3999
+          ],
+          "selectedSourceId": 3999,
+          "sourceName": "Hoa Tai Đá Garnet 5*7mm Bạc 925 - EGN15",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-57mm-bac-925-egn15-1369.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN16",
+          "quantity": 2,
+          "salePrice": 560000,
+          "unitCost": 186667,
+          "sourceIds": [
+            3997
+          ],
+          "selectedSourceId": 3997,
+          "sourceName": "Hoa Tai Đá Garnet 4*6mm Bạc 925 - EGN16",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-46mm-bac-925-egn16-9655.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN17",
+          "quantity": 2,
+          "salePrice": 560000,
+          "unitCost": 186667,
+          "sourceIds": [
+            3995
+          ],
+          "selectedSourceId": 3995,
+          "sourceName": "Hoa Tai Đá Garnet  4mm Bạc 925 - EGN17",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-4mm-bac-925-egn17-9317.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN18",
+          "quantity": 2,
+          "salePrice": 680000,
+          "unitCost": 226667,
+          "sourceIds": [
+            3946
+          ],
+          "selectedSourceId": 3946,
+          "sourceName": "Hoa Tai Đá Garnet 3*4mm Bạc 925 - EGN18",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-garnet-34mm-bac-925-egn08-5407.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN76",
+          "quantity": 2,
+          "salePrice": 630000,
+          "unitCost": 210000,
+          "sourceIds": [
+            5243
+          ],
+          "selectedSourceId": 5243,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN76",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780255938767a1b1fa9e44e257c07c1b3c5db811a365-6531.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN77",
+          "quantity": 2,
+          "salePrice": 690000,
+          "unitCost": 230000,
+          "sourceIds": [
+            5245
+          ],
+          "selectedSourceId": 5245,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN77",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780255994309e0da1a2d3aba0ca2965d6261c2352f8f-1972.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN78",
+          "quantity": 2,
+          "salePrice": 660000,
+          "unitCost": 220000,
+          "sourceIds": [
+            5238
+          ],
+          "selectedSourceId": 5238,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN78",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z678025576283259ef1b344f3969bdfeab02513c3dac6b-2878.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN79",
+          "quantity": 2,
+          "salePrice": 390000,
+          "unitCost": 130000,
+          "sourceIds": [
+            5240
+          ],
+          "selectedSourceId": 5240,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN79",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z678025581722276413ab5bd8dc057aebf1b0a0e22517c-4869.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN80",
+          "quantity": 2,
+          "salePrice": 630000,
+          "unitCost": 210000,
+          "sourceIds": [
+            5235
+          ],
+          "selectedSourceId": 5235,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN80",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780255690869c59863a861af88f972b775b08a5dcf33-9643.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN81",
+          "quantity": 2,
+          "salePrice": 570000,
+          "unitCost": 190000,
+          "sourceIds": [
+            5250
+          ],
+          "selectedSourceId": 5250,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN81",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67802596402538b96402db4596bcae8ea46e2461c8fbb-9947.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN82",
+          "quantity": 2,
+          "salePrice": 630000,
+          "unitCost": 210000,
+          "sourceIds": [
+            5248
+          ],
+          "selectedSourceId": 5248,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN82",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780259100228d51abc2bd0b80ea4bd193fe8d01ff391-7696.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN83",
+          "quantity": 2,
+          "salePrice": 600000,
+          "unitCost": 200000,
+          "sourceIds": [
+            5242
+          ],
+          "selectedSourceId": 5242,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN83",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780255920110558a0fe86f131945652b2071226f1476-5486.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN84",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5233
+          ],
+          "selectedSourceId": 5233,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN84",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67802556634179d45962a0e205a1e0b8ff01afa18dd91-2120.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN85",
+          "quantity": 2,
+          "salePrice": 450000,
+          "unitCost": 150000,
+          "sourceIds": [
+            5234
+          ],
+          "selectedSourceId": 5234,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN85",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67802556439376ce86baf5449558e8b94272e493a04e1-8113.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN86",
+          "quantity": 2,
+          "salePrice": 420000,
+          "unitCost": 140000,
+          "sourceIds": [
+            5246
+          ],
+          "selectedSourceId": 5246,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN86",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780256040010f56cb35e676dfc0ca2b578b3f49652e5-4847.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN87",
+          "quantity": 2,
+          "salePrice": 510000,
+          "unitCost": 170000,
+          "sourceIds": [
+            5241
+          ],
+          "selectedSourceId": 5241,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN87",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z678025584162758c7b6a9eae7aeb7dff4938a784eb5e6-1059.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN88",
+          "quantity": 2,
+          "salePrice": 210000,
+          "unitCost": 70000,
+          "sourceIds": [
+            5249
+          ],
+          "selectedSourceId": 5249,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN88",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780259667660a0f9f4429f74e20ecfbbd5e6191ec8e5-9623.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN89",
+          "quantity": 2,
+          "salePrice": 630000,
+          "unitCost": 210000,
+          "sourceIds": [
+            5239
+          ],
+          "selectedSourceId": 5239,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN89",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780255855715e0236ddc22f2506d2e8c478ce45d40cd-2327.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN90",
+          "quantity": 2,
+          "salePrice": 600000,
+          "unitCost": 200000,
+          "sourceIds": [
+            5231
+          ],
+          "selectedSourceId": 5231,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN90",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780255610316340eb8b4dc4d0764f99934276b77017e-8400.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN91",
+          "quantity": 2,
+          "salePrice": 720000,
+          "unitCost": 240000,
+          "sourceIds": [
+            5247
+          ],
+          "selectedSourceId": 5247,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN91",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67802590964213cf14840bd692b65dc6216f9666f131e-4570.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN92",
+          "quantity": 2,
+          "salePrice": 360000,
+          "unitCost": 120000,
+          "sourceIds": [
+            5236
+          ],
+          "selectedSourceId": 5236,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN92",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780255722799477cea338eb45276f5ee0aed040fdb78-9565.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN93",
+          "quantity": 2,
+          "salePrice": 570000,
+          "unitCost": 190000,
+          "sourceIds": [
+            5244
+          ],
+          "selectedSourceId": 5244,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN93",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780256020860a15c3d4321a0643df453de97a8d72c32-1771.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN94",
+          "quantity": 2,
+          "salePrice": 360000,
+          "unitCost": 120000,
+          "sourceIds": [
+            5237
+          ],
+          "selectedSourceId": 5237,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN94",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780255791509a297d53bd4151a23a298cdb4f8e49001-7856.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN95",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5251
+          ],
+          "selectedSourceId": 5251,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN95",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780259436941f41c253e40e9a72548cece5ea241764e-8693.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGN96",
+          "quantity": 2,
+          "salePrice": 630000,
+          "unitCost": 210000,
+          "sourceIds": [
+            5232
+          ],
+          "selectedSourceId": 5232,
+          "sourceName": "Hoa Tai Đá Garnet Bạc 925 - EGN96",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6780255661071f5ae5e4c352f19442b67822a5e7b3258-8622.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Hổ Phách",
+      "code": "AB",
+      "sourceCategoryIds": [
+        "206"
+      ],
+      "sourceRowCount": 8,
+      "skuCount": 8,
+      "items": [
+        {
+          "sku": "NSSEAB001",
+          "quantity": 2,
+          "salePrice": 0,
+          "unitCost": 0,
+          "sourceIds": [
+            3259
+          ],
+          "selectedSourceId": 3259,
+          "sourceName": "Bông tai bạc đính đá Đính Đá Hổ Phách Mã ASE001",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-dinh-da-dinh-da-ho-phach-ma-ase001-1-2434.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEAB002",
+          "quantity": 2,
+          "salePrice": 0,
+          "unitCost": 0,
+          "sourceIds": [
+            3260
+          ],
+          "selectedSourceId": 3260,
+          "sourceName": "Bông Tai Bạc Đính Đá Đính Đá Hổ Phách Mã ASE002",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-dinh-da-dinh-da-ho-phach-ma-ase002-1-5626.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEAB003",
+          "quantity": 2,
+          "salePrice": 0,
+          "unitCost": 0,
+          "sourceIds": [
+            3261
+          ],
+          "selectedSourceId": 3261,
+          "sourceName": "Bông Tai Bạc Đính Đá Đính Đá Hổ Phách Mã ASE003",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-dinh-da-dinh-da-ho-phach-ma-ase003-1810.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEAB004",
+          "quantity": 2,
+          "salePrice": 0,
+          "unitCost": 0,
+          "sourceIds": [
+            3262
+          ],
+          "selectedSourceId": 3262,
+          "sourceName": "Bông Tai Bạc Đính Đá Đính Đá Hổ Phách Mã ASE004",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-dinh-da-dinh-da-ho-phach-ma-ase004-1276.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEAB006",
+          "quantity": 2,
+          "salePrice": 0,
+          "unitCost": 0,
+          "sourceIds": [
+            3264
+          ],
+          "selectedSourceId": 3264,
+          "sourceName": "Bông Tai Bạc Đính Đá Đính Đá Hổ Phách Mã ASE006",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-dinh-da-dinh-da-ho-phach-ma-ase006-2046.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEAB007",
+          "quantity": 2,
+          "salePrice": 0,
+          "unitCost": 0,
+          "sourceIds": [
+            3265
+          ],
+          "selectedSourceId": 3265,
+          "sourceName": "Bông Tai Bạc Đính Đá Đính Đá Hổ Phách Mã ASE007",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-dinh-da-dinh-da-ho-phach-ma-ase007-4444.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEAB018",
+          "quantity": 2,
+          "salePrice": 0,
+          "unitCost": 0,
+          "sourceIds": [
+            3266
+          ],
+          "selectedSourceId": 3266,
+          "sourceName": "Bông Tai Bạc Đính Đá Đính Đá Hổ Phách Mã ASE018",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-dinh-da-dinh-da-ho-phach-ma-ase018-3645.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEAB4606",
+          "quantity": 2,
+          "salePrice": 0,
+          "unitCost": 0,
+          "sourceIds": [
+            3267
+          ],
+          "selectedSourceId": 3267,
+          "sourceName": "Bông Tai Bạc Đính Đá Đính Đá Hổ Phách Mã ASE4606",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-dinh-da-dinh-da-ho-phach-ma-ase4606-5718.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Moissanite",
+      "code": "MX",
+      "sourceCategoryIds": [
+        "241"
+      ],
+      "sourceRowCount": 27,
+      "skuCount": 27,
+      "items": [
+        {
+          "sku": "NSSEMX003",
+          "quantity": 2,
+          "salePrice": 1740000,
+          "unitCost": 580000,
+          "sourceIds": [
+            5373
+          ],
+          "selectedSourceId": 5373,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX003",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791025792168c84f17339ac76f5d40c79b865236aea3-7092.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX005",
+          "quantity": 2,
+          "salePrice": 750000,
+          "unitCost": 250000,
+          "sourceIds": [
+            5378
+          ],
+          "selectedSourceId": 5378,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX005",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67910256261720591ba3877afb9cd00d8affb5bc8485c-9872.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX007",
+          "quantity": 2,
+          "salePrice": 480000,
+          "unitCost": 160000,
+          "sourceIds": [
+            5363
+          ],
+          "selectedSourceId": 5363,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX007",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791008036757ef50661e1ade388f145854a204388448-9749.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX009",
+          "quantity": 2,
+          "salePrice": 1590000,
+          "unitCost": 530000,
+          "sourceIds": [
+            5376
+          ],
+          "selectedSourceId": 5376,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX009",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z679102571093960db59ab233a35b6b1674d6ec250204e-2295.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX010",
+          "quantity": 2,
+          "salePrice": 480000,
+          "unitCost": 160000,
+          "sourceIds": [
+            5383
+          ],
+          "selectedSourceId": 5383,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX010",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791029076305cd3217ec54090ea62e72f407b5509ce5-4679.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX015",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5388
+          ],
+          "selectedSourceId": 5388,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX015",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791028965997d08eb4179f8f1a95a0a24ca65ed3ca35-4581.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX019",
+          "quantity": 2,
+          "salePrice": 1500000,
+          "unitCost": 500000,
+          "sourceIds": [
+            5362
+          ],
+          "selectedSourceId": 5362,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX019",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791007942131b21dc4d9b208558139b593eea6ae59e2-4415.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX022",
+          "quantity": 2,
+          "salePrice": 1230000,
+          "unitCost": 410000,
+          "sourceIds": [
+            5367
+          ],
+          "selectedSourceId": 5367,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX022",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791008038493a714cee652e11d102a210b1db572d8df-3764.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX023",
+          "quantity": 2,
+          "salePrice": 810000,
+          "unitCost": 270000,
+          "sourceIds": [
+            5368
+          ],
+          "selectedSourceId": 5368,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX023",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67910078583898ae15bb2cdc1a39c84c3ed661a843000-7482.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX025",
+          "quantity": 2,
+          "salePrice": 540000,
+          "unitCost": 180000,
+          "sourceIds": [
+            5375
+          ],
+          "selectedSourceId": 5375,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX025",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67910257465956ef19d51030fc02647445cbfa4501d9e-6052.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX028",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5381
+          ],
+          "selectedSourceId": 5381,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX028",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67910256374899c29b30032a4c238134b20f7ce0a6cf2-6464.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX030",
+          "quantity": 2,
+          "salePrice": 1140000,
+          "unitCost": 380000,
+          "sourceIds": [
+            5387
+          ],
+          "selectedSourceId": 5387,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX030",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791028976595283f8a4ad0fa88caeba1980373609e31-5338.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX032",
+          "quantity": 2,
+          "salePrice": 720000,
+          "unitCost": 240000,
+          "sourceIds": [
+            5370
+          ],
+          "selectedSourceId": 5370,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX032",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z679102584357308e798437ba9cbf5d9052b63d0e63efd-2401.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX035",
+          "quantity": 2,
+          "salePrice": 1620000,
+          "unitCost": 540000,
+          "sourceIds": [
+            5372
+          ],
+          "selectedSourceId": 5372,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX035",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67910258375035a2105582ae9b4fe8411321a1648e3bf-4408.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX036",
+          "quantity": 2,
+          "salePrice": 2220000,
+          "unitCost": 740000,
+          "sourceIds": [
+            5360
+          ],
+          "selectedSourceId": 5360,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX036",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791007915584f14f5b741388f74cf90df23e77500293-4875.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX038",
+          "quantity": 2,
+          "salePrice": 1500000,
+          "unitCost": 500000,
+          "sourceIds": [
+            5365
+          ],
+          "selectedSourceId": 5365,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX038",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791007966684942ce2280e26c0eaac7ce6d3dc6ea12f-9585.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX039",
+          "quantity": 2,
+          "salePrice": 2250000,
+          "unitCost": 750000,
+          "sourceIds": [
+            5361
+          ],
+          "selectedSourceId": 5361,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX039",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67910079467610139b61b6eee2528271104670ef1315c-2644.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX040",
+          "quantity": 2,
+          "salePrice": 990000,
+          "unitCost": 330000,
+          "sourceIds": [
+            5380
+          ],
+          "selectedSourceId": 5380,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX040",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791025639001d2ab149cfca1c22d535c622b36746663-7363.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX043",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5390
+          ],
+          "selectedSourceId": 5390,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX043",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791029014830511ef719998eb973ab20dc6d158c8214-9723.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX044",
+          "quantity": 2,
+          "salePrice": 1170000,
+          "unitCost": 390000,
+          "sourceIds": [
+            5382
+          ],
+          "selectedSourceId": 5382,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX044",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791028888765fd39d7194c824a55ad83ec9b3d65285e-3035.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX045",
+          "quantity": 2,
+          "salePrice": 720000,
+          "unitCost": 240000,
+          "sourceIds": [
+            5385
+          ],
+          "selectedSourceId": 5385,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX045",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z679102894864926b25e6a6649ac176d1339044132a12d-6689.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX046",
+          "quantity": 2,
+          "salePrice": 870000,
+          "unitCost": 290000,
+          "sourceIds": [
+            5357
+          ],
+          "selectedSourceId": 5357,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX046",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67910080639297121642802d64d30bdef44bf93ae909c-6598.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX047",
+          "quantity": 2,
+          "salePrice": 930000,
+          "unitCost": 310000,
+          "sourceIds": [
+            5391
+          ],
+          "selectedSourceId": 5391,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX047",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791029035664472b383ba1c0b6dcce6cec5bdbc5a0fd-4687.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX048",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5354
+          ],
+          "selectedSourceId": 5354,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX048",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791007875827c31e5e4ecf056d9aeaf0045cb5b21372-4442.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX049",
+          "quantity": 2,
+          "salePrice": 2100000,
+          "unitCost": 700000,
+          "sourceIds": [
+            5356
+          ],
+          "selectedSourceId": 5356,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX049",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791007879757b5d783430138dc40c256db09299fd0d0-2234.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX051",
+          "quantity": 2,
+          "salePrice": 930000,
+          "unitCost": 310000,
+          "sourceIds": [
+            5379
+          ],
+          "selectedSourceId": 5379,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX051",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791025663643af7a9a062f17e33c11932664022f80f9-2951.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEMX052",
+          "quantity": 2,
+          "salePrice": 1470000,
+          "unitCost": 490000,
+          "sourceIds": [
+            5359
+          ],
+          "selectedSourceId": 5359,
+          "sourceName": "Hoa Tai Gắn Đá Moissanite Bạc 925-MX052",
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6791007888842cf9954919a3d1a37f41a20d34e79a682-2953.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Moonstone",
+      "code": "MO",
+      "sourceCategoryIds": [
+        "166"
+      ],
+      "sourceRowCount": 1,
+      "skuCount": 1,
+      "items": [
+        {
+          "sku": "NSSEMO001",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            816
+          ],
+          "selectedSourceId": 816,
+          "sourceName": "Hoa Tai Đá Mặt Trăng Cao Cấp",
+          "skuOrigin": "next_sequence",
+          "legacyImageName": "z3944177791253ad37eabc3f2ffe4a45002b298803314c-5185.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "groupCount": 10,
+    "sourceRowCount": 87,
+    "skuCount": 87,
+    "totalQuantity": 174,
+    "zeroSalePriceSkuCount": 8,
+    "skuWithMultipleSourceRows": 0,
+    "estimatedReceiptAmount": 43753334,
+    "skuGeneratedFromNextSequence": 2
+  }
+}

@@ -2,6 +2,7 @@ import { createHmac, createCipheriv, createDecipheriv, randomBytes } from "node:
 
 export type MetaPage = { id: string; name: string; accessToken: string; instagram?: { id: string; username?: string } | null };
 export type MetaPublishResult = { containerId?: string; mediaId: string; permalink?: string | null };
+export type MetaReconciliationResult = { decision: "CONFIRMED_PUBLISHED" | "CONFIRMED_NOT_PUBLISHED" | "UNRESOLVED"; remoteId: string | null; permalink: string | null; publishedAt: Date | null; code: string };
 
 export class MetaRequestError extends Error {
   constructor(readonly code: string, readonly retryable: boolean, readonly unknownOutcome = false, readonly reauthRequired = false) {
@@ -103,10 +104,11 @@ export class SocialMetaClient {
     return { mediaId: data.id };
   }
 
-  async publishInstagram(input: { instagramId: string; token: string; caption: string; imageUrl: string }): Promise<MetaPublishResult> {
+  async publishInstagram(input: { instagramId: string; token: string; caption: string; imageUrl: string; onContainerCreated?: (containerId: string) => Promise<void> }): Promise<MetaPublishResult> {
     const container = await this.graphPost<{ id?: string }>(`${input.instagramId}/media`, input.token, { image_url: input.imageUrl, caption: input.caption });
     if (!container.id) throw new MetaRequestError("META_CONTAINER_RESPONSE_INVALID", false);
     const containerId = container.id;
+    await input.onContainerCreated?.(containerId);
     let finished = false;
     for (let attempt = 0; attempt < 20; attempt++) {
       const status = await this.graphGet<{ id: string; status_code?: string; status?: string }>(containerId, input.token, { fields: "id,status_code,status" });
@@ -123,6 +125,37 @@ export class SocialMetaClient {
   async permalink(mediaId: string, token: string) {
     const result = await this.graphGet<{ permalink?: string }>(mediaId, token, { fields: "permalink" });
     return result.permalink || null;
+  }
+
+  async reconcileFacebook(input: { pageId: string; token: string; mediaId: string | null }): Promise<MetaReconciliationResult> {
+    if (!input.mediaId) return { decision: "UNRESOLVED", remoteId: null, permalink: null, publishedAt: null, code: "REMOTE_ID_MISSING" };
+    try {
+      const result = await this.graphGet<{ id?: string; from?: { id?: string }; permalink_url?: string; created_time?: string }>(input.mediaId, input.token, { fields: "id,from{id},permalink_url,created_time" });
+      if (result.id !== input.mediaId || result.from?.id !== input.pageId) return { decision: "UNRESOLVED", remoteId: result.id || null, permalink: null, publishedAt: null, code: "META_TARGET_MISMATCH" };
+      return { decision: "CONFIRMED_PUBLISHED", remoteId: result.id, permalink: result.permalink_url || null, publishedAt: result.created_time && Number.isFinite(Date.parse(result.created_time)) ? new Date(result.created_time) : null, code: "META_POST_CONFIRMED" };
+    } catch (error) {
+      return { decision: "UNRESOLVED", remoteId: input.mediaId, permalink: null, publishedAt: null, code: error instanceof MetaRequestError ? error.code : "META_VERIFY_FAILED" };
+    }
+  }
+
+  async reconcileInstagram(input: { instagramId: string; token: string; containerId: string | null; mediaId: string | null }): Promise<MetaReconciliationResult> {
+    if (!input.containerId && !input.mediaId) return { decision: "UNRESOLVED", remoteId: null, permalink: null, publishedAt: null, code: "REMOTE_ID_MISSING" };
+    try {
+      const account = await this.graphGet<{ id?: string }>(input.instagramId, input.token, { fields: "id" });
+      if (account.id !== input.instagramId) return { decision: "UNRESOLVED", remoteId: null, permalink: null, publishedAt: null, code: "META_TARGET_MISMATCH" };
+      if (input.mediaId) {
+        const media = await this.graphGet<{ id?: string; owner?: { id?: string }; permalink?: string; timestamp?: string }>(input.mediaId, input.token, { fields: "id,owner,permalink,timestamp" });
+        if (media.id === input.mediaId && media.owner?.id === input.instagramId) return { decision: "CONFIRMED_PUBLISHED", remoteId: media.id, permalink: media.permalink || null, publishedAt: media.timestamp && Number.isFinite(Date.parse(media.timestamp)) ? new Date(media.timestamp) : null, code: "META_MEDIA_CONFIRMED" };
+        return { decision: "UNRESOLVED", remoteId: media.id || input.mediaId, permalink: null, publishedAt: null, code: "META_TARGET_MISMATCH" };
+      }
+      const status = await this.graphGet<{ id?: string; status_code?: string; status?: string }>(input.containerId!, input.token, { fields: "id,status_code,status" });
+      if (status.id !== input.containerId) return { decision: "UNRESOLVED", remoteId: status.id || null, permalink: null, publishedAt: null, code: "META_CONTAINER_MISMATCH" };
+      if (status.status_code === "PUBLISHED") return { decision: "CONFIRMED_PUBLISHED", remoteId: status.id, permalink: null, publishedAt: null, code: "META_CONTAINER_PUBLISHED" };
+      if (["FINISHED", "ERROR", "EXPIRED"].includes(status.status_code || "")) return { decision: "CONFIRMED_NOT_PUBLISHED", remoteId: status.id, permalink: null, publishedAt: null, code: `META_CONTAINER_${status.status_code}` };
+      return { decision: "UNRESOLVED", remoteId: status.id, permalink: null, publishedAt: null, code: "META_CONTAINER_STATUS_UNRESOLVED" };
+    } catch (error) {
+      return { decision: "UNRESOLVED", remoteId: input.mediaId || input.containerId, permalink: null, publishedAt: null, code: error instanceof MetaRequestError ? error.code : "META_VERIFY_FAILED" };
+    }
   }
 
   private async oauthToken(parameters: Record<string, string>) {

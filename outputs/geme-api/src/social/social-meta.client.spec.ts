@@ -72,3 +72,72 @@ test("ambiguous Meta 5xx during public publishing is marked unknown and is never
     globalThis.fetch = originalFetch;
   }
 }));
+
+test("Facebook reconciliation confirms only the stored post owned by the expected Page", async () => withMetaConfig(async () => {
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (input) => {
+    urls.push(String(input));
+    return new Response(JSON.stringify({ id: "post-1", from: { id: "page-1" }, permalink_url: "https://facebook.example/post-1", created_time: "2026-10-20T10:00:00Z" }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const client = new SocialMetaClient();
+    const confirmed = await client.reconcileFacebook({ pageId: "page-1", token: "server-token", mediaId: "post-1" });
+    assert.equal(confirmed.decision, "CONFIRMED_PUBLISHED");
+    assert.equal(confirmed.remoteId, "post-1");
+    assert.equal(confirmed.permalink, "https://facebook.example/post-1");
+    const wrongPage = await client.reconcileFacebook({ pageId: "page-2", token: "server-token", mediaId: "post-1" });
+    assert.equal(wrongPage.decision, "UNRESOLVED");
+    assert.equal(wrongPage.code, "META_TARGET_MISMATCH");
+    assert.equal(urls.length, 2);
+    assert.ok(urls.every((url) => url.startsWith("https://graph.facebook.com/v99.0/post-1?")));
+  } finally { globalThis.fetch = originalFetch; }
+}));
+
+test("Meta reconciliation handles missing IDs and Graph API errors without claiming success", async () => withMetaConfig(async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => { calls++; return new Response(JSON.stringify({ error: { code: 190 } }), { status: 400 }); }) as typeof fetch;
+  try {
+    const client = new SocialMetaClient();
+    assert.equal((await client.reconcileFacebook({ pageId: "page-1", token: "token", mediaId: null })).code, "REMOTE_ID_MISSING");
+    assert.equal(calls, 0);
+    const result = await client.reconcileFacebook({ pageId: "page-1", token: "token", mediaId: "post-1" });
+    assert.equal(result.decision, "UNRESOLVED");
+    assert.equal(result.code, "META_GRAPH_190");
+    assert.equal(calls, 1);
+  } finally { globalThis.fetch = originalFetch; }
+}));
+
+test("Instagram reconciliation checks the correct account and uses stored container status", async () => withMetaConfig(async () => {
+  const originalFetch = globalThis.fetch;
+  let index = 0;
+  globalThis.fetch = (async () => {
+    const body = index++ === 0 ? { id: "ig-1" } : { id: "container-1", status_code: "FINISHED", status: "Finished" };
+    return new Response(JSON.stringify(body), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const result = await new SocialMetaClient().reconcileInstagram({ instagramId: "ig-1", token: "server-token", containerId: "container-1", mediaId: null });
+    assert.equal(result.decision, "CONFIRMED_NOT_PUBLISHED");
+    assert.equal(result.code, "META_CONTAINER_FINISHED");
+    assert.equal(index, 2);
+  } finally { globalThis.fetch = originalFetch; }
+}));
+
+test("Instagram container ID is durably handed off before the publish call", async () => withMetaConfig(async () => {
+  const originalFetch = globalThis.fetch;
+  const events: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/ig-1/media")) return new Response(JSON.stringify({ id: "container-1" }), { status: 200 });
+    if (url.includes("/container-1?")) return new Response(JSON.stringify({ id: "container-1", status_code: "FINISHED" }), { status: 200 });
+    if (url.endsWith("/ig-1/media_publish")) { events.push("publish"); return new Response(JSON.stringify({ id: "media-1" }), { status: 200 }); }
+    throw new Error(`Unexpected Meta URL ${url} ${String(init?.method)}`);
+  }) as typeof fetch;
+  try {
+    const result = await new SocialMetaClient().publishInstagram({ instagramId: "ig-1", token: "token", caption: "GEME", imageUrl: "https://media.geme.vn/image.jpg", onContainerCreated: async (id) => { events.push(`saved:${id}`); } });
+    assert.equal(result.containerId, "container-1");
+    assert.equal(events[0], "saved:container-1");
+    assert.equal(events[1], "publish");
+  } finally { globalThis.fetch = originalFetch; }
+}));

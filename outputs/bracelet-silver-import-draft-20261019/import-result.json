@@ -1,0 +1,22 @@
+{
+  "date": "2026-10-19",
+  "category": "Vòng Tay Bạc",
+  "categoryId": "c3b7f92d-72f8-4749-ba87-e14f33a1338f",
+  "receiptNo": "PN20261019-03",
+  "receiptId": "d3c71186-b2b9-412e-9be9-21ab8d137c3f",
+  "importedSkuCount": 137,
+  "totalQuantity": 274,
+  "totalCost": 239449998,
+  "salePriceProfileTotal": 359175000,
+  "heldCount": 59,
+  "heldByStatus": {
+    "REVIEW": 2,
+    "REVIEW_COLLIDING_SOURCE_CODE": 48,
+    "REVIEW_SKU_PREFIX_MISMATCH": 1,
+    "REVIEW_NOT_MARKED_SILVER": 8
+  },
+  "files": {
+    "imported": "imported-skus.csv",
+    "notReady": "not-ready-skus.csv"
+  }
+}

@@ -7,7 +7,7 @@ import { Pos365Service } from "../pos365/pos365.service.js";
 import { MediaAssetsService } from "../media/media-assets.service.js";
 import { ensureCustomerForPaidOrder } from "./customer-profile.js";
 import { sanitizeBlogHtml } from "./blog-html.js";
-import { calculateCheckoutPrice, getCheckoutPromotionValue, type CheckoutPromotion } from "./checkout-pricing.js";
+import { calculateCheckoutPrice, getCheckoutPromotionValue, loadActiveStorePromotions, type CheckoutPromotion } from "./checkout-pricing.js";
 
 type Input = Record<string, any>;
 const slugify = (value: string) => String(value || "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `item-${Date.now()}`;
@@ -18,6 +18,23 @@ const gemstoneOptionKey = (cut: string, size: string, carat: string, gemstoneQua
   : `${cut}::${size}`;
 const gemstoneCaratSkuToken = (value: string) => value.trim().replace(/([0-9])[.,]([0-9])/g, "$1P$2").replace(/[^0-9A-Za-z]/g, "").toLocaleUpperCase("en");
 const gemstoneQualitySkuToken = (value: string) => gemstoneCutSkuToken(value).slice(0, 16);
+const bangleShapeLabel = (value: unknown) => ({ ROUND: "Tròn", OVAL: "Oval", SQUARE: "Vuông" } as Record<string, string>)[String(value || "").trim().toLocaleUpperCase("en")] || "";
+const bangleVariantSku = (productSku: string, shape: unknown, quality: unknown, beadSize: unknown) => {
+  const shapeToken = ({ ROUND: "R", OVAL: "O", SQUARE: "SQ" } as Record<string, string>)[String(shape || "").trim().toLocaleUpperCase("en")];
+  const gradeText = String(quality || "").trim().toLocaleUpperCase("en");
+  const grade = gradeText === "A" ? 1 : Number(gradeText.match(/^(\d{1,2})A$/)?.[1]);
+  const sizeText = String(beadSize || "").trim().match(/^(\d{1,2})(?:\s*MM)?$/i)?.[1];
+  const size = Number(sizeText);
+  if (!shapeToken || !Number.isInteger(grade) || grade < 1 || grade > 99 || !sizeText || size < 1 || size > 99) {
+    throw new BadRequestException("Mỗi biến thể kiềng cần dáng tròn/oval/vuông, chất lượng A/2A… và size 1–99 mm.");
+  }
+  const sku = `${productSku}${shapeToken}${String(grade).padStart(2, "0")}S${size}`;
+  if (sku.length > 64) throw new BadRequestException("Mã SKU vượt quá 64 ký tự.");
+  return sku;
+};
+const variantOptionKey = (shape: string, quality: string, size: string, carat: string, gemstoneQuality: string) => shape
+  ? `BANGLE::${shape}::${quality}::${size}`
+  : gemstoneOptionKey(quality, size, carat, gemstoneQuality);
 const gemstoneSkuSuffix = (cut: string, pricingMode: string, size: string, carat: string, gemstoneQuality: string) => {
   const base = `C${gemstoneCutSkuToken(cut)}`;
   if (pricingMode === "GEMSTONE_CARAT") return `${base}CT${gemstoneCaratSkuToken(carat)}`;
@@ -33,7 +50,7 @@ const variantSellPrice = (product: Input, variant: Input | null | undefined) => 
     : base;
 };
 const variantDisplayLabel = (variant: Input | null | undefined) => variant
-  ? [variant.quality, variant.beadSize, variant.carat != null ? `${variant.carat} ct` : null, variant.gemstoneQuality ? `Chất lượng ${variant.gemstoneQuality}` : null].filter(Boolean).join(" · ") || null
+  ? [bangleShapeLabel(variant.shape), variant.quality, variant.beadSize, variant.carat != null ? `${variant.carat} ct` : null, variant.gemstoneQuality ? `Chất lượng ${variant.gemstoneQuality}` : null].filter(Boolean).join(" · ") || null
   : null;
 const parseDate = (value: unknown, fallback = new Date()) => {
   if (value instanceof Date) return value;
@@ -89,14 +106,14 @@ const selectAdminProductSummary = {
   gemstoneType: { select: { id: true, name: true } },
   materialOption: { select: { id: true, name: true } },
   images: { orderBy: [{ isPrimary: "desc" as const }, { sortOrder: "asc" as const }], take: 1, select: { url: true, alt: true } },
-  variants: { orderBy: { sortOrder: "asc" as const }, select: { id: true, sku: true, quality: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, originalPrice: true, stock: true, sortOrder: true } },
+  variants: { orderBy: { sortOrder: "asc" as const }, select: { id: true, sku: true, quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, originalPrice: true, stock: true, sortOrder: true } },
 } satisfies Prisma.ProductSelect;
 const includeStorefrontProduct = {
   category: { select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true, status: true, sortOrder: true, pricingMode: true } },
   gemstoneType: { select: { id: true, name: true, slug: true } },
   materialOption: { select: { id: true, name: true, slug: true, scope: true, kind: true, active: true } },
   images: { orderBy: { sortOrder: "asc" as const }, take: 2, select: { url: true, alt: true, sortOrder: true, isPrimary: true } },
-  variants: { orderBy: { sortOrder: "asc" as const }, select: { id: true, sku: true, quality: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, originalPrice: true, stock: true, imageUrls: true, videoUrl: true, sortOrder: true } },
+  variants: { orderBy: { sortOrder: "asc" as const }, select: { id: true, sku: true, quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, originalPrice: true, stock: true, imageUrls: true, videoUrl: true, sortOrder: true } },
 };
 const selectStorefrontListing = {
   id: true,
@@ -126,14 +143,14 @@ const selectStorefrontListing = {
   gemstoneType: { select: { id: true, name: true, slug: true } },
   materialOption: { select: { id: true, name: true, slug: true, scope: true, kind: true, active: true, sortOrder: true } },
   images: { orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }], take: 2, select: { url: true, alt: true, sortOrder: true, isPrimary: true } },
-  variants: { select: { quality: true, beadSize: true, carat: true, gemstoneQuality: true, price: true } },
+  variants: { select: { quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true, price: true } },
 } satisfies Prisma.ProductSelect;
 const includeStorefrontProductDetail = {
   category: { select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true, status: true, sortOrder: true, pricingMode: true } },
   gemstoneType: { select: { id: true, name: true, slug: true } },
   materialOption: { select: { id: true, name: true, slug: true, scope: true, kind: true, active: true } },
   images: { orderBy: { sortOrder: "asc" as const }, select: { url: true, alt: true, sortOrder: true, isPrimary: true } },
-  variants: { orderBy: { sortOrder: "asc" as const }, select: { id: true, sku: true, quality: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, originalPrice: true, stock: true, imageUrls: true, videoUrl: true, sortOrder: true } },
+  variants: { orderBy: { sortOrder: "asc" as const }, select: { id: true, sku: true, quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, originalPrice: true, stock: true, imageUrls: true, videoUrl: true, sortOrder: true } },
   reviews: { where: { status: "APPROVED" as const }, orderBy: { createdAt: "desc" as const }, take: 30, select: { rating: true, title: true, content: true, createdAt: true, customer: { select: { name: true } } } },
 };
 const selectAdminOrder = {
@@ -147,7 +164,7 @@ const selectAdminOrder = {
   customer: { select: { name: true, phone: true, email: true } },
   items: {
     select: {
-      id: true, productName: true, productSku: true, quality: true, beadSize: true,
+      id: true, productName: true, productSku: true, quality: true, shape: true, beadSize: true,
       quantity: true, unitPrice: true, lineTotal: true,
       product: { select: { weightGrams: true, images: { orderBy: { sortOrder: "asc" as const }, take: 1, select: { url: true } } } },
     },
@@ -737,6 +754,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       const unchangedAssociation = previous?.categoryId === data.categoryId && previous.materialOptionId === data.materialOptionId;
       await this.assertCategoryAllowsMaterial(this.prisma, data.categoryId, data.materialOptionId, !unchangedAssociation);
     }
+    const productCategory = await this.prisma.category.findUnique({ where: { id: data.categoryId }, select: { slug: true } });
+    const isBangleProduct = data.kind === "JEWELRY" && productCategory?.slug === "vong-kieng";
     const imageInputs = (Array.isArray(input.gallery) ? input.gallery : input.image ? [input.image] : []).filter((url: unknown) => typeof url === "string" && url.length > 0).slice(0, 10) as string[];
     const images = await Promise.all(imageInputs.map((url, index) => url.startsWith("data:image/") ? this.persistDataImageReference(url, `product-${data.sku}-${index + 1}.webp`, data.name) : url));
     if (data.technicalImageUrl?.startsWith("data:image/")) {
@@ -745,6 +764,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const variants = Array.isArray(input.priceVariants) ? input.priceVariants : [];
     const variantCreate = await Promise.all(variants.map(async (variant: Input, index: number) => {
       const quality = String(variant.quality || "Standard").trim().slice(0, 40);
+      const shape = String(variant.shape || "").trim().toLocaleUpperCase("en") || null;
       const beadSize = String(variant.beadSize || "").trim().slice(0, 24) || null;
       const caratValue = variant.carat == null || String(variant.carat).trim() === "" ? null : Number(variant.carat);
       const carat = caratValue == null ? null : String(caratValue);
@@ -763,6 +783,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         if (gemstonePricingMode === "GEMSTONE_SIZE" && !beadSize) throw new BadRequestException("Biến thể đá quý cần có size mặt đá.");
         if (gemstonePricingMode === "GEMSTONE_CARAT_AND_QUALITY" && !gemstoneQuality) throw new BadRequestException("Biến thể đá quý cần có chất lượng.");
       }
+      if (isBangleProduct) {
+        if (!shape || !bangleShapeLabel(shape) || !beadSize) throw new BadRequestException("Mỗi biến thể kiềng cần có dáng và size.");
+        const expectedBangleSku = bangleVariantSku(data.sku, shape, quality, beadSize);
+        if (sku.toLocaleUpperCase("en") !== expectedBangleSku.toLocaleUpperCase("en")) throw new BadRequestException("SKU kiềng phải khớp dáng, chất lượng và size đã chọn.");
+      } else if (shape) {
+        throw new BadRequestException("Chỉ sản phẩm thuộc danh mục Vòng Kiềng mới dùng biến thể dáng.");
+      }
       if (!sku || !sku.startsWith(data.sku) || sku.length > 64 || !/^[A-Za-z0-9]+$/.test(sku)) {
         throw new BadRequestException(`SKU biến thể ${quality}${beadSize ? ` · ${beadSize}` : ""} phải là mã chữ/số bắt đầu bằng SKU mẹ ${data.sku}.`);
       }
@@ -770,8 +797,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         throw new BadRequestException("SKU biến thể đá quý phải khớp dạng cắt và size hoặc carat/chất lượng đã chọn.");
       }
       return {
-        optionKey: gemstoneOptionKey(quality, beadSize || "", carat || "", gemstoneQuality || ""),
-        quality, beadSize, carat, gemstoneQuality, sku,
+        optionKey: variantOptionKey(shape || "", quality, beadSize || "", carat || "", gemstoneQuality || ""),
+        quality, shape, beadSize, carat, gemstoneQuality, sku,
         imageUrls: savedImageUrls,
         videoUrl,
         price: Number(variant.price) || 0, originalPrice: Number(variant.originalPrice) || null,
@@ -851,7 +878,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
                 const productCollision = await tx.product.findUnique({ where: { sku: variant.sku }, select: { id: true } });
                 if ((collision && collision.id !== existing.id) || productCollision) throw new ConflictException(`SKU biến thể ${variant.sku} đã được sử dụng.`);
               }
-              await tx.productPriceVariant.update({ where: { id: existing.id }, data: { sku: variant.sku, quality: variant.quality, beadSize: variant.beadSize, carat: variant.carat, gemstoneQuality: variant.gemstoneQuality, imageUrls: variant.imageUrls, videoUrl: variant.videoUrl, price: variant.price, originalPrice: variant.originalPrice, sortOrder: variant.sortOrder } });
+              await tx.productPriceVariant.update({ where: { id: existing.id }, data: { sku: variant.sku, quality: variant.quality, shape: variant.shape, beadSize: variant.beadSize, carat: variant.carat, gemstoneQuality: variant.gemstoneQuality, imageUrls: variant.imageUrls, videoUrl: variant.videoUrl, price: variant.price, originalPrice: variant.originalPrice, sortOrder: variant.sortOrder } });
             }
           }
           record = await tx.product.findUniqueOrThrow({ where: { id }, include: includeProduct });
@@ -947,7 +974,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           action: "PRODUCT_HARD_DELETED", entityType: "Product", entityId: current.id,
           before: {
             id: current.id, sku: current.sku, name: current.name, status: current.status, stock: current.stock,
-            variants: current.variants.map((variant) => ({ id: variant.id, sku: variant.sku, quality: variant.quality, beadSize: variant.beadSize, stock: variant.stock })),
+            variants: current.variants.map((variant) => ({ id: variant.id, sku: variant.sku, shape: variant.shape, quality: variant.quality, beadSize: variant.beadSize, stock: variant.stock })),
           },
           after: { deleted: true, reason, pos365DeletedSkus: posResult.deleted },
         } });
@@ -985,7 +1012,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           gemstoneType: { select: { id: true, name: true } },
           materialOption: { select: { id: true, name: true, kind: true, scope: true } },
           images: { orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }], take: 1, select: { url: true, alt: true } },
-          variants: { orderBy: { sortOrder: "asc" }, select: { id: true, sku: true, quality: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, stock: true } },
+          variants: { orderBy: { sortOrder: "asc" }, select: { id: true, sku: true, quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, stock: true } },
         },
         orderBy: [{ updatedAt: "desc" }, { name: "asc" }],
         take: 5000,
@@ -1050,7 +1077,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   async saveInventorySkuRules(input: Input) {
     const rawRules = Array.isArray(input.rules) ? input.rules : [];
     const categoryIds = [...new Set(rawRules.map((rule: Input) => String(rule.categoryId || "")).filter(Boolean))];
-    const categories = categoryIds.length ? await this.prisma.category.findMany({ where: { id: { in: categoryIds }, status: "ACTIVE" }, select: { id: true, kind: true, usage: true, level: true, parentId: true } }) : [];
+    const categories = categoryIds.length ? await this.prisma.category.findMany({ where: { id: { in: categoryIds }, status: "ACTIVE" }, select: { id: true, slug: true, kind: true, usage: true, level: true, parentId: true } }) : [];
     if (categories.length !== categoryIds.length || categories.some((category) => !(category.usage === "PRODUCT_CATEGORY" && category.level >= 2 || category.kind === "GEMSTONE" && category.usage === "GEMSTONE_TYPE" && category.level === 2))) {
       throw new BadRequestException("Chỉ tạo quy tắc cho danh mục sản phẩm đang hoạt động đã được tạo.");
     }
@@ -1063,6 +1090,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       const category = categories.find((item) => item.id === String(rule.categoryId));
       if (!category) throw new BadRequestException("Danh mục trong quy tắc không hợp lệ.");
       const isGemstoneTypeRule = category.usage === "GEMSTONE_TYPE";
+      const skuFormat = rule.skuFormat === "BANGLE_SHAPE_QUALITY_SIZE" ? "BANGLE_SHAPE_QUALITY_SIZE" : "SEQUENTIAL";
+      if (skuFormat === "BANGLE_SHAPE_QUALITY_SIZE" && (category.kind !== "JEWELRY" || category.slug !== "vong-kieng")) {
+        throw new BadRequestException("Quy tắc dáng, chất lượng và size chỉ áp dụng cho danh mục Vòng Kiềng.");
+      }
       const prefix = this.cleanSkuPrefix(rule.prefix);
       const hasMaterialList = !isGemstoneTypeRule && Array.isArray(rule.materialOptionIds);
       const materialOptionIds = isGemstoneTypeRule ? [] : hasMaterialList
@@ -1083,7 +1114,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         return { materialOptionId: material.id, prefix: this.cleanSkuPrefix(entry.prefix) };
       }) : [];
       if (new Set(materialPrefixes.map((entry: Input) => entry.materialOptionId)).size !== materialPrefixes.length) throw new BadRequestException("Một loại đá chỉ được cấu hình một tiền tố trong mỗi danh mục.");
-      return { categoryId: category.id, prefix, ...(hasMaterialList ? { materialOptionIds } : {}), materialPrefixes };
+      if (skuFormat === "BANGLE_SHAPE_QUALITY_SIZE") {
+        const allowedMaterialIds = materialOptionIds || materialPrefixes.map((entry: Input) => entry.materialOptionId);
+        if (!allowedMaterialIds.length || allowedMaterialIds.some((id: string) => !materialPrefixes.some((entry: Input) => entry.materialOptionId === id))) {
+          throw new BadRequestException("Mỗi loại đá áp dụng cho Vòng Kiềng cần có mã đá để ghép vào SKU.");
+        }
+      }
+      return { categoryId: category.id, prefix, skuFormat, ...(hasMaterialList ? { materialOptionIds } : {}), materialPrefixes };
     });
     if (new Set(normalized.map((rule: Input) => rule.categoryId)).size !== normalized.length) throw new BadRequestException("Mỗi danh mục chỉ được có một quy tắc mã hàng.");
     const prefixOwners = new Map<string, Set<string>>();
@@ -1144,7 +1181,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       include: {
         items: {
           orderBy: { createdAt: "asc" },
-          include: { variant: { select: { sku: true, quality: true, beadSize: true, carat: true, gemstoneQuality: true } } },
+          include: { variant: { select: { sku: true, quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true } } },
         },
       },
     });
@@ -1440,6 +1477,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (materialOptionId) await this.assertCategoryAllowsMaterial(client, categoryId, materialOptionId);
     if (!materialOptionId) return this.cleanSkuPrefix(rule.prefix);
     const stoneRule = Array.isArray(rule.materialPrefixes) ? rule.materialPrefixes.find((entry: Input) => entry.materialOptionId === materialOptionId) : undefined;
+    if (rule.skuFormat === "BANGLE_SHAPE_QUALITY_SIZE" && !stoneRule) {
+      throw new BadRequestException("Loại đá này chưa có mã trong quy tắc SKU Vòng Kiềng. Hãy bổ sung mã đá trước khi nhập kho.");
+    }
     // Stone prefixes are optional. Newly created stones can use the category prefix;
     // the sequence allocator still guarantees a unique SKU across the category.
     if (!stoneRule) return this.cleanSkuPrefix(rule.prefix);
@@ -1467,10 +1507,25 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return sku;
   }
 
-  async nextInventorySku(categoryId: string, materialOptionId?: string, sequence?: string) {
+  async nextInventorySku(categoryId: string, materialOptionId?: string, sequence?: string, bangle: { bangleShape?: string; bangleQuality?: string; bangleSizeMm?: string } = {}) {
     if (!categoryId) throw new BadRequestException("Chọn danh mục để tạo mã hàng.");
     const prefix = await this.skuPrefixFor(this.prisma, categoryId, materialOptionId);
-    if (sequence === undefined || sequence === "") {
+    const setting = await this.prisma.siteSetting.findUnique({ where: { key: "inventory.skuRules" }, select: { value: true } });
+    const rules = Array.isArray(setting?.value) ? setting.value as Input[] : [];
+    const rule = rules.find((candidate) => candidate.categoryId === categoryId);
+    const isBangleFormat = rule?.skuFormat === "BANGLE_SHAPE_QUALITY_SIZE";
+    if (isBangleFormat) {
+      const [product, variant] = await Promise.all([
+        this.prisma.product.findUnique({ where: { sku: prefix }, select: { id: true, name: true, stock: true, variants: { select: { id: true, stock: true } } } }),
+        this.prisma.productPriceVariant.findUnique({ where: { sku: prefix }, select: { id: true, product: { select: { sku: true, name: true } } } }),
+      ]);
+      return {
+        prefix, sku: prefix, format: "BANGLE_SHAPE_QUALITY_SIZE",
+        existingProduct: product ? { id: product.id, name: product.name, stock: product.variants.length ? product.variants.reduce((sum, row) => sum + row.stock, 0) : product.stock, variantCount: product.variants.length } : null,
+        existingVariant: variant ? { productSku: variant.product.sku, productName: variant.product.name } : null,
+      };
+    }
+    if (!isBangleFormat && (sequence === undefined || sequence === "")) {
       const [product, variant] = await Promise.all([
         this.prisma.product.findUnique({ where: { sku: prefix }, select: { id: true, name: true, stock: true, variants: { select: { id: true, stock: true } } } }),
         this.prisma.productPriceVariant.findUnique({ where: { sku: prefix }, select: { id: true, product: { select: { sku: true, name: true } } } }),
@@ -1478,6 +1533,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       return {
         prefix,
         sku: prefix,
+        format: "SEQUENTIAL",
         existingProduct: product ? { id: product.id, name: product.name, stock: product.variants.length ? product.variants.reduce((sum, row) => sum + row.stock, 0) : product.stock, variantCount: product.variants.length } : null,
         existingVariant: variant ? { productSku: variant.product.sku, productName: variant.product.name } : null,
       };
@@ -1490,6 +1546,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return {
       prefix,
       sku,
+      format: isBangleFormat ? "BANGLE_SHAPE_QUALITY_SIZE" : "SEQUENTIAL",
       existingProduct: product ? { id: product.id, name: product.name, stock: product.variants.length ? product.variants.reduce((sum, row) => sum + row.stock, 0) : product.stock, variantCount: product.variants.length } : null,
       existingVariant: variant ? { id: variant.id, productId: variant.productId, productSku: variant.product.sku, productName: variant.product.name } : null,
     };
@@ -1508,6 +1565,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         const seenSkus = new Set<string>();
           const variants = variantDrafts.map((variant) => {
           const quality = String(variant.quality || "").trim().slice(0, 40);
+          const shape = String(variant.shape || "").trim().toLocaleUpperCase("en");
           const beadSize = String(variant.beadSize || "").trim().slice(0, 24);
           const caratValue = variant.carat == null || String(variant.carat).trim() === "" ? null : Number(variant.carat);
           const carat = caratValue == null ? "" : String(caratValue);
@@ -1520,12 +1578,12 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000) throw new BadRequestException("Số lượng mỗi biến thể phải từ 1 đến 100.000.");
           if (!Number.isInteger(unitCost) || unitCost < 0 || unitCost > 1000000000000) throw new BadRequestException("Đơn giá nhập của biến thể phải là số nguyên không âm hợp lệ.");
           if (caratValue != null && (!Number.isFinite(caratValue) || caratValue <= 0 || caratValue > 1000 || Math.round(caratValue * 1000) !== caratValue * 1000)) throw new BadRequestException("Carat phải lớn hơn 0, tối đa 3 chữ số thập phân.");
-          const optionKey = gemstoneOptionKey(quality, beadSize, carat, gemstoneQuality);
+          const optionKey = variantOptionKey(shape, quality, beadSize, carat, gemstoneQuality);
           if (seen.has(optionKey)) throw new BadRequestException("Không thể nhập trùng một tổ hợp biến thể.");
           if (seenSkus.has(sku.toLocaleUpperCase("en"))) throw new BadRequestException("Không thể nhập trùng một SKU con trong cùng mặt hàng.");
           seen.add(optionKey);
           seenSkus.add(sku.toLocaleUpperCase("en"));
-          return { quality, beadSize: beadSize || null, carat: carat || null, gemstoneQuality: gemstoneQuality || null, cutCategoryId: String(variant.cutCategoryId || "") || null, sku, quantity, unitCost, optionKey };
+          return { quality, shape: shape || null, beadSize: beadSize || null, carat: carat || null, gemstoneQuality: gemstoneQuality || null, cutCategoryId: String(variant.cutCategoryId || "") || null, sku, quantity, unitCost, optionKey };
         });
         const quantity = variants.reduce((sum, variant) => sum + variant.quantity, 0);
         const lineTotal = variants.reduce((sum, variant) => sum + variant.quantity * variant.unitCost, 0);
@@ -1600,6 +1658,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             }
             const productName = name || (category.kind === "GEMSTONE" ? gemstoneTypeName : [category.name, materialName].filter(Boolean).join(" ")).slice(0, 180) || `Mặt hàng ${String(newProduct.sku || "").trim()}`;
             const prefix = await this.skuPrefixFor(tx, category.id, materialOptionId || undefined);
+            const skuSetting = await tx.siteSetting.findUnique({ where: { key: "inventory.skuRules" }, select: { value: true } });
+            const skuRules = Array.isArray(skuSetting?.value) ? skuSetting.value as Input[] : [];
+            const skuRule = skuRules.find((candidate) => candidate.categoryId === category.id);
             const rawProfilePrice = newProduct.price === undefined || newProduct.price === null || String(newProduct.price).trim() === "" ? null : Number(newProduct.price);
             if (rawProfilePrice !== null && (!Number.isSafeInteger(rawProfilePrice) || rawProfilePrice < 0 || rawProfilePrice > 1000000000000)) {
               throw new BadRequestException("Giá bán trong hồ sơ sản phẩm phải là số nguyên không âm hợp lệ.");
@@ -1614,8 +1675,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
               pos365PriceSyncError: null,
             } : {};
             // Gemstone products use a sequenced parent SKU; variants append their cut + size tokens.
+            const bangleFormat = skuRule?.skuFormat === "BANGLE_SHAPE_QUALITY_SIZE";
             const sku = newProduct.allowLegacySku === true
               ? this.productSkuForLegacy(prefix, newProduct.legacySku)
+              : bangleFormat
+                ? prefix
               : category.kind === "GEMSTONE" || !newProductVariantDrafts.length
                 ? this.productSkuForSequence(prefix, newProduct.skuSequence, newProduct.allowLegacyAlphaSuffix === true)
                 : prefix;
@@ -1646,6 +1710,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
                   throw new BadRequestException("Biến thể đá quý cần có dạng cắt và đúng size hoặc carat/chất lượng theo cách định giá của danh mục.");
                 }
               }
+              if (bangleFormat) {
+                if (category.slug !== "vong-kieng" || !variant.shape || bangleVariantSku(sku, variant.shape, variant.quality, variant.beadSize).toLocaleUpperCase("en") !== variantSku.toLocaleUpperCase("en")) {
+                  throw new BadRequestException("SKU kiềng phải khớp mã mẹ, dáng, chất lượng và size đã chọn.");
+                }
+              } else if (variant.shape) {
+                throw new BadRequestException("Chỉ danh mục Vòng Kiềng mới được có biến thể dáng.");
+              }
               const [productCollision, variantCollision] = await Promise.all([
                 tx.product.findUnique({ where: { sku: variantSku }, select: { id: true } }),
                 tx.productPriceVariant.findUnique({ where: { sku: variantSku }, select: { id: true } }),
@@ -1662,6 +1733,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
               const data = {
                 optionKey: variant.optionKey,
                 quality: variant.quality,
+                shape: variant.shape || null,
                 beadSize: variant.beadSize,
                 carat: variant.carat,
                 gemstoneQuality: variant.gemstoneQuality,
@@ -1713,7 +1785,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
                   const sameOption = existingByOption.get(draft.optionKey) as Input | undefined;
                   const sameSku = existingBySku.get(variantSku.toLocaleUpperCase("en")) as Input | undefined;
                   if (sameSku && !sameOption) {
-                    throw new ConflictException(`SKU ${variantSku} đã được gán cho biến thể ${sameSku.quality}${sameSku.beadSize ? ` · ${sameSku.beadSize}` : ""}; không thể dùng lại cho size hoặc dạng cắt khác.`);
+                    throw new ConflictException(`SKU ${variantSku} đã được gán cho biến thể ${bangleShapeLabel(sameSku.shape)} ${sameSku.quality}${sameSku.beadSize ? ` · ${sameSku.beadSize}` : ""}; không thể dùng lại cho lựa chọn khác.`);
                   }
                   if (sameSku && sameOption && sameSku.id !== sameOption.id) {
                     throw new ConflictException(`SKU ${variantSku} và phân loại đã nhập đang trỏ tới hai biến thể khác nhau.`);
@@ -1822,7 +1894,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             const lineTotal = row.quantity * row.unitCost;
             await tx.inventoryReceiptItem.create({ data: {
               receiptId: savedReceipt.id, productId: product.id, variantId: variant?.id || null,
-              productName: product.name, productSku, quality: variant?.quality || null, beadSize: variant?.beadSize || null,
+              productName: product.name, productSku, quality: variant?.quality || null, shape: variant?.shape || null, beadSize: variant?.beadSize || null,
               carat: variant?.carat || null, gemstoneQuality: variant?.gemstoneQuality || null, categoryName: product.category?.name || null,
               stoneName, kind: product.kind, quantity: row.quantity, unitCost: row.unitCost, lineTotal,
             } });
@@ -2115,40 +2187,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async activeStorePromotions(client: any, now = new Date()): Promise<CheckoutPromotion[]> {
-    const [promotions, categories] = await Promise.all([
-      client.promotion.findMany({
-        where: { visible: true, status: "ACTIVE", type: "PERCENTAGE", startsAt: { lte: now }, endsAt: { gte: now } },
-        select: { id: true, value: true, targets: { select: { categoryId: true, productId: true, excluded: true } } },
-        take: 500,
-      }),
-      client.category.findMany({ select: { id: true, parentId: true } }),
-    ]);
-    const descendantsOf = (roots: string[]) => {
-      const ids = new Set(roots);
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const category of categories) {
-          if (category.parentId && ids.has(category.parentId) && !ids.has(category.id)) {
-            ids.add(category.id);
-            changed = true;
-          }
-        }
-      }
-      return [...ids];
-    };
-    return promotions.map((promotion: any) => {
-      const included = promotion.targets.filter((target: any) => !target.excluded);
-      const excluded = promotion.targets.filter((target: any) => target.excluded);
-      return {
-        id: promotion.id,
-        value: Number(promotion.value) || 0,
-        productIds: included.flatMap((target: any) => target.productId ? [target.productId] : []),
-        categoryIds: descendantsOf(included.flatMap((target: any) => target.categoryId ? [target.categoryId] : [])),
-        excludedProductIds: excluded.flatMap((target: any) => target.productId ? [target.productId] : []),
-        excludedCategoryIds: descendantsOf(excluded.flatMap((target: any) => target.categoryId ? [target.categoryId] : [])),
-      };
-    }).filter((promotion) => Number(promotion.value) > 0);
+    return loadActiveStorePromotions(client, now);
   }
 
   async quoteOrder(input: Input) {
@@ -2253,7 +2292,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       if (customerId && !customer) throw new BadRequestException("Không tìm thấy hồ sơ khách hàng đã chọn.");
       const promotions = storeSale ? [] : await this.activeStorePromotions(tx);
       const orderVisibility = storeSale ? null : await this.storefrontProductVisibilityWhere();
-      const placedItems: Array<{ productId: string; variantId: string | null; productName: string; productSku: string; quality: string | null; beadSize: string | null; carat: number | null; gemstoneQuality: string | null; quantity: number; unitPrice: number; lineTotal: number }> = [];
+      const placedItems: Array<{ productId: string; variantId: string | null; productName: string; productSku: string; shape: string | null; quality: string | null; beadSize: string | null; carat: number | null; gemstoneQuality: string | null; quantity: number; unitPrice: number; lineTotal: number }> = [];
       const outboundItems = new Map<string, {
         productId: string;
         variantId: string | null;
@@ -2332,7 +2371,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             });
           }
         }
-        placedItems.push({ productId: product.id, variantId: variant?.id || null, productName: product.name, productSku: variant?.sku || product.sku, quality: variant?.quality || null, beadSize: variant?.beadSize || null, carat: variant?.carat == null ? null : Number(variant.carat), gemstoneQuality: variant?.gemstoneQuality || null, quantity, unitPrice, lineTotal });
+        placedItems.push({ productId: product.id, variantId: variant?.id || null, productName: product.name, productSku: variant?.sku || product.sku, shape: variant?.shape || null, quality: variant?.quality || null, beadSize: variant?.beadSize || null, carat: variant?.carat == null ? null : Number(variant.carat), gemstoneQuality: variant?.gemstoneQuality || null, quantity, unitPrice, lineTotal });
       }
       const subtotal = placedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
       const promotionDiscount = placedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity - item.lineTotal, 0);

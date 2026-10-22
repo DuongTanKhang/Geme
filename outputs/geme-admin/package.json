@@ -7,7 +7,7 @@
     "dev": "next dev --hostname 0.0.0.0 --port 3001",
     "build": "next build",
     "start": "next start --hostname 0.0.0.0 --port 3001",
-    "test:social-proxy": "node --experimental-strip-types --test scripts/social-proxy.test.mjs"
+    "test:social-proxy": "node --experimental-strip-types --test scripts/social-proxy.test.mjs scripts/social-workspace.test.mjs"
   },
   "dependencies": {
     "next": "16.3.8",

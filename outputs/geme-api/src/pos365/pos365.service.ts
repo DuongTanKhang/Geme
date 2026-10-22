@@ -43,6 +43,14 @@ const posVariantSellPrice = (product: Pos365Record, variant: Pos365Record) => {
     ? Math.round(price * Number(variant.carat || 0))
     : price;
 };
+const posVariantProductName = (productName: unknown, variant: Pos365Record | null | undefined) => {
+  const name = String(productName || "").trim();
+  const shape = ({ ROUND: "Tròn", OVAL: "Oval", SQUARE: "Vuông" } as Record<string, string>)[String(variant?.shape || "").trim().toLocaleUpperCase("en")];
+  const quality = String(variant?.quality || "").trim();
+  const beadSize = String(variant?.beadSize || "").trim();
+  if (!name || !shape || !quality || !beadSize) return name.slice(0, 180);
+  return `${name} ${quality} Bản ${shape} Size ${beadSize}mm`.slice(0, 180);
+};
 const asNumber = (value: unknown) => {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -767,7 +775,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
         if (!claim.count) continue;
         const receipt = await this.prisma.inventoryReceipt.findUnique({
           where: { id: row.id },
-          include: { items: { include: { product: { select: { name: true, price: true } }, variant: { select: { sku: true, quality: true, beadSize: true, price: true } } } } },
+          include: { items: { include: { product: { select: { name: true, price: true } }, variant: { select: { sku: true, quality: true, shape: true, beadSize: true, price: true } } } } },
         });
         if (!receipt) continue;
         try {
@@ -896,7 +904,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     const lines = product.variants?.length
       ? product.variants.map((variant: Pos365Record) => ({
           sku: String(variant.sku || (product.variants.length === 1 ? product.sku : "")).trim(),
-          name: String(product.name || product.sku).slice(0, 180),
+          name: posVariantProductName(product.name || product.sku, variant),
           price: posVariantSellPrice(product, variant),
         }))
       : [{ sku: String(product.sku || "").trim(), name: String(product.name || product.sku).slice(0, 180), price: Math.round(Number(product.price) || 0) }];
@@ -969,7 +977,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     for (const item of receipt.items || []) {
       const sku = String(item.productSku || item.variant?.sku || "").trim();
       if (!sku) throw new Error(`Dòng hàng ${item.productName || "không tên"} thiếu SKU để ghép POS365.`);
-      const productName = String(item.product?.name || item.productName || sku);
+      const productName = posVariantProductName(item.product?.name || item.productName || sku, item.variant);
       const salePrice = Number(item.variant?.price ?? item.product?.price) || 0;
       let remote = this.findProductByCode(catalog, sku);
       if (!remote) remote = await this.findRemoteProductByCode(config, sessionId, sku);

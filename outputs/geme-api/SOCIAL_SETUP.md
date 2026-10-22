@@ -22,6 +22,18 @@ Quyền Meta có thể cần App Review/Advanced Access hoặc điều kiện kh
 - Nếu timeout xảy ra sau khi gọi API đăng hoặc worker khởi động lại giữa lúc gửi, mục chuyển `UNKNOWN` và không tự gửi lại. Admin cần đối chiếu Page/Instagram bên Meta trước khi xử lý tiếp. Không thể bảo đảm exactly-once khi nền tảng bên ngoài đã nhận request nhưng phản hồi bị mất.
 - Ngắt kết nối ở **Tài khoản** → **Ngắt**. Bản nháp và lịch sử được giữ lại; ciphertext token được xóa khỏi kết nối. Có thể thu hồi quyền tại Facebook/Business Integrations của Meta.
 
+## Quy trình dữ liệu, đối soát và vận hành
+
+- Cấu hình `GEME_SITE_URL` trên API bằng origin HTTPS đang dùng cho storefront, ví dụ `https://geme.vn`. Khi chọn sản phẩm, API tạo URL sản phẩm từ slug ở server; URL do trình duyệt gửi không được dùng làm nguồn tin cậy. Link nhập tay được giữ nguyên khi đổi sản phẩm và giao diện cảnh báo nếu link không còn trỏ đến sản phẩm đang chọn.
+- API danh sách dùng cursor theo `updatedAt DESC, id DESC`, nhận `limit`, `q`, `status`, `cursor` và trả `items`, `nextCursor`, `hasMore`. Lịch là truy vấn riêng theo khoảng UTC và trạng thái, tối đa 93 ngày; mỗi kênh hiển thị thời gian đăng riêng. Giao diện hiển thị `updatedAt` là “Cập nhật” và `createdAt` là “Ngày tạo”.
+- Khi duyệt một bài có sản phẩm, admin phải chọn biến thể cụ thể nếu sản phẩm có biến thể và xác nhận đã rà soát caption, giá cùng khuyến mãi. Giá snapshot dùng chung công thức tính giá checkout. Worker tính lại ngay trước khi gọi Meta; nếu giá, khuyến mãi, biến thể hoặc tình trạng hàng đổi, kênh đó bị chặn và cần rà soát/duyệt lại. Snapshot không thay đổi giá hoặc tồn kho.
+- Mỗi kênh có lịch sử lần thử và kết quả đối soát. Kết quả `UNKNOWN` không tự đăng lại. Hãy mở chi tiết kênh, thử xác minh qua Meta khi tài khoản còn kết nối, hoặc ghi nhận người kiểm tra, ghi chú và bằng chứng đã xem. Trường tham chiếu bằng chứng chỉ được lưu để kiểm toán; máy chủ không truy cập URL đó và URL không tự chứng minh bài đã đăng.
+- Chỉ kết quả đối soát `CONFIRMED_NOT_PUBLISHED` hoặc `UNRESOLVED` mới có thể xin thử lại. Nút thử lại yêu cầu admin xác nhận rõ nguy cơ đăng trùng; mỗi lần thử được lưu cùng actor và revision. Nếu Meta xác nhận đã đăng thì hệ thống khóa thử lại cho kênh đó.
+- Migration `20261025000000_social_workflow_hardening` bổ sung metadata nguồn link, snapshot giá đã duyệt, lịch sử đối soát và index phân trang; giữ nguyên bài, lịch đăng và lần thử hiện có. Nó đánh dấu URL bài có dạng chính xác `/san-pham/{slug}` là link sản phẩm tự sinh, các URL hiện hữu còn lại là link nhập tay. Local Compose áp migration bằng `pnpm db:deploy` khi API khởi động. Chỉ chạy với database local/test đã chọn; không trỏ `.env.docker` vào production khi chưa có kế hoạch sao lưu và cửa sổ triển khai được duyệt.
+- Sau migration, các bài cũ đã duyệt nhưng chưa có snapshot giá sẽ bị worker yêu cầu duyệt lại trước khi đăng. Các kênh `UNKNOWN` cũ vẫn cần đối soát thủ công trước khi có thể thử lại.
+
+Kiểm tra trong repository: `pnpm exec prisma validate`, `pnpm build`, `pnpm test` ở `outputs/geme-api`; `pnpm exec tsc --noEmit`, `pnpm test:social-proxy` và production build ở `outputs/geme-admin`. Việc chạy test không gọi Meta thật hay đăng bài.
+
 ## Tài liệu Meta chính thức
 
 - [Instagram API — collection do Meta duy trì trên Postman](https://www.postman.com/meta/instagram/documentation/6yqw8pt/instagram-api)

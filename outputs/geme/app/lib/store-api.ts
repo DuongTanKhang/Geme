@@ -33,6 +33,7 @@ export type StoreVariant = {
   id?: string;
   sku?: string | null;
   quality: string;
+  shape?: string | null;
   beadSize?: string | null;
   carat?: number | null;
   gemstoneQuality?: string | null;
@@ -310,6 +311,7 @@ function asStoreProduct(value: any): StoreProduct {
         id: variant.id ? String(variant.id) : undefined,
         sku: variant.sku ?? null,
         quality: String(variant.quality || "Tiêu chuẩn"),
+        shape: variant.shape || null,
         beadSize: variant.beadSize || null,
         carat: variant.carat == null ? null : Number(variant.carat),
         gemstoneQuality: variant.gemstoneQuality || null,

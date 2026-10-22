@@ -1,0 +1,4043 @@
+{
+  "sourceSql": "phelieug_geme_1792061935.sql",
+  "category": "Bông tai",
+  "categoryId": "9192d194-48e3-4580-933a-accfd920d503",
+  "categoryPrefix": "NSSE",
+  "quantityPerSku": 2,
+  "costRule": "round(salePrice / 3) to nearest VND; half up",
+  "scope": "Remaining 10 gemstone groups after the first 10. Same source SKU/model codes are grouped to the latest modified row; distinct source codes that collide on their numeric sequence receive another available sequence.",
+  "groups": [
+    {
+      "name": "Ngọc Trai",
+      "code": "GP",
+      "materialOptionId": "2754b7c7-3a39-4057-9032-0eb7e25c9807",
+      "sourceCategoryIds": [
+        "139"
+      ],
+      "sourceRowCount": 79,
+      "skuCount": 78,
+      "items": [
+        {
+          "sku": "NSSEGP580",
+          "quantity": 2,
+          "salePrice": 1260000,
+          "unitCost": 420000,
+          "sourceIds": [
+            578,
+            2650
+          ],
+          "selectedSourceId": 578,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Tròn 8mm Bạc 925 Mẫu FW580",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW580",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z252443511699294d460e05e2924f82e60a8fba3859e51-7145.jpg",
+          "duplicateSourceCount": 2
+        },
+        {
+          "sku": "NSSEGP800",
+          "quantity": 2,
+          "salePrice": 2360000,
+          "unitCost": 786667,
+          "sourceIds": [
+            579
+          ],
+          "selectedSourceId": 579,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Tròn 7mm Bạc 925 Mẫu SJ800P",
+          "sourceLegacySku": null,
+          "sourceModelCode": "SJ800P",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z2524435160679375f125630bee5bab55070bafcef2240-8260.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP571",
+          "quantity": 2,
+          "salePrice": 1680000,
+          "unitCost": 560000,
+          "sourceIds": [
+            580
+          ],
+          "selectedSourceId": 580,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Gạo 8mm Bạc 925 Mẫu FW571",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW571",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z25244350906189d56bc470c7e17cf3ba97b600ee9fac2-8374.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP544",
+          "quantity": 2,
+          "salePrice": 2580000,
+          "unitCost": 860000,
+          "sourceIds": [
+            581
+          ],
+          "selectedSourceId": 581,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Tròn 7mm Bạc 925 Mẫu FW544",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW544",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-7mm-bac-925-mau-fw544-4-6358.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP529",
+          "quantity": 2,
+          "salePrice": 2380000,
+          "unitCost": 793333,
+          "sourceIds": [
+            582
+          ],
+          "selectedSourceId": 582,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Gạo 6mm Bạc 925 Mẫu FW529",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW529",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z25244549305522b4c169fcb133ea4e167e36fa23f96c0-9061.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP001",
+          "quantity": 2,
+          "salePrice": 1860000,
+          "unitCost": 620000,
+          "sourceIds": [
+            583
+          ],
+          "selectedSourceId": 583,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Bầu Size 6mm Bạc 925",
+          "sourceLegacySku": null,
+          "sourceModelCode": null,
+          "skuOrigin": "next_sequence",
+          "legacyImageName": "z252445497598482a5b92b2a99cac0f75f705bad52c063-8034.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP007",
+          "quantity": 2,
+          "salePrice": 860000,
+          "unitCost": 286667,
+          "sourceIds": [
+            2634
+          ],
+          "selectedSourceId": 2634,
+          "sourceName": "Bông tai ngọc trai hạt bầu 10mm bạc 925 FW007",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW007",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-bau-10mm-bac-925-fw007-7909.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP537",
+          "quantity": 2,
+          "salePrice": 2160000,
+          "unitCost": 720000,
+          "sourceIds": [
+            2635
+          ],
+          "selectedSourceId": 2635,
+          "sourceName": "Bông tai ngọc trai hạt tròn 7mm bạc 925 FW537",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW537",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-7mm-bac-925-fw537-6727.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP539",
+          "quantity": 2,
+          "salePrice": 1360000,
+          "unitCost": 453333,
+          "sourceIds": [
+            2636
+          ],
+          "selectedSourceId": 2636,
+          "sourceName": "Bông tai ngọc trai hạt tròn 6mm bạc 925 FW539",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW539",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-6mm-bac-925-fw539-6144.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP575",
+          "quantity": 2,
+          "salePrice": 1590000,
+          "unitCost": 530000,
+          "sourceIds": [
+            2637
+          ],
+          "selectedSourceId": 2637,
+          "sourceName": "Bông tai ngọc trai hạt tròn 7mm bạc 925 FW575",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW575",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-7mm-bac-925-fw575-1497.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP551",
+          "quantity": 2,
+          "salePrice": 1360000,
+          "unitCost": 453333,
+          "sourceIds": [
+            2638
+          ],
+          "selectedSourceId": 2638,
+          "sourceName": "Bông tai ngọc trai hạt tròn 3mm bạc 925 FW551",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW551",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-3mm-bac-925-fw551-1108.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP554",
+          "quantity": 2,
+          "salePrice": 1090000,
+          "unitCost": 363333,
+          "sourceIds": [
+            2639
+          ],
+          "selectedSourceId": 2639,
+          "sourceName": "Bông tai ngọc trai hạt bầu 8mm bạc 925 FW554",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW554",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-bau-8mm-bac-925-fw554-9843.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP568",
+          "quantity": 2,
+          "salePrice": 1580000,
+          "unitCost": 526667,
+          "sourceIds": [
+            2640
+          ],
+          "selectedSourceId": 2640,
+          "sourceName": "Bông tai ngọc trai hạt bầu 8mm bạc 925 FW568",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW568",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-bau-8mm-bac-925-fw568-8056.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP563",
+          "quantity": 2,
+          "salePrice": 1360000,
+          "unitCost": 453333,
+          "sourceIds": [
+            2641
+          ],
+          "selectedSourceId": 2641,
+          "sourceName": "Bông tai ngọc trai hạt bầu 8mm bạc 925 FW563",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW563",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-bau-8mm-bac-925-fw563-4251.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP564",
+          "quantity": 2,
+          "salePrice": 1160000,
+          "unitCost": 386667,
+          "sourceIds": [
+            2642
+          ],
+          "selectedSourceId": 2642,
+          "sourceName": "Bông tai ngọc trai hạt bầu 6mm bạc 925 FW564",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW564",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-bau-6mm-bac-925-fw564-6679.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP546",
+          "quantity": 2,
+          "salePrice": 1680000,
+          "unitCost": 560000,
+          "sourceIds": [
+            2643
+          ],
+          "selectedSourceId": 2643,
+          "sourceName": "Bông tai ngọc trai hạt tròn 8mm bạc 925 FW546",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW546",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-8mm-bac-925-fw546-4195.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP547",
+          "quantity": 2,
+          "salePrice": 1680000,
+          "unitCost": 560000,
+          "sourceIds": [
+            2644
+          ],
+          "selectedSourceId": 2644,
+          "sourceName": "Bông tai ngọc trai hạt tròn 7mm bạc 925 FW547",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW547",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-7mm-bac-925-fw547-2437.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP573",
+          "quantity": 2,
+          "salePrice": 1520000,
+          "unitCost": 506667,
+          "sourceIds": [
+            2645
+          ],
+          "selectedSourceId": 2645,
+          "sourceName": "Bông tai ngọc trai hạt tròn 8mm bạc 925 FW573",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW573",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-8mm-bac-925-fw573-7930.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP578",
+          "quantity": 2,
+          "salePrice": 1680000,
+          "unitCost": 560000,
+          "sourceIds": [
+            2646
+          ],
+          "selectedSourceId": 2646,
+          "sourceName": "Bông tai ngọc trai hạt tròn 7mm bạc 925 fw578",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW578",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z252443521223366cb90ce4b5695f79b91c991e5b40e04-4933.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP566",
+          "quantity": 2,
+          "salePrice": 1290000,
+          "unitCost": 430000,
+          "sourceIds": [
+            2647
+          ],
+          "selectedSourceId": 2647,
+          "sourceName": "Bông tai ngọc trai hạt tròn 6mm bạc 925 FW566",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW566",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-6mm-bac-925-fw566-9875.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP528",
+          "quantity": 2,
+          "salePrice": 1620000,
+          "unitCost": 540000,
+          "sourceIds": [
+            2648
+          ],
+          "selectedSourceId": 2648,
+          "sourceName": "Bông tai ngọc trai hạt tròn 7mm bạc 925 FW528",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW528",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-7mm-bac-925-fw528-5735.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP512",
+          "quantity": 2,
+          "salePrice": 0,
+          "unitCost": 0,
+          "sourceIds": [
+            2649
+          ],
+          "selectedSourceId": 2649,
+          "sourceName": "Bông tai ngọc trai hạt tròn 6mm bạc 925 FW512",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW512",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-6mm-bac-925-fw512-8187.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP579",
+          "quantity": 2,
+          "salePrice": 1960000,
+          "unitCost": 653333,
+          "sourceIds": [
+            3453
+          ],
+          "selectedSourceId": 3453,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Gạo Size 7-8mm Bạc 925 FW579",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW579",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-gao-size-7-8mm-bac-925-fw579-2995.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP515",
+          "quantity": 2,
+          "salePrice": 1560000,
+          "unitCost": 520000,
+          "sourceIds": [
+            3454
+          ],
+          "selectedSourceId": 3454,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Tròn Gắn Bạc 925 FW515",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW515",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-gan-bac-925-fw515-1800.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP577",
+          "quantity": 2,
+          "salePrice": 1360000,
+          "unitCost": 453333,
+          "sourceIds": [
+            3455
+          ],
+          "selectedSourceId": 3455,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Tròn Size 8mm bạc 925 FW577",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW577",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-size-8mm-bac-925-fw577-8595.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP510",
+          "quantity": 2,
+          "salePrice": 2280000,
+          "unitCost": 760000,
+          "sourceIds": [
+            3456
+          ],
+          "selectedSourceId": 3456,
+          "sourceName": "Bông Tai Bạc 925 Đính Ngọc Ngọc Trai Mẫu FW510",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW510",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-925-dinh-ngoc-ngoc-trai-mau-fw510-5391.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP569",
+          "quantity": 2,
+          "salePrice": 1360000,
+          "unitCost": 453333,
+          "sourceIds": [
+            3457
+          ],
+          "selectedSourceId": 3457,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Tròn 7mm Bạc 925 Mẫu FW569",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW569",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-7mm-bac-925-mau-fw569-8475.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP542",
+          "quantity": 2,
+          "salePrice": 1780000,
+          "unitCost": 593333,
+          "sourceIds": [
+            3458
+          ],
+          "selectedSourceId": 3458,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Tròn 8mm Bạc 925 Mẫu FW542",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW542",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-8mm-bac-925-mau-fw542-5622.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP543",
+          "quantity": 2,
+          "salePrice": 1560000,
+          "unitCost": 520000,
+          "sourceIds": [
+            3459
+          ],
+          "selectedSourceId": 3459,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Tròn 7mm Bạc 925 Mẫu FW543",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW543",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-7mm-bac-925-mau-fw543-7423.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP549",
+          "quantity": 2,
+          "salePrice": 1180000,
+          "unitCost": 393333,
+          "sourceIds": [
+            3460
+          ],
+          "selectedSourceId": 3460,
+          "sourceName": "Bông Tai Ngọc Trai Hạt Tròn 6mm Bạc 925 Mẫu FW549",
+          "sourceLegacySku": null,
+          "sourceModelCode": "FW549",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-trai-hat-tron-6mm-bac-925-mau-fw549-5679.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP114",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            3742
+          ],
+          "selectedSourceId": 3742,
+          "sourceName": "Hoa Tai Đá Opal 6mm Bạc 925 - EBO114",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBO114",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-opal-6mm-bac-925-ebo114-2183.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP029",
+          "quantity": 2,
+          "salePrice": 840000,
+          "unitCost": 280000,
+          "sourceIds": [
+            5460
+          ],
+          "selectedSourceId": 5460,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP029",
+          "sourceLegacySku": "NSSEGP029",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796339298219ac9b73a9af43b10ab5488a76d8e77674-8553.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP165",
+          "quantity": 2,
+          "salePrice": 1200000,
+          "unitCost": 400000,
+          "sourceIds": [
+            5461
+          ],
+          "selectedSourceId": 5461,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP165",
+          "sourceLegacySku": "NSSEGP165",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963396858317dd34719530bf99a81d8e53826d8da93-8573.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP030",
+          "quantity": 2,
+          "salePrice": 840000,
+          "unitCost": 280000,
+          "sourceIds": [
+            5462
+          ],
+          "selectedSourceId": 5462,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP030",
+          "sourceLegacySku": "NSSEGP030",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z679633925122378e3cc4458e8987beca42b8c1dd6dd7e-7358.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP129",
+          "quantity": 2,
+          "salePrice": 1110000,
+          "unitCost": 370000,
+          "sourceIds": [
+            5463
+          ],
+          "selectedSourceId": 5463,
+          "sourceName": "Hoa Tai Ngọc Trai 5mm Bạc 950 - GP129",
+          "sourceLegacySku": "NSSEGP129",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963393655593c576b077d3ac3f43fb0e60e83a568f0-2247.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP118",
+          "quantity": 2,
+          "salePrice": 1350000,
+          "unitCost": 450000,
+          "sourceIds": [
+            5464
+          ],
+          "selectedSourceId": 5464,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP118",
+          "sourceLegacySku": "NSSEGP118",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z679633938818501bb26e8af223a4b24dd9601336a21b5-4870.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP009",
+          "quantity": 2,
+          "salePrice": 1110000,
+          "unitCost": 370000,
+          "sourceIds": [
+            5465
+          ],
+          "selectedSourceId": 5465,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP009",
+          "sourceLegacySku": "NSSEGP009",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796339425094f431e198bde6fa83865097c6a7ac486e-3474.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP212",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5466
+          ],
+          "selectedSourceId": 5466,
+          "sourceName": "Hoa Tai Ngọc Trai 6.5mm Bạc 950 - GP212",
+          "sourceLegacySku": "NSSEGP212",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963394477436596ee66ec7b2f108e884fd0b82a0459-1498.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP018",
+          "quantity": 2,
+          "salePrice": 1140000,
+          "unitCost": 380000,
+          "sourceIds": [
+            5467
+          ],
+          "selectedSourceId": 5467,
+          "sourceName": "Hoa Tai Ngọc Trai 6mm Bạc 950 - GP018",
+          "sourceLegacySku": "NSSEGP018",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z679633949956852aca6b37948f08106fd344d5455686e-6609.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP132",
+          "quantity": 2,
+          "salePrice": 1170000,
+          "unitCost": 390000,
+          "sourceIds": [
+            5468
+          ],
+          "selectedSourceId": 5468,
+          "sourceName": "Hoa Tai Ngọc Trai 5-7mm Bạc 950 - GP132",
+          "sourceLegacySku": "NSSEGP132",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796339543737062547e6cd55e627eaaddc335447ccc4-2392.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP230",
+          "quantity": 2,
+          "salePrice": 1110000,
+          "unitCost": 370000,
+          "sourceIds": [
+            5469
+          ],
+          "selectedSourceId": 5469,
+          "sourceName": "Hoa Tai Ngọc Trai 6mm Bạc 950 - GP230",
+          "sourceLegacySku": "NSSEGP230",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963396310723bc73e9acd9d860fdd42652d65c00bd5-4619.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP008",
+          "quantity": 2,
+          "salePrice": 990000,
+          "unitCost": 330000,
+          "sourceIds": [
+            5470
+          ],
+          "selectedSourceId": 5470,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP008",
+          "sourceLegacySku": "NSSEGP008",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963396570388fa1df15dec571d20e40738d8e5b1f9f-4792.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP050",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            5471
+          ],
+          "selectedSourceId": 5471,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP050",
+          "sourceLegacySku": "NSSEGP050",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796343850436eac9202bec30bb90d41b28fd2819265c-5959.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP223",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            5472
+          ],
+          "selectedSourceId": 5472,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP223",
+          "sourceLegacySku": "NSSEGP223",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796343884423d7e677675b22c79fc7e174e0e13233a4-2147.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP229",
+          "quantity": 2,
+          "salePrice": 1140000,
+          "unitCost": 380000,
+          "sourceIds": [
+            5473
+          ],
+          "selectedSourceId": 5473,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP229",
+          "sourceLegacySku": "NSSEGP229",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796344022296d242af1ef2a8855f740dd41bf9f30ddc-9340.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP137",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            5474
+          ],
+          "selectedSourceId": 5474,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP137",
+          "sourceLegacySku": "NSSEGP137",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963439644484c0c2ab3ceb78277b1baffe15c41ffeb-9520.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP179",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5475
+          ],
+          "selectedSourceId": 5475,
+          "sourceName": "Hoa Tai Ngọc Trai 5mm Bạc 950 - GP179",
+          "sourceLegacySku": "NSSEGP179",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796344000284dc8069c2d2997413ca873d6ecf259520-8880.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP111",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5476
+          ],
+          "selectedSourceId": 5476,
+          "sourceName": "Hoa Tai Ngọc Trai 7mm Bạc 950 -GP111",
+          "sourceLegacySku": "NSSEGP111",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963439857680cb26f626e58fc80414f019afef53382-7287.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP171",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5477
+          ],
+          "selectedSourceId": 5477,
+          "sourceName": "Hoa Tai Ngọc Trai 4-6mm Bạc 950 - GP171",
+          "sourceLegacySku": "NSSEGP171",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963440322497fb00f693fbfdc1ba8dd0ee0095875ad-8973.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP224",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5478
+          ],
+          "selectedSourceId": 5478,
+          "sourceName": "Hoa Tai Ngọc Trai 7mm Bạc 950 - GP224",
+          "sourceLegacySku": "NSSEGP224",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796344162708370e8a50985dc25c98afbdc7d754abaf-9155.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP21S",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5479
+          ],
+          "selectedSourceId": 5479,
+          "sourceName": "Hoa Tai Ngọc Trai 5mm Bạc 950 - GP021S",
+          "sourceLegacySku": "NSSEGP21S",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z679634410132572d4e275d7812cbdda9589a88802c463-1321.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP151",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5480
+          ],
+          "selectedSourceId": 5480,
+          "sourceName": "Hoa Tai Ngọc Trai 5mm Bạc 950 - GP151",
+          "sourceLegacySku": "NSSEGP151",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796344132708cb893107d5a7650427d44d7df428888e-7555.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP075",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5481
+          ],
+          "selectedSourceId": 5481,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP075",
+          "sourceLegacySku": "NSSEGP075",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796344208721aff134117c0ec6fdc88e286f3ac89481-6743.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP124",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5482
+          ],
+          "selectedSourceId": 5482,
+          "sourceName": "Hoa Tai Ngọc Trai 3-4mm Bạc 950 - GP124",
+          "sourceLegacySku": "NSSEGP124",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796344211964978c22d8e9495233fcb05b2cbb0aa01d-7929.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP091",
+          "quantity": 2,
+          "salePrice": 1620000,
+          "unitCost": 540000,
+          "sourceIds": [
+            5483
+          ],
+          "selectedSourceId": 5483,
+          "sourceName": "Hoa Tai Ngọc Trai 3mm Bạc 950 - GP091",
+          "sourceLegacySku": "NSSEGP091",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796347510060dbb2c61e5417944d3ce5e1164422f429-7422.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP086",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5484
+          ],
+          "selectedSourceId": 5484,
+          "sourceName": "Hoa Tai Ngọc Trai 3-4-5mm Bạc 950 - GP086",
+          "sourceLegacySku": "NSSEGP086",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796347486268d2a6f46aa82019ca6e8e9aca7dbf3347-2166.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP060",
+          "quantity": 2,
+          "salePrice": 1320000,
+          "unitCost": 440000,
+          "sourceIds": [
+            5485
+          ],
+          "selectedSourceId": 5485,
+          "sourceName": "Hoa Tai Ngọc Trai 5mm Bạc 950 - GP060",
+          "sourceLegacySku": "NSSEGP060",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796347531993a87d7e4c2d06b8a2d20204590e7f4257-6113.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP146",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5486
+          ],
+          "selectedSourceId": 5486,
+          "sourceName": "Hoa Tai Ngọc Trai 5mm Bạc 950 - GP146",
+          "sourceLegacySku": "NSSEGP146",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796347560498cd753bfa1e18d9337145840d05be735f-9321.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP211",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5487
+          ],
+          "selectedSourceId": 5487,
+          "sourceName": "Hoa Tai Ngọc Trai 5mm Bạc 950 - GP211",
+          "sourceLegacySku": "NSSEGP211",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963476598901b94a19647e137a650b0c72efb44c2be-2646.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP166",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5488
+          ],
+          "selectedSourceId": 5488,
+          "sourceName": "Hoa Tai Ngọc Trai 5mm Bạc 950 - GP166",
+          "sourceLegacySku": "NSSEGP166",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796347632245a9326ff1939254b9cb02e1be9155ef0e-3528.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP119",
+          "quantity": 2,
+          "salePrice": 870000,
+          "unitCost": 290000,
+          "sourceIds": [
+            5489
+          ],
+          "selectedSourceId": 5489,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP119",
+          "sourceLegacySku": "NSSEGP119",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796347693920c5762da77ba08bd559929349b1a13ccd-1403.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP219",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5490
+          ],
+          "selectedSourceId": 5490,
+          "sourceName": "Hoa Tai Ngọc Trai 7.5mm Bạc 950 - GP219",
+          "sourceLegacySku": "NSSEGP219",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963477340529923bbcd028bd5c3abba9c85d68c028c-4006.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP032",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5491
+          ],
+          "selectedSourceId": 5491,
+          "sourceName": "Hoa Tai Ngọc Trai 7mm Bạc 950 - GP032",
+          "sourceLegacySku": "NSSEGP032",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z679634777052899e1eae0ac00e6ba754898129e525ca4-4794.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP170",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5492
+          ],
+          "selectedSourceId": 5492,
+          "sourceName": "Hoa Tai Ngọc Trai 7mm Bạc 950 - GP170",
+          "sourceLegacySku": "NSSEGP170",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796347895300f3e5fc1615a4415330a988c58882ae5f-8549.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP061",
+          "quantity": 2,
+          "salePrice": 1290000,
+          "unitCost": 430000,
+          "sourceIds": [
+            5493
+          ],
+          "selectedSourceId": 5493,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP061",
+          "sourceLegacySku": "NSSEGP061",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963478351484c01ee0ecb21820bbc84ff8ae0c6a27f-6516.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP106",
+          "quantity": 2,
+          "salePrice": 2670000,
+          "unitCost": 890000,
+          "sourceIds": [
+            5494
+          ],
+          "selectedSourceId": 5494,
+          "sourceName": "Hoa Tai Ngọc Trai 9mm Bạc 950 - GP106",
+          "sourceLegacySku": "NSSEGP106",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963479073152bdbde38754434177e8833a1f5ac5c00-2169.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP020",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5495
+          ],
+          "selectedSourceId": 5495,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP020",
+          "sourceLegacySku": "NSSEGP020",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796350224043dd24f89032fe7f8de04437ecdd1a1113-2709.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP040",
+          "quantity": 2,
+          "salePrice": 750000,
+          "unitCost": 250000,
+          "sourceIds": [
+            5496
+          ],
+          "selectedSourceId": 5496,
+          "sourceName": "Hoa Tai Ngọc Trai 7mm Bạc 950 - GP040",
+          "sourceLegacySku": "NSSEGP040",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963502078623880a687c7eff7562725ae2a03d0303b-9197.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP031",
+          "quantity": 2,
+          "salePrice": 1050000,
+          "unitCost": 350000,
+          "sourceIds": [
+            5497
+          ],
+          "selectedSourceId": 5497,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP031",
+          "sourceLegacySku": "NSSEGP031",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796350289549190fd9354536789908ad97ab04bf8420-4494.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGPER214",
+          "quantity": 2,
+          "salePrice": 720000,
+          "unitCost": 240000,
+          "sourceIds": [
+            5498
+          ],
+          "selectedSourceId": 5498,
+          "sourceName": "Hoa Tai Ngọc Trai 5.5mm Bạc 950 - GPER214",
+          "sourceLegacySku": "NSSEGPER214",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z679635024241331acd7cc8444401f4beb325cde75d66e-9074.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP227",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5499
+          ],
+          "selectedSourceId": 5499,
+          "sourceName": "Hoa Tai Ngọc Trai 7mm Bạc 950 - GP227",
+          "sourceLegacySku": "NSSEGP227",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796350302961da755475f1b794bbaa6a79b2bfa06d47-9083.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP056",
+          "quantity": 2,
+          "salePrice": 1290000,
+          "unitCost": 430000,
+          "sourceIds": [
+            5500
+          ],
+          "selectedSourceId": 5500,
+          "sourceName": "Hoa Tai Ngọc Trai 5mm Bạc 950 - GP056",
+          "sourceLegacySku": "NSSEGP056",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796350312263962e1518a6b3199384aff2ec90bd778f-3083.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP149",
+          "quantity": 2,
+          "salePrice": 1140000,
+          "unitCost": 380000,
+          "sourceIds": [
+            5501
+          ],
+          "selectedSourceId": 5501,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP149",
+          "sourceLegacySku": "NSSEGP149",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963504089295e801f2799e689179fd184834041e4a5-9780.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP225",
+          "quantity": 2,
+          "salePrice": 1140000,
+          "unitCost": 380000,
+          "sourceIds": [
+            5502
+          ],
+          "selectedSourceId": 5502,
+          "sourceName": "Hoa Tai Ngọc Trai 7.5mm Bạc 950 - GP225",
+          "sourceLegacySku": "NSSEGP225",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z679635039327768b4cfe973fd8a0976a35d5dd1f76255-9151.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP213",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5503
+          ],
+          "selectedSourceId": 5503,
+          "sourceName": "Hoa Tai Ngọc Trai 4mm Bạc 950 - GP213",
+          "sourceLegacySku": "NSSEGP213",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z679635056409253a654a568d344f3eafc8e051a7910ae-3665.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP214",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5504
+          ],
+          "selectedSourceId": 5504,
+          "sourceName": "Hoa Tai Ngọc Trai 7.5mm Bạc 950 - GP214",
+          "sourceLegacySku": "NSSEGP214",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796350464257c5222adfcd816e3049d2a16d6bc17ec3-3683.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP113",
+          "quantity": 2,
+          "salePrice": 1020000,
+          "unitCost": 340000,
+          "sourceIds": [
+            5505
+          ],
+          "selectedSourceId": 5505,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP113",
+          "sourceLegacySku": "NSSEGP113",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6796350507195f143331eaa3df242426bcf468e006df4-5092.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEGP082",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5506
+          ],
+          "selectedSourceId": 5506,
+          "sourceName": "Hoa Tai Ngọc Trai 8mm Bạc 950 - GP082",
+          "sourceLegacySku": "NSSEGP082",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67963501765465bfe089eb15623ed2a5601a4cb707acf-1083.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Sapphire",
+      "code": "SP",
+      "materialOptionId": "4e1dbf1e-8334-4700-8ec5-865d287ced65",
+      "sourceCategoryIds": [
+        "163"
+      ],
+      "sourceRowCount": 21,
+      "skuCount": 18,
+      "items": [
+        {
+          "sku": "NSSESP063",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            808
+          ],
+          "selectedSourceId": 808,
+          "sourceName": "Hoa Tai Bạc Đính Đá Sapphire Mẫu SJ063P",
+          "sourceLegacySku": null,
+          "sourceModelCode": "SJ063P",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z3984749281427e384a38a4857b574037b7477964cc65c-9298.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP023",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            809
+          ],
+          "selectedSourceId": 809,
+          "sourceName": "Hoa Tai Bạc Đính Đá Sapphire Mẫu SJ023P",
+          "sourceLegacySku": null,
+          "sourceModelCode": "SJ023P",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z39847492684041340794b3290fc73cc8c3fab294c2da0-9644.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP086",
+          "quantity": 2,
+          "salePrice": 2080000,
+          "unitCost": 693333,
+          "sourceIds": [
+            1043
+          ],
+          "selectedSourceId": 1043,
+          "sourceName": "Hoa Tai Bạc Đính Đá Sapphire Mẫu SJ086P",
+          "sourceLegacySku": null,
+          "sourceModelCode": "SJ086P",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z398474922712591a2f6dc26f83ed2d82bff47ab2d4841-1343.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP036",
+          "quantity": 2,
+          "salePrice": 1890000,
+          "unitCost": 630000,
+          "sourceIds": [
+            1044,
+            2529
+          ],
+          "selectedSourceId": 2529,
+          "sourceName": "Bông Tai Bạc 925 Đính Đá Sapphire Mẫu SJ036P",
+          "sourceLegacySku": null,
+          "sourceModelCode": "SJ036P",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-925-dinh-da-sapphire-mau-sj036p-7397.jpg",
+          "duplicateSourceCount": 2
+        },
+        {
+          "sku": "NSSESP006",
+          "quantity": 2,
+          "salePrice": 1790000,
+          "unitCost": 596667,
+          "sourceIds": [
+            811,
+            2530
+          ],
+          "selectedSourceId": 2530,
+          "sourceName": "Bông Tai Bạc 925 Đính Đá Sapphire Mẫu SJ006P",
+          "sourceLegacySku": null,
+          "sourceModelCode": "SJ006P",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-925-dinh-da-sapphire-mau-sj006p-2424.jpg",
+          "duplicateSourceCount": 2
+        },
+        {
+          "sku": "NSSESP008",
+          "quantity": 2,
+          "salePrice": 1890000,
+          "unitCost": 630000,
+          "sourceIds": [
+            2541
+          ],
+          "selectedSourceId": 2541,
+          "sourceName": "Bông Tai Bạc 925 Đính Đá Sapphire Mẫu SP008",
+          "sourceLegacySku": null,
+          "sourceModelCode": "SP008",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-925-dinh-da-sapphire-mau-sp008-7423.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP011",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            2542
+          ],
+          "selectedSourceId": 2542,
+          "sourceName": "Bông Tai Bạc 925 Đính Đá Sapphire Mẫu SP011",
+          "sourceLegacySku": null,
+          "sourceModelCode": "SP011",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-925-dinh-da-sapphire-mau-sp011-1045.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP012",
+          "quantity": 2,
+          "salePrice": 1280000,
+          "unitCost": 426667,
+          "sourceIds": [
+            3653
+          ],
+          "selectedSourceId": 3653,
+          "sourceName": "Bông Tai Đá Sapphire 3*5mm Bạc 925 - ESP012",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ESP012",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-sapphire-35mm-bac-925-esp012-2108.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP013",
+          "quantity": 2,
+          "salePrice": 1260000,
+          "unitCost": 420000,
+          "sourceIds": [
+            3654
+          ],
+          "selectedSourceId": 3654,
+          "sourceName": "Bông Tai Đá Sapphire 3mm Bạc 925 - ESP013",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ESP013",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-sapphire-3mm-bac-925-esp013-8631.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP017",
+          "quantity": 2,
+          "salePrice": 1780000,
+          "unitCost": 593333,
+          "sourceIds": [
+            3656,
+            3657
+          ],
+          "selectedSourceId": 3656,
+          "sourceName": "Bông Tai Đá Sapphire 4*5mm Bạc 925 - ESP017",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ESP017",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-sapphire-35mm-bac-925-esp017-9210.jpg",
+          "duplicateSourceCount": 2
+        },
+        {
+          "sku": "NSSESP019",
+          "quantity": 2,
+          "salePrice": 1680000,
+          "unitCost": 560000,
+          "sourceIds": [
+            3803
+          ],
+          "selectedSourceId": 3803,
+          "sourceName": "Bông Tai Đá Sapphire 3mm Bạc 925 - ESP019",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ESP019",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-sapphire-3mm-bac-925-esp019-1887.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP027",
+          "quantity": 2,
+          "salePrice": 1180000,
+          "unitCost": 393333,
+          "sourceIds": [
+            3804
+          ],
+          "selectedSourceId": 3804,
+          "sourceName": "Bông Tai Đá Sapphire 4*5mm Bạc 925 - ESP027",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ESP027",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-sapphire-45mm-bac-925-esp027-7384.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP001",
+          "quantity": 2,
+          "salePrice": 1880000,
+          "unitCost": 626667,
+          "sourceIds": [
+            3805
+          ],
+          "selectedSourceId": 3805,
+          "sourceName": "Bông Tai Đá Sapphire 3*4mm Bạc 925 - ESM001",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ESM001",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-sapphire-34mm-bac-925-esm001-1381.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP021",
+          "quantity": 2,
+          "salePrice": 1480000,
+          "unitCost": 493333,
+          "sourceIds": [
+            3806
+          ],
+          "selectedSourceId": 3806,
+          "sourceName": "Bông Tai Đá Sapphire 4*5mm Bạc 925 - ESP021",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ESP021",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-sapphire-45mm-bac-925-esp021-5531.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP085",
+          "quantity": 2,
+          "salePrice": 1180000,
+          "unitCost": 393333,
+          "sourceIds": [
+            3936
+          ],
+          "selectedSourceId": 3936,
+          "sourceName": "Bông Tai Đá Sapphire 3*5mm Bạc 925 - RSP085",
+          "sourceLegacySku": null,
+          "sourceModelCode": "RSP085",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-sapphire-35mm-bac-925-rsp085-8825.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP030",
+          "quantity": 2,
+          "salePrice": 1860000,
+          "unitCost": 620000,
+          "sourceIds": [
+            3937
+          ],
+          "selectedSourceId": 3937,
+          "sourceName": "Bông Tai Đá Sapphire 3*5mm Bạc 925 - ESP030",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ESP030",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-sapphire-35mm-bac-925-esp030-9649.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP002",
+          "quantity": 2,
+          "salePrice": 1890000,
+          "unitCost": 630000,
+          "sourceIds": [
+            4030
+          ],
+          "selectedSourceId": 4030,
+          "sourceName": "Bông Tai Đá Sapphire 3*5mm Bạc 925 - EOS001",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EOS001",
+          "skuOrigin": "sequence_collision_reassigned",
+          "legacyImageName": "bong-tai-da-sapphire-35mm-bac-925-eos001-7122.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSESP025",
+          "quantity": 2,
+          "salePrice": 1580000,
+          "unitCost": 526667,
+          "sourceIds": [
+            4031
+          ],
+          "selectedSourceId": 4031,
+          "sourceName": "Bông Tai Đá Sapphire 4*5mm Bạc 925 - ESP025",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ESP025",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-sapphire-45mm-bac-925-esp025-4031.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Tourmaline",
+      "code": "TM",
+      "materialOptionId": "17322a58-a560-4fd5-a9ae-9d615a3d5059",
+      "sourceCategoryIds": [
+        "164",
+        "0"
+      ],
+      "sourceRowCount": 10,
+      "skuCount": 10,
+      "items": [
+        {
+          "sku": "NSSETM001",
+          "quantity": 2,
+          "salePrice": 890000,
+          "unitCost": 296667,
+          "sourceIds": [
+            815
+          ],
+          "selectedSourceId": 815,
+          "sourceName": "Hoa Tai Gắn Đá Tourmaline Cao Cấp",
+          "sourceLegacySku": null,
+          "sourceModelCode": null,
+          "skuOrigin": "next_sequence",
+          "legacyImageName": "z3772797273895e4382e198d9b14aaff08d3e023680903-4151.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSETM002",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            1045
+          ],
+          "selectedSourceId": 1045,
+          "sourceName": "Hoa Tai Bạc 925  Gắn Đá Tourmaline Cao Cấp",
+          "sourceLegacySku": null,
+          "sourceModelCode": null,
+          "skuOrigin": "next_sequence",
+          "legacyImageName": "z392729990358301897661ab23bf36536bb4fe66978887-6286.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSETM013",
+          "quantity": 2,
+          "salePrice": 1360000,
+          "unitCost": 453333,
+          "sourceIds": [
+            3929
+          ],
+          "selectedSourceId": 3929,
+          "sourceName": "Hoa Tai Đá Tourmaline 3mm Bạc 925 - ETM013",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ETM013",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-tourmaline-3mm-bac-925-etm013-2452.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSETM014",
+          "quantity": 2,
+          "salePrice": 1780000,
+          "unitCost": 593333,
+          "sourceIds": [
+            3930
+          ],
+          "selectedSourceId": 3930,
+          "sourceName": "Hoa Tai Đá Tourmaline 2*4mm Bạc 925 -ETM014",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ETM014",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-tourmaline-24mm-bac-925-etm014-6871.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSETM015",
+          "quantity": 2,
+          "salePrice": 1980000,
+          "unitCost": 660000,
+          "sourceIds": [
+            3931
+          ],
+          "selectedSourceId": 3931,
+          "sourceName": "Hoa Tai Đá Tourmaline 3*4mm Bạc 925 - ETM015",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ETM015",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-tourmaline-34mm-bac-925-etm015-8597.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSETM016",
+          "quantity": 2,
+          "salePrice": 1560000,
+          "unitCost": 520000,
+          "sourceIds": [
+            3932
+          ],
+          "selectedSourceId": 3932,
+          "sourceName": "Hoa Tai Đá Tourmaline 3mm Bạc 925 - ETM016",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ETM016",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-tourmaline-3mm-bac-925-etm016-6982.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSETM011",
+          "quantity": 2,
+          "salePrice": 1160000,
+          "unitCost": 386667,
+          "sourceIds": [
+            4014
+          ],
+          "selectedSourceId": 4014,
+          "sourceName": "Hoa Tai Đá Tourmaline 3mm Bạc 925 - ETM011",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ETM011",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-tourmaline-3mm-bac-925-etm011-7191.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSETM012",
+          "quantity": 2,
+          "salePrice": 1160000,
+          "unitCost": 386667,
+          "sourceIds": [
+            4015
+          ],
+          "selectedSourceId": 4015,
+          "sourceName": "Hoa Tai Đá Tourmaline 3mm Bạc 925 - ETM012",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ETM012",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-tourmaline-3mm-bac-925-etm012-1-4679.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSETM007",
+          "quantity": 2,
+          "salePrice": 660000,
+          "unitCost": 220000,
+          "sourceIds": [
+            4016
+          ],
+          "selectedSourceId": 4016,
+          "sourceName": "Hoa Tai Đá Tourmaline 3mm Bạc 925 - ETM007",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ETM007",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-tourmaline-3mm-bac-925-etm007-3840.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSETM017",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            4148
+          ],
+          "selectedSourceId": 4148,
+          "sourceName": "Hoa Tai Đá Tourmaline 3mm Bạc 925 - ETM017",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ETM017",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-tourmaline-3mm-bac-925-etm017-3740.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Ruby",
+      "code": "RB",
+      "materialOptionId": "7ba49313-f9e5-4eea-95cb-bc286095375b",
+      "sourceCategoryIds": [
+        "183"
+      ],
+      "sourceRowCount": 1,
+      "skuCount": 1,
+      "items": [
+        {
+          "sku": "NSSERB045",
+          "quantity": 2,
+          "salePrice": 1620000,
+          "unitCost": 540000,
+          "sourceIds": [
+            977
+          ],
+          "selectedSourceId": 977,
+          "sourceName": "Hoa Tai Bạc Đính Đá Ruby Mẫu SJ045P",
+          "sourceLegacySku": null,
+          "sourceModelCode": "SJ045P",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z3728821802794ac6fbe4e94522bdc5c719b7ca86d2ebd-6820.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Topaz",
+      "code": "BT",
+      "materialOptionId": "a05810f3-b11c-483c-94cc-8cd1434a0ddc",
+      "sourceCategoryIds": [
+        "167"
+      ],
+      "sourceRowCount": 52,
+      "skuCount": 52,
+      "items": [
+        {
+          "sku": "NSSEBT001",
+          "quantity": 2,
+          "salePrice": 945000,
+          "unitCost": 315000,
+          "sourceIds": [
+            1046
+          ],
+          "selectedSourceId": 1046,
+          "sourceName": "Hoa Tai Bạc Đính Đá Topaz Mẫu BT001",
+          "sourceLegacySku": null,
+          "sourceModelCode": "BT001",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z37727953725512544b1c9e353da222e51306853ed8e1c-8707.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT004",
+          "quantity": 2,
+          "salePrice": 1480000,
+          "unitCost": 493333,
+          "sourceIds": [
+            3634
+          ],
+          "selectedSourceId": 3634,
+          "sourceName": "Hoa Tai Đá Topaz 4*6mmBạc 925 - EBT004",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBT004",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-topaz-46mmbac-925-ebt004-7153.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT005",
+          "quantity": 2,
+          "salePrice": 1160000,
+          "unitCost": 386667,
+          "sourceIds": [
+            3713
+          ],
+          "selectedSourceId": 3713,
+          "sourceName": "Hoa Tai Đá Topaz 5*7mmBạc 925 - EBT005",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBT005",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-topaz-57mmbac-925-ebt005-9169.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT006",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            3714
+          ],
+          "selectedSourceId": 3714,
+          "sourceName": "Hoa Tai Đá Topaz 7*9mmBạc 925 - EBT006",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBT006",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-topaz-79mmbac-925-ebt006-7193.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT007",
+          "quantity": 2,
+          "salePrice": 660000,
+          "unitCost": 220000,
+          "sourceIds": [
+            3715
+          ],
+          "selectedSourceId": 3715,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - EBT007",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBT007",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-topaz-5mm-bac-925-ebt007-3107.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT011",
+          "quantity": 2,
+          "salePrice": 980000,
+          "unitCost": 326667,
+          "sourceIds": [
+            3858
+          ],
+          "selectedSourceId": 3858,
+          "sourceName": "Hoa Tai Đá Topaz 4*6mm Bạc 925 - EBT011",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBT011",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-topaz-46mm-bac-925-ebt011-8240.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT012",
+          "quantity": 2,
+          "salePrice": 890000,
+          "unitCost": 296667,
+          "sourceIds": [
+            3859
+          ],
+          "selectedSourceId": 3859,
+          "sourceName": "Hoa Tai Đá Topaz 4*6mm Bạc 925 - EBT012",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBT012",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-topaz-46mm-bac-925-ebt012-8456.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT009",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            3861
+          ],
+          "selectedSourceId": 3861,
+          "sourceName": "Hoa Tai Đá Topaz 4*6mm Bạc 925 - EBT009",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBT009",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-topaz-46mm-bac-925-ebt009-1132.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT010",
+          "quantity": 2,
+          "salePrice": 890000,
+          "unitCost": 296667,
+          "sourceIds": [
+            4074
+          ],
+          "selectedSourceId": 4074,
+          "sourceName": "Hoa Tai Đá Topaz 4*7mm Bạc 925 - EBT010",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBT010",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-topaz-47mm-bac-925-ebt010-2059.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT008",
+          "quantity": 2,
+          "salePrice": 760000,
+          "unitCost": 253333,
+          "sourceIds": [
+            4075
+          ],
+          "selectedSourceId": 4075,
+          "sourceName": "Hoa Tai Đá Topaz 4mm Bạc 925 - EBT008",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBT008",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-topaz-4mm-bac-925-ebt008-8625.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT093",
+          "quantity": 2,
+          "salePrice": 720000,
+          "unitCost": 240000,
+          "sourceIds": [
+            5812
+          ],
+          "selectedSourceId": 5812,
+          "sourceName": "Hoa Tai Đá Topaz 4mm Bạc 925 - BT093",
+          "sourceLegacySku": "NSSEBT093",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68228273419922e45d83d909eec78fda9b66a65d4f8d6-4798.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT037",
+          "quantity": 2,
+          "salePrice": 1230000,
+          "unitCost": 410000,
+          "sourceIds": [
+            5813
+          ],
+          "selectedSourceId": 5813,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - BT037",
+          "sourceLegacySku": "NSSEBT037",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6822827669099aaf52e8ce1cf34400c406e26dc072b8c-3742.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT043",
+          "quantity": 2,
+          "salePrice": 930000,
+          "unitCost": 310000,
+          "sourceIds": [
+            5814
+          ],
+          "selectedSourceId": 5814,
+          "sourceName": "Hoa Tai Đá Topaz 7*9mm Bạc 925 - BT043",
+          "sourceLegacySku": "NSSEBT043",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6822827389958a655769e0fd84bc467bbf48fef832c58-5118.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT066",
+          "quantity": 2,
+          "salePrice": 720000,
+          "unitCost": 240000,
+          "sourceIds": [
+            5815
+          ],
+          "selectedSourceId": 5815,
+          "sourceName": "Hoa Tai Đá Topaz 6mm Bạc 925 - BT066",
+          "sourceLegacySku": "NSSEBT066",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6822827433792ec5d6ad300ed3de18b7773878628cf12-2196.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT042",
+          "quantity": 2,
+          "salePrice": 930000,
+          "unitCost": 310000,
+          "sourceIds": [
+            5816
+          ],
+          "selectedSourceId": 5816,
+          "sourceName": "Hoa Tai Đá Topaz 5*7mm Bạc 925 - BT042",
+          "sourceLegacySku": "NSSEBT042",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68228274818594dbfc1ee139346128370fa1efb598ee0-4094.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT063",
+          "quantity": 2,
+          "salePrice": 660000,
+          "unitCost": 220000,
+          "sourceIds": [
+            5817
+          ],
+          "selectedSourceId": 5817,
+          "sourceName": "Hoa Tai Đá Topaz 4mm Bạc 925 - BT063",
+          "sourceLegacySku": "NSSEBT063",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6822827527475c8058edca284cafdd130b98c96654829-3805.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT054",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5818
+          ],
+          "selectedSourceId": 5818,
+          "sourceName": "Hoa Tai Đá Topaz 4mm Bạc 925 - BT054",
+          "sourceLegacySku": "NSSEBT054",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68228275742008b0add7fc9b557cb0640356b06ae9a76-1870.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT047",
+          "quantity": 2,
+          "salePrice": 450000,
+          "unitCost": 150000,
+          "sourceIds": [
+            5819
+          ],
+          "selectedSourceId": 5819,
+          "sourceName": "Hoa Tai Đá Topaz 4*6mm Bạc 925 - BT047",
+          "sourceLegacySku": "NSSEBT047",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6822827584933f16c740169d01077c6c311d8fa9ecdb8-9918.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT058",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5820
+          ],
+          "selectedSourceId": 5820,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - BT058",
+          "sourceLegacySku": "NSSEBT058",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6822827595985fb07657c516a908b81251c8dc891af69-3959.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT040",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5821
+          ],
+          "selectedSourceId": 5821,
+          "sourceName": "Hoa Tai Đá Topaz 4*6mm Bạc 925 - BT040",
+          "sourceLegacySku": "NSSEBT040",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6822827659100fd76b82bc083884a6f9cf06c8e6d5642-5791.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT061",
+          "quantity": 2,
+          "salePrice": 690000,
+          "unitCost": 230000,
+          "sourceIds": [
+            5822
+          ],
+          "selectedSourceId": 5822,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - BT061",
+          "sourceLegacySku": "NSSEBT061",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6822831003215b85a8f27a2008c5339931bf117a9b217-7429.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT074",
+          "quantity": 2,
+          "salePrice": 870000,
+          "unitCost": 290000,
+          "sourceIds": [
+            5824
+          ],
+          "selectedSourceId": 5824,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - BT074",
+          "sourceLegacySku": "NSSEBT074",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68228309831151ca03ad6da45c08fe36d60fb04977d65-1332.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT076",
+          "quantity": 2,
+          "salePrice": 1020000,
+          "unitCost": 340000,
+          "sourceIds": [
+            5825
+          ],
+          "selectedSourceId": 5825,
+          "sourceName": "Hoa Tai Đá Topaz 7*9mm Bạc 925 - BT076",
+          "sourceLegacySku": "NSSEBT076",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68228310193685250500bf6f85cecb580cec97e66e48c-8921.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT048",
+          "quantity": 2,
+          "salePrice": 840000,
+          "unitCost": 280000,
+          "sourceIds": [
+            5826
+          ],
+          "selectedSourceId": 5826,
+          "sourceName": "Hoa Tai Đá Topaz 5*7mm Bạc 925 - BT048",
+          "sourceLegacySku": "NSSEBT048",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6822831035342628c6110b4a9962a348eb994767741ef-5644.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT056",
+          "quantity": 2,
+          "salePrice": 750000,
+          "unitCost": 250000,
+          "sourceIds": [
+            5827
+          ],
+          "selectedSourceId": 5827,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - BT056",
+          "sourceLegacySku": "NSSEBT056",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68228310867889fb4f465da060fc3a993d50decabdf3f-5793.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT068",
+          "quantity": 2,
+          "salePrice": 600000,
+          "unitCost": 200000,
+          "sourceIds": [
+            5828
+          ],
+          "selectedSourceId": 5828,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - BT068",
+          "sourceLegacySku": "NSSEBT068",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6822831122843768353159973bcec3de2495be1fadea9-4662.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT059",
+          "quantity": 2,
+          "salePrice": 660000,
+          "unitCost": 220000,
+          "sourceIds": [
+            5829
+          ],
+          "selectedSourceId": 5829,
+          "sourceName": "Hoa Tai Đá Topaz 4*6mm Bạc 925 - BT059",
+          "sourceLegacySku": "NSSEBT059",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6823538789095a63739c2f5facfb463f56ac8c31a8bec-5789.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT067",
+          "quantity": 2,
+          "salePrice": 540000,
+          "unitCost": 180000,
+          "sourceIds": [
+            5830
+          ],
+          "selectedSourceId": 5830,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - BT067",
+          "sourceLegacySku": "NSSEBT067",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68235388151203f66e76ac577e4dc7ef0b222b01f6a6a-4659.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT050",
+          "quantity": 2,
+          "salePrice": 450000,
+          "unitCost": 150000,
+          "sourceIds": [
+            5831
+          ],
+          "selectedSourceId": 5831,
+          "sourceName": "Hoa Tai Đá Topaz 4*6mm Bạc 925 - BT050",
+          "sourceLegacySku": "NSSEBT050",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68235388657982b7a9a453498c3b802e9c12cc17c0af8-7737.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT055",
+          "quantity": 2,
+          "salePrice": 540000,
+          "unitCost": 180000,
+          "sourceIds": [
+            5832
+          ],
+          "selectedSourceId": 5832,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - BT055",
+          "sourceLegacySku": "NSSEBT055",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68235388563900e87c8b749db23605593d2725ace6fc7-1656.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT071",
+          "quantity": 2,
+          "salePrice": 300000,
+          "unitCost": 100000,
+          "sourceIds": [
+            5833
+          ],
+          "selectedSourceId": 5833,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - BT071",
+          "sourceLegacySku": "NSSEBT071",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68235388794829aeb812b8ba1db378ee25b06201c7886-2303.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT078",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5834
+          ],
+          "selectedSourceId": 5834,
+          "sourceName": "Hoa Tai Đá Topaz 4*6mm Bạc 925 - BT078",
+          "sourceLegacySku": "NSSEBT078",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6823538952539667eeb52dd8ee5cd08e29a40d7cd691c-9153.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT044",
+          "quantity": 2,
+          "salePrice": 990000,
+          "unitCost": 330000,
+          "sourceIds": [
+            5835
+          ],
+          "selectedSourceId": 5835,
+          "sourceName": "Hoa Tai Đá Topaz 8mm Bạc 925 - BT044",
+          "sourceLegacySku": "NSSEBT044",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68235391161582e7b644cca061d0d56999751c480772b-7709.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT041",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5836
+          ],
+          "selectedSourceId": 5836,
+          "sourceName": "Hoa Tai Đá Topaz 6mm Bạc 925 - BT041",
+          "sourceLegacySku": "NSSEBT041",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68235391188229784608aebc7713fa7037972b0b958dc-7531.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT070",
+          "quantity": 2,
+          "salePrice": 1200000,
+          "unitCost": 400000,
+          "sourceIds": [
+            5837
+          ],
+          "selectedSourceId": 5837,
+          "sourceName": "Hoa Tai Đá Topaz 5*7mm Bạc 925 - BT070",
+          "sourceLegacySku": "NSSEBT070",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6823539091022a4cb40a8b40aca75a904f2f261afe3ee-7911.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT060",
+          "quantity": 2,
+          "salePrice": 690000,
+          "unitCost": 230000,
+          "sourceIds": [
+            5838
+          ],
+          "selectedSourceId": 5838,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - BT060",
+          "sourceLegacySku": "NSSEBT060",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68235390493698443c7766bab59efe2c7100bf8a6f27f-5156.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT057",
+          "quantity": 2,
+          "salePrice": 930000,
+          "unitCost": 310000,
+          "sourceIds": [
+            5839
+          ],
+          "selectedSourceId": 5839,
+          "sourceName": "Hoa Tai Đá Topaz 4mm Bạc 925 - BT057",
+          "sourceLegacySku": "NSSEBT057",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68235436313151b72f96c99a701ac71d2d43687c43ec6-3989.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT038",
+          "quantity": 2,
+          "salePrice": 1260000,
+          "unitCost": 420000,
+          "sourceIds": [
+            5840
+          ],
+          "selectedSourceId": 5840,
+          "sourceName": "Hoa Tai Đá Topaz 4*6mm Bạc 925 - BT038",
+          "sourceLegacySku": "NSSEBT038",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6823543601092d27e6645405b69468749a808378bf256-8900.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT053",
+          "quantity": 2,
+          "salePrice": 1500000,
+          "unitCost": 500000,
+          "sourceIds": [
+            5841
+          ],
+          "selectedSourceId": 5841,
+          "sourceName": "Hoa Tai Đá Topaz 6*8mm Bạc 925 - BT053",
+          "sourceLegacySku": "NSSEBT053",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6823543584849c228f87987b4be97349f7fd65e6ea8db-4062.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT051",
+          "quantity": 2,
+          "salePrice": 600000,
+          "unitCost": 200000,
+          "sourceIds": [
+            5842
+          ],
+          "selectedSourceId": 5842,
+          "sourceName": "Hoa Tai Đá Topaz 4mm Bạc 925 - BT051",
+          "sourceLegacySku": "NSSEBT051",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z682354357387417ef8a7eecae8f24b7b31e9b128eddd7-7018.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT062",
+          "quantity": 2,
+          "salePrice": 600000,
+          "unitCost": 200000,
+          "sourceIds": [
+            5843
+          ],
+          "selectedSourceId": 5843,
+          "sourceName": "Hoa Tai Đá Topaz 4mm Bạc 925 - BT062",
+          "sourceLegacySku": "NSSEBT062",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6823543540057f9e6c29ff2251d5fc3594bfc2f13a08a-7677.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT046",
+          "quantity": 2,
+          "salePrice": 570000,
+          "unitCost": 190000,
+          "sourceIds": [
+            5844
+          ],
+          "selectedSourceId": 5844,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - BT046",
+          "sourceLegacySku": "NSSEBT046",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68235434859811b8f70fa55016c15f3de57f8eeaa2968-9731.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT077",
+          "quantity": 2,
+          "salePrice": 540000,
+          "unitCost": 180000,
+          "sourceIds": [
+            5845
+          ],
+          "selectedSourceId": 5845,
+          "sourceName": "Hoa Tai Đá Topaz 5mm Bạc 925 - BT077",
+          "sourceLegacySku": "NSSEBT077",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68235434909663f426cdaec0d070c63ba6bff4369f9e2-6150.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT065",
+          "quantity": 2,
+          "salePrice": 660000,
+          "unitCost": 220000,
+          "sourceIds": [
+            5846
+          ],
+          "selectedSourceId": 5846,
+          "sourceName": "Hoa Tai Đá Topaz 4*5mm Bạc 925 - BT065",
+          "sourceLegacySku": "NSSEBT065",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6823543501320d6a9e9eb61ed967351a151abc3b00b5f-8237.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT045",
+          "quantity": 2,
+          "salePrice": 720000,
+          "unitCost": 240000,
+          "sourceIds": [
+            5847
+          ],
+          "selectedSourceId": 5847,
+          "sourceName": "Hoa Tai Đá Topaz 4mm Bạc 925 - BT045",
+          "sourceLegacySku": "NSSEBT045",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6823543413767fe33370de655359cd8abd9480ecb0146-5229.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT090",
+          "quantity": 2,
+          "salePrice": 840000,
+          "unitCost": 280000,
+          "sourceIds": [
+            5848
+          ],
+          "selectedSourceId": 5848,
+          "sourceName": "Hoa Tai Đá Topaz 6mm Bạc 925 - BT090",
+          "sourceLegacySku": "NSSEBT090",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6823543443578d4f7d51f25cdc8b5749f5b56c41c026d-4898.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT086",
+          "quantity": 2,
+          "salePrice": 750000,
+          "unitCost": 250000,
+          "sourceIds": [
+            5849
+          ],
+          "selectedSourceId": 5849,
+          "sourceName": "Hoa Tai Đá Topaz 4mm Bạc 925 - BT086",
+          "sourceLegacySku": "NSSEBT086",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68235496125665b18b2cdb9c33baabf26e73f19484b6d-5796.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT073",
+          "quantity": 2,
+          "salePrice": 840000,
+          "unitCost": 280000,
+          "sourceIds": [
+            5850
+          ],
+          "selectedSourceId": 5850,
+          "sourceName": "Hoa Tai Đá Topaz 5*7mm Bạc 925 - BT073",
+          "sourceLegacySku": "NSSEBT073",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68235496018909105ac5537e1712ba371a8f0f6199726-9812.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT075",
+          "quantity": 2,
+          "salePrice": 690000,
+          "unitCost": 230000,
+          "sourceIds": [
+            5851
+          ],
+          "selectedSourceId": 5851,
+          "sourceName": "Hoa Tai Đá Topaz 5*7mm Bạc 925 - BT075",
+          "sourceLegacySku": "NSSEBT075",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z682354947795628bd90ae9ceb08bb963d69a6e448fc54-4541.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT049",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5852
+          ],
+          "selectedSourceId": 5852,
+          "sourceName": "Hoa Tai Đá Topaz 4*6mm Bạc 925 - BT049",
+          "sourceLegacySku": "NSSEBT049",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6823549498119ab339f89fe026a6723230ca29c9ce4e9-9930.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT084",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5853
+          ],
+          "selectedSourceId": 5853,
+          "sourceName": "Hoa Tai Đá Topaz 4*6mm Bạc 925 - BT084",
+          "sourceLegacySku": "NSSEBT084",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z682354951895050f9e3598b38a154d1994d313a2483c6-1916.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBT087",
+          "quantity": 2,
+          "salePrice": 1170000,
+          "unitCost": 390000,
+          "sourceIds": [
+            5854
+          ],
+          "selectedSourceId": 5854,
+          "sourceName": "Hoa Tai Đá Topaz 6*8mm Bạc 925 - BT087",
+          "sourceLegacySku": "NSSEBT087",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6823549554967192d3023302af4c282d48252a9a6dea9-3547.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Ngọc Bích",
+      "code": "NE",
+      "materialOptionId": "ba417d3d-48ec-4e75-977c-4859874f6cc4",
+      "sourceCategoryIds": [
+        "168"
+      ],
+      "sourceRowCount": 68,
+      "skuCount": 61,
+      "items": [
+        {
+          "sku": "NSSENE003",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            1047
+          ],
+          "selectedSourceId": 1047,
+          "sourceName": "Hoa Tai Bạc 925 Gắn Ngọc Bích Mẫu ET003",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ET003",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z312214036324695a38d1a557a59dee0197cf01022ded1-1902.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12160",
+          "quantity": 2,
+          "salePrice": 1590000,
+          "unitCost": 530000,
+          "sourceIds": [
+            1048
+          ],
+          "selectedSourceId": 1048,
+          "sourceName": "Hoa Tai Bạc 925 Gắn Ngọc Bích Mẫu E12160",
+          "sourceLegacySku": null,
+          "sourceModelCode": "E12160",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z3122140380840313ca4fa5eb3bf14b86858cf02f6c8fa-2519.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12156",
+          "quantity": 2,
+          "salePrice": 1110000,
+          "unitCost": 370000,
+          "sourceIds": [
+            1049
+          ],
+          "selectedSourceId": 1049,
+          "sourceName": "Hoa Tai Bạc 925 Gắn Ngọc Bích Mẫu E12156",
+          "sourceLegacySku": null,
+          "sourceModelCode": "E12156",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z3122140408463917f798a563e31cb79417bae1671ea9f-6746.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE103",
+          "quantity": 2,
+          "salePrice": 2760000,
+          "unitCost": 920000,
+          "sourceIds": [
+            1050
+          ],
+          "selectedSourceId": 1050,
+          "sourceName": "Hoa Tai Bạc 925 Gắn Ngọc Bích Mẫu ET103",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ET103",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z3749474793924b9c0f6787b83005b106621165daf4a0d-3461.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE121",
+          "quantity": 2,
+          "salePrice": 1490000,
+          "unitCost": 496667,
+          "sourceIds": [
+            1051
+          ],
+          "selectedSourceId": 1051,
+          "sourceName": "Hoa Tai Bạc 925 Gắn Ngọc Bích Mẫu ET121",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ET121",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z374947479630092a6738b8847435b47fa671af1621ead-5521.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12161",
+          "quantity": 2,
+          "salePrice": 1590000,
+          "unitCost": 530000,
+          "sourceIds": [
+            2550,
+            5805
+          ],
+          "selectedSourceId": 2550,
+          "sourceName": "Bông Tai Bạc 925 Đính Ngọc Bích Canada Mẫu NE12161",
+          "sourceLegacySku": "NSSENE12161",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "bong-tai-bac-925-dinh-ngoc-bich-canada-mau-ne12161-5635.jpg",
+          "duplicateSourceCount": 2
+        },
+        {
+          "sku": "NSSENE005",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            2551
+          ],
+          "selectedSourceId": 2551,
+          "sourceName": "Bông Tai Bạc 925 Đính Ngọc Bích Canada Mẫu NET005",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NET005",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-925-dinh-ngoc-bich-canada-mau-net005-8052.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12036",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            2552
+          ],
+          "selectedSourceId": 2552,
+          "sourceName": "Bông Tai Bạc 925 Đính Ngọc Bích Canada Mẫu NE12036",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12036",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-925-dinh-ngoc-bich-canada-mau-ne12036-5528.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12106",
+          "quantity": 2,
+          "salePrice": 860000,
+          "unitCost": 286667,
+          "sourceIds": [
+            2553
+          ],
+          "selectedSourceId": 2553,
+          "sourceName": "Bông Tai Bạc 925 Đính Ngọc Bích Canada Mẫu NE12106",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12106",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-925-dinh-ngoc-bich-canada-mau-ne12106-2176.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12019",
+          "quantity": 2,
+          "salePrice": 2080000,
+          "unitCost": 693333,
+          "sourceIds": [
+            2554
+          ],
+          "selectedSourceId": 2554,
+          "sourceName": "Bông Tai Bạc 925 Đính Ngọc Bích Canada Mẫu NE12019",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12019",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-925-dinh-ngoc-bich-canada-mau-ne12019-2563.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE004",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            2555
+          ],
+          "selectedSourceId": 2555,
+          "sourceName": "Bông Tai Bạc 925 Đính Ngọc Bích Canada Mẫu NET004",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NET004",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-925-dinh-ngoc-bich-canada-mau-net004-6957.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12011",
+          "quantity": 2,
+          "salePrice": 1180000,
+          "unitCost": 393333,
+          "sourceIds": [
+            2556,
+            5810
+          ],
+          "selectedSourceId": 2556,
+          "sourceName": "Bông Tai Bạc 925 Đính Ngọc Bích Canada Mẫu NE12011",
+          "sourceLegacySku": "NSSENE12011",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "bong-tai-bac-925-dinh-ngoc-bich-canada-mau-ne12011-3938.jpg",
+          "duplicateSourceCount": 2
+        },
+        {
+          "sku": "NSSENE12021",
+          "quantity": 2,
+          "salePrice": 2690000,
+          "unitCost": 896667,
+          "sourceIds": [
+            2557
+          ],
+          "selectedSourceId": 2557,
+          "sourceName": "Bông Tai Bạc 925 Đính Ngọc Bích Canada Mẫu NE12021",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12021",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-925-dinh-ngoc-bich-canada-mau-ne12021-5813.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE118",
+          "quantity": 2,
+          "salePrice": 1180000,
+          "unitCost": 393333,
+          "sourceIds": [
+            2558
+          ],
+          "selectedSourceId": 2558,
+          "sourceName": "Bông Tai Bạc 925 Đính Ngọc Bích Canada - NET118",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NET118",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-bac-925-dinh-ngoc-bich-canada-mau-net118-3090.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12153",
+          "quantity": 2,
+          "salePrice": 1280000,
+          "unitCost": 426667,
+          "sourceIds": [
+            2559
+          ],
+          "selectedSourceId": 2559,
+          "sourceName": "Bông Tai Ngọc Bích Canada 6*9mm Bạc 925 - NE12153",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12153",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-69mm-bac-925-ne12153-4142.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12159",
+          "quantity": 2,
+          "salePrice": 1480000,
+          "unitCost": 493333,
+          "sourceIds": [
+            2560
+          ],
+          "selectedSourceId": 2560,
+          "sourceName": "Bông Tai Ngọc Bích Canada 7*9mm Bạc 925 - NE12159",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12159",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-79mm-bac-925-ne12159-4188.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12139",
+          "quantity": 2,
+          "salePrice": 1260000,
+          "unitCost": 420000,
+          "sourceIds": [
+            2561
+          ],
+          "selectedSourceId": 2561,
+          "sourceName": "Bông Tai Ngọc Bích Canada 7*9mm Bạc 925 - NE12139",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12139",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z4648689509361f63ca1230a35f0de9a4e3bfb6f4d3a9a-4872.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12048",
+          "quantity": 2,
+          "salePrice": 1460000,
+          "unitCost": 486667,
+          "sourceIds": [
+            3531
+          ],
+          "selectedSourceId": 3531,
+          "sourceName": "Bông Tai Ngọc Bích Canada 8mm Bạc 925 - NE12048",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12048",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-8mm-bac-925-ne12048-9749.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12096",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            3532
+          ],
+          "selectedSourceId": 3532,
+          "sourceName": "Bông Tai Ngọc Bích Canada 6mm Bạc 925 - NE12096",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12096",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-6mm-bac-925-ne12096-9326.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12014",
+          "quantity": 2,
+          "salePrice": 1560000,
+          "unitCost": 520000,
+          "sourceIds": [
+            3533,
+            5794
+          ],
+          "selectedSourceId": 3533,
+          "sourceName": "Bông Tai Ngọc Bích Canada 6*8mm Bạc 925 - NE12014",
+          "sourceLegacySku": "NSSENE12014",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-68mm-bac-925-ne12014-7305.jpg",
+          "duplicateSourceCount": 2
+        },
+        {
+          "sku": "NSSENE12219",
+          "quantity": 2,
+          "salePrice": 980000,
+          "unitCost": 326667,
+          "sourceIds": [
+            3534
+          ],
+          "selectedSourceId": 3534,
+          "sourceName": "Bông Tai Ngọc Bích Canada 6*9mm Bạc 925 - NE12219",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12219",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-69mm-bac-925-ne12219-3529.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12208",
+          "quantity": 2,
+          "salePrice": 620000,
+          "unitCost": 206667,
+          "sourceIds": [
+            3535
+          ],
+          "selectedSourceId": 3535,
+          "sourceName": "Bông Tai Ngọc Bích Canada 4*6mm Bạc 925 - NE12208",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12208",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-46mm-bac-925-ne12208-6344.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12147",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            3536
+          ],
+          "selectedSourceId": 3536,
+          "sourceName": "Bông Tai Ngọc Bích Canada 6*8mm Bạc 925 - NE12147",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12147",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-68mm-bac-925-ne12147-5889.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12125",
+          "quantity": 2,
+          "salePrice": 1280000,
+          "unitCost": 426667,
+          "sourceIds": [
+            3537,
+            3541
+          ],
+          "selectedSourceId": 3537,
+          "sourceName": "Bông Tai Ngọc Bích Canada 8*10mm Bạc 925 - NE12125",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12125",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-810mm-bac-925-ne12125-1961.jpg",
+          "duplicateSourceCount": 2
+        },
+        {
+          "sku": "NSSENE12010",
+          "quantity": 2,
+          "salePrice": 1160000,
+          "unitCost": 386667,
+          "sourceIds": [
+            3538,
+            5811
+          ],
+          "selectedSourceId": 3538,
+          "sourceName": "Bông Tai Ngọc Bích Canada 6*8mm Bạc 925 - NE12010",
+          "sourceLegacySku": "NSSENE12010",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-68mm-bac-925-ne12010-3588.jpg",
+          "duplicateSourceCount": 2
+        },
+        {
+          "sku": "NSSENE12112",
+          "quantity": 2,
+          "salePrice": 0,
+          "unitCost": 0,
+          "sourceIds": [
+            3539,
+            5798
+          ],
+          "selectedSourceId": 3539,
+          "sourceName": "Bông Tai Ngọc Bích Canada 8*10mm Bạc 925 - NE12112",
+          "sourceLegacySku": "NSSENE12112",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-810mm-bac-925-ne12112-8637.jpg",
+          "duplicateSourceCount": 2
+        },
+        {
+          "sku": "NSSENE12138",
+          "quantity": 2,
+          "salePrice": 1560000,
+          "unitCost": 520000,
+          "sourceIds": [
+            3540
+          ],
+          "selectedSourceId": 3540,
+          "sourceName": "Bông Tai Ngọc Bích Canada 6*9mm Bạc 925 - NE12138",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12138",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-69mm-bac-925-ne12138-7060.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12247",
+          "quantity": 2,
+          "salePrice": 1260000,
+          "unitCost": 420000,
+          "sourceIds": [
+            3592,
+            5809
+          ],
+          "selectedSourceId": 3592,
+          "sourceName": "Bông Tai Ngọc Bích Canada 4*8mm Bạc 925 - NE12247",
+          "sourceLegacySku": "NSSENE12247",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-48mm-bac-925-ne12247-6809.jpg",
+          "duplicateSourceCount": 2
+        },
+        {
+          "sku": "NSSENE12223",
+          "quantity": 2,
+          "salePrice": 860000,
+          "unitCost": 286667,
+          "sourceIds": [
+            3593
+          ],
+          "selectedSourceId": 3593,
+          "sourceName": "Bông Tai Ngọc Bích Canada 6*8mm Bạc 925 - NE12223",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12223",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-68mm-bac-925-ne12223-4712.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12242",
+          "quantity": 2,
+          "salePrice": 860000,
+          "unitCost": 286667,
+          "sourceIds": [
+            3594
+          ],
+          "selectedSourceId": 3594,
+          "sourceName": "Bông Tai Ngọc Bích Canada 3*5mm Bạc 925 - NE12242",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12242",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-35mm-bac-925-ne12242-2850.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12023",
+          "quantity": 2,
+          "salePrice": 2980000,
+          "unitCost": 993333,
+          "sourceIds": [
+            3595
+          ],
+          "selectedSourceId": 3595,
+          "sourceName": "Bông Tai Ngọc Bích Canada 12*12mm Bạc 925 - NE12023",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12023",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-1212mm-bac-925-ne12023-5205.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12280",
+          "quantity": 2,
+          "salePrice": 1560000,
+          "unitCost": 520000,
+          "sourceIds": [
+            3596
+          ],
+          "selectedSourceId": 3596,
+          "sourceName": "Bông Tai Ngọc Bích Canada 8*8mm Bạc 925 - NE12280",
+          "sourceLegacySku": null,
+          "sourceModelCode": "NE12280",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-canada-88mm-bac-925-ne12280-7286.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE001",
+          "quantity": 2,
+          "salePrice": 860000,
+          "unitCost": 286667,
+          "sourceIds": [
+            3697
+          ],
+          "selectedSourceId": 3697,
+          "sourceName": "Bông Tai Ngọc Bích Đỏ 5*7mm Bạc 925 - EAG001",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EAG001",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-do-57mm-bac-925-eag001-8223.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE002",
+          "quantity": 2,
+          "salePrice": 680000,
+          "unitCost": 226667,
+          "sourceIds": [
+            3698
+          ],
+          "selectedSourceId": 3698,
+          "sourceName": "Bông Tai Ngọc Bích Đỏ 5*7mm Bạc 925 - EAG002",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EAG002",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-ngoc-bich-do-57mm-bac-925-eag002-5472.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE006",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            3699
+          ],
+          "selectedSourceId": 3699,
+          "sourceName": "Bông Tai Ngọc Bích Đỏ 5*7mm Bạc 925 - EAG003",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EAG003",
+          "skuOrigin": "sequence_collision_reassigned",
+          "legacyImageName": "bong-tai-ngoc-bich-do-57mm-bac-925-eag003-4242.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE007",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            3700
+          ],
+          "selectedSourceId": 3700,
+          "sourceName": "Bông Tai Ngọc Bích Đỏ 5*7mm Bạc 925 - EAG004",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EAG004",
+          "skuOrigin": "sequence_collision_reassigned",
+          "legacyImageName": "bong-tai-ngoc-bich-do-57mm-bac-925-eag004-6464.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12004",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5781
+          ],
+          "selectedSourceId": 5781,
+          "sourceName": "Hoa Tai Ngọc Bích 5*7mm Bạc 925 - NE12004",
+          "sourceLegacySku": "NSSENE12004",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820894731414424bb8fc8460d61e6ccadbfc5823d61a-7950.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12293",
+          "quantity": 2,
+          "salePrice": 840000,
+          "unitCost": 280000,
+          "sourceIds": [
+            5782
+          ],
+          "selectedSourceId": 5782,
+          "sourceName": "Hoa Tai Ngọc Bích 5mm Bạc 925 - NE12293",
+          "sourceLegacySku": "NSSENE12293",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820895149914ada6ac623451c18635bf8b62c2f65820-6859.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE123721",
+          "quantity": 2,
+          "salePrice": 930000,
+          "unitCost": 310000,
+          "sourceIds": [
+            5783
+          ],
+          "selectedSourceId": 5783,
+          "sourceName": "Hoa Tai Ngọc Bích 5mm Bạc 925 - NE12372-1",
+          "sourceLegacySku": "NSSENE12372-1",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku_sanitized",
+          "legacyImageName": "z6820895110830664ecce4a737ae37427bc5376de7c02e-7494.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE1233",
+          "quantity": 2,
+          "salePrice": 720000,
+          "unitCost": 240000,
+          "sourceIds": [
+            5784
+          ],
+          "selectedSourceId": 5784,
+          "sourceName": "Hoa Tai Ngọc Bích 2mm Bạc 925 - NE12333",
+          "sourceLegacySku": "NSSENE1233",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820895055913633e00a3153d28c6dd6ec0a9ea008cb0-4436.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12123",
+          "quantity": 2,
+          "salePrice": 1500000,
+          "unitCost": 500000,
+          "sourceIds": [
+            5785
+          ],
+          "selectedSourceId": 5785,
+          "sourceName": "Hoa Tai Ngọc Bích 8*10mm Bạc 925 - NE12123",
+          "sourceLegacySku": "NSSENE12123",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820895079743037c30633d3c22fc4a485269e8a58319-1703.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12073",
+          "quantity": 2,
+          "salePrice": 1320000,
+          "unitCost": 440000,
+          "sourceIds": [
+            5786
+          ],
+          "selectedSourceId": 5786,
+          "sourceName": "Hoa Tai Ngọc Bích 7*9mm Bạc 925 - NE12073",
+          "sourceLegacySku": "NSSENE12073",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z682089504578609297d07e8d10b75c0104ea39a00d28b-4203.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12002",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5787
+          ],
+          "selectedSourceId": 5787,
+          "sourceName": "Hoa Tai Ngọc Bích 3*5mm Bạc 925 - NE12002",
+          "sourceLegacySku": "NSSENE12002",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820895004464ff7d8c8ead5dfca74f1fa405a6a307a0-5127.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12321",
+          "quantity": 2,
+          "salePrice": 870000,
+          "unitCost": 290000,
+          "sourceIds": [
+            5788
+          ],
+          "selectedSourceId": 5788,
+          "sourceName": "Hoa Tai Ngọc Bích 4*6mm Bạc 925 - NE12321",
+          "sourceLegacySku": "NSSENE12321",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68208950048035421b915218c8a67a46be335ae707eb7-3241.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12003",
+          "quantity": 2,
+          "salePrice": 870000,
+          "unitCost": 290000,
+          "sourceIds": [
+            5789
+          ],
+          "selectedSourceId": 5789,
+          "sourceName": "Hoa Tai Ngọc Bích 5mm Bạc 925 - NE12003",
+          "sourceLegacySku": "NSSENE12003",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820894942560f311fcd62287c25e8b5664bc29520eac-4762.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12266",
+          "quantity": 2,
+          "salePrice": 900000,
+          "unitCost": 300000,
+          "sourceIds": [
+            5790
+          ],
+          "selectedSourceId": 5790,
+          "sourceName": "Hoa Tai Ngọc Bích 4*8mm Bạc 925 - NE12266",
+          "sourceLegacySku": "NSSENE12266",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68209062569641f8359de17629d8290070d1a58bc3f8e-8877.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12149",
+          "quantity": 2,
+          "salePrice": 2310000,
+          "unitCost": 770000,
+          "sourceIds": [
+            5791
+          ],
+          "selectedSourceId": 5791,
+          "sourceName": "Hoa Tai Ngọc Bích 6*9mm Bạc 925 - NE12149",
+          "sourceLegacySku": "NSSENE12149",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820906664007cfafb96d442ff6f8453bffa14eca2dfc-6789.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12297",
+          "quantity": 2,
+          "salePrice": 1110000,
+          "unitCost": 370000,
+          "sourceIds": [
+            5792
+          ],
+          "selectedSourceId": 5792,
+          "sourceName": "Hoa Tai Ngọc Bích 6*8mm Bạc 925 - NE12297",
+          "sourceLegacySku": "NSSENE12297",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z682090667405151aaf49c360d4073364489ad4b8f27a9-4932.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12226",
+          "quantity": 2,
+          "salePrice": 840000,
+          "unitCost": 280000,
+          "sourceIds": [
+            5793
+          ],
+          "selectedSourceId": 5793,
+          "sourceName": "Hoa Tai Ngọc Bích3*6mm Bạc 925 - NE12226",
+          "sourceLegacySku": "NSSENE12226",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z682090661606644cc7e5ac6b991405bf30f29aa26c2ad-4482.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12268",
+          "quantity": 2,
+          "salePrice": 1440000,
+          "unitCost": 480000,
+          "sourceIds": [
+            5795
+          ],
+          "selectedSourceId": 5795,
+          "sourceName": "Hoa Tai Ngọc Bích 4*8mm Bạc 925 - NE12268",
+          "sourceLegacySku": "NSSENE12268",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820906577382dc4ecea289515297b8cc8a28c6c98846-2546.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12439",
+          "quantity": 2,
+          "salePrice": 810000,
+          "unitCost": 270000,
+          "sourceIds": [
+            5796
+          ],
+          "selectedSourceId": 5796,
+          "sourceName": "Hoa Tai Ngọc Bích 5*7mm Bạc 925 - NE12439",
+          "sourceLegacySku": "NSSENE12439",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820906548462693777078164e7ad8739f25e058bfde9-8899.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12322",
+          "quantity": 2,
+          "salePrice": 810000,
+          "unitCost": 270000,
+          "sourceIds": [
+            5797
+          ],
+          "selectedSourceId": 5797,
+          "sourceName": "Hoa Tai Ngọc Bích 5mm Bạc 925 - NE12322",
+          "sourceLegacySku": "NSSENE12322",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820906523856f456678cadea6d796c52acde622fff33-1676.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12302",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            5799
+          ],
+          "selectedSourceId": 5799,
+          "sourceName": "Hoa Tai Ngọc Bích 5mm Bạc 925 - NE12302",
+          "sourceLegacySku": "NSSENE12302",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68209064836235cfa2e48b0a0a5a8cee0258268aea00d-1491.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12005",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            5800
+          ],
+          "selectedSourceId": 5800,
+          "sourceName": "Hoa Tai Ngọc Bích 7*9mm Bạc 925 - NE12005",
+          "sourceLegacySku": "NSSENE12005",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820912119690801a8a59819e54f0fa6199238808c74a-3227.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12080",
+          "quantity": 2,
+          "salePrice": 1170000,
+          "unitCost": 390000,
+          "sourceIds": [
+            5801
+          ],
+          "selectedSourceId": 5801,
+          "sourceName": "Hoa Tai Ngọc Bích 6*8mm Bạc 925 - NE12080",
+          "sourceLegacySku": "NSSENE12080",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820912548451303a27ab9377dea9cacd456cd82f1df4-4005.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12288",
+          "quantity": 2,
+          "salePrice": 210000,
+          "unitCost": 70000,
+          "sourceIds": [
+            5802
+          ],
+          "selectedSourceId": 5802,
+          "sourceName": "Hoa Tai Ngọc Bích 6mm Bạc 925 - NE12288",
+          "sourceLegacySku": "NSSENE12288",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820912510115229aec098739a314e9981e862800b90e-8790.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12116",
+          "quantity": 2,
+          "salePrice": 1050000,
+          "unitCost": 350000,
+          "sourceIds": [
+            5803
+          ],
+          "selectedSourceId": 5803,
+          "sourceName": "Hoa Tai Ngọc Bích 6*8mm Bạc 925 - NE12116",
+          "sourceLegacySku": "NSSENE12116",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z682091247025009fae4068f78f05e2804f2f740738607-2905.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12181",
+          "quantity": 2,
+          "salePrice": 1170000,
+          "unitCost": 390000,
+          "sourceIds": [
+            5804
+          ],
+          "selectedSourceId": 5804,
+          "sourceName": "Hoa Tai Ngọc Bích 6*8mm Bạc 925 - NE12181",
+          "sourceLegacySku": "NSSENE12181",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z68209124638670a447f57e5b2cac983b7cbbe1419771e-2544.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12008",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            5806
+          ],
+          "selectedSourceId": 5806,
+          "sourceName": "Hoa Tai Ngọc Bích 6*8mm Bạc 925 - NE12008",
+          "sourceLegacySku": "NSSENE12008",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820912400523a87c19b1bde72d18748919284d317dfe-9475.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12256",
+          "quantity": 2,
+          "salePrice": 1050000,
+          "unitCost": 350000,
+          "sourceIds": [
+            5807
+          ],
+          "selectedSourceId": 5807,
+          "sourceName": "Hoa Tai Ngọc Bích  8mm Bạc 925 - NE12256",
+          "sourceLegacySku": "NSSENE12256",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z682091237427216d10ca0300a19e460fcd1c7a7ad3ad4-5284.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSENE12251",
+          "quantity": 2,
+          "salePrice": 1470000,
+          "unitCost": 490000,
+          "sourceIds": [
+            5808
+          ],
+          "selectedSourceId": 5808,
+          "sourceName": "Hoa Tai Ngọc Bích  4mm Bạc 925 - NE12251",
+          "sourceLegacySku": "NSSENE12251",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6820912345621fa02b01d838bf15a1fcf4bb23b78409d-9427.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Opal",
+      "code": "BO",
+      "materialOptionId": "1f6c7d69-87ec-4fab-a5cb-81a0ccb9c19e",
+      "sourceCategoryIds": [
+        "165"
+      ],
+      "sourceRowCount": 15,
+      "skuCount": 14,
+      "items": [
+        {
+          "sku": "NSSEBO100",
+          "quantity": 2,
+          "salePrice": 1920000,
+          "unitCost": 640000,
+          "sourceIds": [
+            1052
+          ],
+          "selectedSourceId": 1052,
+          "sourceName": "Hoa Tai Bạc 925 Gắn Đá Opal Mẫu BO100",
+          "sourceLegacySku": null,
+          "sourceModelCode": "BO100",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z37730781379691cd297a07e4c5e8345405bace9468967-6671.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBO104",
+          "quantity": 2,
+          "salePrice": 2390000,
+          "unitCost": 796667,
+          "sourceIds": [
+            1053
+          ],
+          "selectedSourceId": 1053,
+          "sourceName": "Hoa Tai Bạc 925 Gắn Đá Opal Mẫu BO104",
+          "sourceLegacySku": null,
+          "sourceModelCode": "BO104",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z377307812405087b29619a892163606bb10b2ac1b3a0a-6508.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBO103",
+          "quantity": 2,
+          "salePrice": 2460000,
+          "unitCost": 820000,
+          "sourceIds": [
+            1054
+          ],
+          "selectedSourceId": 1054,
+          "sourceName": "Hoa Tai Bạc 925 Gắn Đá Opal Mẫu BO103",
+          "sourceLegacySku": null,
+          "sourceModelCode": "BO103",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z37730781288729a651d17b69dfec92538d6efa425b0a9-9917.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBO004",
+          "quantity": 2,
+          "salePrice": 1480000,
+          "unitCost": 493333,
+          "sourceIds": [
+            1055
+          ],
+          "selectedSourceId": 1055,
+          "sourceName": "Hoa Tai Bạc 925 Gắn Đá Opal Mẫu BO004",
+          "sourceLegacySku": null,
+          "sourceModelCode": "BO004",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z37730781148687f800e407bdb6712c91a5a7e68db166f-9186.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBO101",
+          "quantity": 2,
+          "salePrice": 1920000,
+          "unitCost": 640000,
+          "sourceIds": [
+            1056
+          ],
+          "selectedSourceId": 1056,
+          "sourceName": "Hoa Tai Bạc 925 Gắn Đá Opal Mẫu BO101",
+          "sourceLegacySku": null,
+          "sourceModelCode": "BO101",
+          "skuOrigin": "model_code",
+          "legacyImageName": "z37730781329501ba8c647be50e5cdfca06e7eb560ced0-8694.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBO117",
+          "quantity": 2,
+          "salePrice": 1160000,
+          "unitCost": 386667,
+          "sourceIds": [
+            3734,
+            3741
+          ],
+          "selectedSourceId": 3734,
+          "sourceName": "Hoa Tai Đá Opal 3*4mm Bạc 925 - EBO117",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBO117",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-opal-34mm-bac-925-ebo117-1072.jpg",
+          "duplicateSourceCount": 2
+        },
+        {
+          "sku": "NSSEBO111",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            3735
+          ],
+          "selectedSourceId": 3735,
+          "sourceName": "Hoa Tai Đá Opal 4*6mm Bạc 925 - EBO111",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBO111",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-opal-46mm-bac-925-ebo111-5990.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBO110",
+          "quantity": 2,
+          "salePrice": 1080000,
+          "unitCost": 360000,
+          "sourceIds": [
+            3736
+          ],
+          "selectedSourceId": 3736,
+          "sourceName": "Hoa Tai Đá Opal 5*7mm Bạc 925 - EBO110",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBO110",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-opal-57mm-bac-925-ebo110-3678.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBO109",
+          "quantity": 2,
+          "salePrice": 780000,
+          "unitCost": 260000,
+          "sourceIds": [
+            3737
+          ],
+          "selectedSourceId": 3737,
+          "sourceName": "Hoa Tai Đá Opal 4*6mm Bạc 925 - EBO109",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBO109",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-opal-46mm-bac-925-ebo109-1089.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBO115",
+          "quantity": 2,
+          "salePrice": 1380000,
+          "unitCost": 460000,
+          "sourceIds": [
+            3738
+          ],
+          "selectedSourceId": 3738,
+          "sourceName": "Hoa Tai Đá Opal 6*8mm Bạc 925 - EBO115",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBO115",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-opal-68mm-bac-925-ebo115-4871.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBO118",
+          "quantity": 2,
+          "salePrice": 580000,
+          "unitCost": 193333,
+          "sourceIds": [
+            3739
+          ],
+          "selectedSourceId": 3739,
+          "sourceName": "Hoa Tai Đá Opal 4mm Bạc 925 - EBO118",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBO118",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-opal-4mm-bac-925-ebo118-1293.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBO113",
+          "quantity": 2,
+          "salePrice": 860000,
+          "unitCost": 286667,
+          "sourceIds": [
+            3740
+          ],
+          "selectedSourceId": 3740,
+          "sourceName": "Hoa Tai Đá Opal 6mm Bạc 925 - EBO113",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBO113",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-opal-6mm-bac-925-ebo113-4464.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBO116",
+          "quantity": 2,
+          "salePrice": 1380000,
+          "unitCost": 460000,
+          "sourceIds": [
+            3743
+          ],
+          "selectedSourceId": 3743,
+          "sourceName": "Hoa Tai Đá Opal 6*8mm Bạc 925 - EBO116",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EBO116",
+          "skuOrigin": "model_code",
+          "legacyImageName": "hoa-tai-da-opal-68mm-bac-925-ebo116-9453.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEBO217",
+          "quantity": 2,
+          "salePrice": 750000,
+          "unitCost": 250000,
+          "sourceIds": [
+            5316
+          ],
+          "selectedSourceId": 5316,
+          "sourceName": "Hoa Tai Đá Opal Bạc 925 - EBO217",
+          "sourceLegacySku": "NSSEBO217",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6784160056295b0da5c6098843c79ff6af0ec6b0ecce9-8862.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Tanzanite",
+      "code": "TZ",
+      "materialOptionId": "30765860-5a6d-4861-99b1-1b14bea90620",
+      "sourceCategoryIds": [
+        "232"
+      ],
+      "sourceRowCount": 2,
+      "skuCount": 2,
+      "items": [
+        {
+          "sku": "NSSETZ003",
+          "quantity": 2,
+          "salePrice": 960000,
+          "unitCost": 320000,
+          "sourceIds": [
+            3685
+          ],
+          "selectedSourceId": 3685,
+          "sourceName": "Bông Tai Đá Tanzanite 3*5mm Bạc 925 - ETZ003",
+          "sourceLegacySku": null,
+          "sourceModelCode": "ETZ003",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-tanzanite-35mm-bac-925-etz003-3609.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSETZ054",
+          "quantity": 2,
+          "salePrice": 1780000,
+          "unitCost": 593333,
+          "sourceIds": [
+            3935
+          ],
+          "selectedSourceId": 3935,
+          "sourceName": "Bông Tai Đá Tanzanite 2*6mm Bạc 925 - RTZ054",
+          "sourceLegacySku": null,
+          "sourceModelCode": "RTZ054",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-tanzanite-26mm-bac-925-rtz054-6953.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Peridot",
+      "code": "PR",
+      "materialOptionId": "9a58c5dd-7379-4eee-877d-3fbe99eaa9e8",
+      "sourceCategoryIds": [
+        "229"
+      ],
+      "sourceRowCount": 6,
+      "skuCount": 6,
+      "items": [
+        {
+          "sku": "NSSEPR007",
+          "quantity": 2,
+          "salePrice": 680000,
+          "unitCost": 226667,
+          "sourceIds": [
+            3950
+          ],
+          "selectedSourceId": 3950,
+          "sourceName": "Bông Tai Đá Peridot 5*7mm Bạc 925 - EPR007",
+          "sourceLegacySku": null,
+          "sourceModelCode": "EPR007",
+          "skuOrigin": "model_code",
+          "legacyImageName": "bong-tai-da-peridot-57mm-bac-925-epr007-8904.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPR047",
+          "quantity": 2,
+          "salePrice": 630000,
+          "unitCost": 210000,
+          "sourceIds": [
+            5317
+          ],
+          "selectedSourceId": 5317,
+          "sourceName": "Bông Tai Đá Peridot 5*7mm Bạc 925 - EPR047",
+          "sourceLegacySku": "NSSEPR047",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z678432322353911834ce87abf936a042652d1a0de4e89-3400.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPR048",
+          "quantity": 2,
+          "salePrice": 840000,
+          "unitCost": 280000,
+          "sourceIds": [
+            5318
+          ],
+          "selectedSourceId": 5318,
+          "sourceName": "Bông Tai Đá Peridot Bạc 925 - EPR048",
+          "sourceLegacySku": "NSSEPR048",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z678432324937561a071921920ba5f7667f14886359d55-4081.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPR049",
+          "quantity": 2,
+          "salePrice": 600000,
+          "unitCost": 200000,
+          "sourceIds": [
+            5319
+          ],
+          "selectedSourceId": 5319,
+          "sourceName": "Bông Tai Đá Peridot Bạc 925 - EPR049",
+          "sourceLegacySku": "NSSEPR049",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6784323264489228835bbf79e76ff0763eb6097b95187-3079.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPR050",
+          "quantity": 2,
+          "salePrice": 630000,
+          "unitCost": 210000,
+          "sourceIds": [
+            5320
+          ],
+          "selectedSourceId": 5320,
+          "sourceName": "Bông Tai Đá Peridot Bạc 925 - EPR050",
+          "sourceLegacySku": "NSSEPR050",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z67843232989923e505411833ce26d760125b9410e694b-5358.jpg",
+          "duplicateSourceCount": 1
+        },
+        {
+          "sku": "NSSEPR046",
+          "quantity": 2,
+          "salePrice": 630000,
+          "unitCost": 210000,
+          "sourceIds": [
+            5321
+          ],
+          "selectedSourceId": 5321,
+          "sourceName": "Bông Tai Đá Peridot Bạc 925 - EPR046",
+          "sourceLegacySku": "NSSEPR046",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z678432326967932473dadef525259bbaac163b05661b8-2532.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    },
+    {
+      "name": "Spinel",
+      "code": "PN",
+      "materialOptionId": "70cd4872-c82b-40f2-abeb-7bc59a7f1627",
+      "sourceCategoryIds": [
+        "240"
+      ],
+      "sourceRowCount": 1,
+      "skuCount": 1,
+      "items": [
+        {
+          "sku": "NSSEPN002",
+          "quantity": 2,
+          "salePrice": 480000,
+          "unitCost": 160000,
+          "sourceIds": [
+            5351
+          ],
+          "selectedSourceId": 5351,
+          "sourceName": "Bông tai Đá Spinel bạc 925-EPN002",
+          "sourceLegacySku": "NSSEPN002",
+          "sourceModelCode": null,
+          "skuOrigin": "legacy_sku",
+          "legacyImageName": "z6784326402280a6b13e3ae0fd28a3a6bf90f35d3bdcaa-6276.jpg",
+          "duplicateSourceCount": 1
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "groupCount": 10,
+    "sourceRowCount": 255,
+    "skuCount": 243,
+    "totalQuantity": 486,
+    "zeroSalePriceSkuCount": 2,
+    "duplicateSourceGroups": 12,
+    "remappedSequenceCount": 3,
+    "generatedSequenceCount": 3,
+    "estimatedReceiptAmount": 186470004
+  }
+}

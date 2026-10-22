@@ -197,6 +197,27 @@ enum SocialAttemptStatus {
   @@map("social_attempt_status")
 }
 
+enum SocialLinkSource {
+  NONE
+  PRODUCT
+  MANUAL
+  @@map("social_link_source")
+}
+
+enum SocialReconciliationDecision {
+  CONFIRMED_PUBLISHED
+  CONFIRMED_NOT_PUBLISHED
+  UNRESOLVED
+  RETRY_AUTHORIZED
+  @@map("social_reconciliation_decision")
+}
+
+enum SocialReconciliationSource {
+  META_API
+  MANUAL
+  @@map("social_reconciliation_source")
+}
+
 enum CustomerStatus {
   ACTIVE
   INACTIVE
@@ -354,6 +375,8 @@ model AdminUser {
   socialPostsCreated SocialPost[] @relation("SocialPostCreator")
   socialPostsApproved SocialPost[] @relation("SocialPostApprover")
   socialPostsUpdated SocialPost[] @relation("SocialPostUpdater")
+  socialTargetReconciliations SocialTargetReconciliation[] @relation("SocialTargetReconciliationActor")
+  socialReconciliationClaims SocialPostTarget[] @relation("SocialTargetReconciliationClaim")
 
   @@map("admin_users")
 }
@@ -544,6 +567,7 @@ model ProductPriceVariant {
   productId             String                 @map("product_id") @db.Uuid
   optionKey             String                 @map("option_key") @db.VarChar(100)
   quality               String                 @db.VarChar(40)
+  shape                 String?                @db.VarChar(20)
   beadSize              String?                @map("bead_size") @db.VarChar(24)
   carat                 Decimal?               @db.Decimal(8, 3)
   gemstoneQuality       String?                @map("gemstone_quality") @db.VarChar(40)
@@ -561,6 +585,7 @@ model ProductPriceVariant {
   inventoryMovements    InventoryMovement[]
   inventoryReceiptItems InventoryReceiptItem[]
   inventoryIssueItems   InventoryIssueItem[]
+  socialPostSources     SocialPost[]
 
   @@unique([productId, optionKey])
   @@index([productId, sortOrder])
@@ -666,6 +691,7 @@ model OrderItem {
   productName String               @map("product_name") @db.VarChar(180)
   productSku  String               @map("product_sku") @db.VarChar(64)
   quality     String?              @db.VarChar(40)
+  shape       String?              @db.VarChar(20)
   beadSize    String?              @map("bead_size") @db.VarChar(24)
   carat       Decimal?             @db.Decimal(8, 3)
   gemstoneQuality String?           @map("gemstone_quality") @db.VarChar(40)
@@ -867,6 +893,7 @@ model InventoryReceiptItem {
   productName  String               @map("product_name") @db.VarChar(180)
   productSku   String               @map("product_sku") @db.VarChar(64)
   quality      String?              @db.VarChar(40)
+  shape        String?              @db.VarChar(20)
   beadSize     String?              @map("bead_size") @db.VarChar(24)
   carat        Decimal?             @db.Decimal(8, 3)
   gemstoneQuality String?            @map("gemstone_quality") @db.VarChar(40)
@@ -1268,8 +1295,11 @@ model SocialPost {
   createdByAdminId      String          @map("created_by_admin_id") @db.Uuid
   updatedByAdminId      String?         @map("updated_by_admin_id") @db.Uuid
   sourceProductId       String?         @map("source_product_id") @db.Uuid
+  sourceProductVariantId String?        @map("source_product_variant_id") @db.Uuid
   sourceMarketingDraftId String?        @map("source_marketing_draft_id") @db.Uuid
   approvedSnapshot      Json?           @map("approved_snapshot")
+  approvedCommerceSnapshot Json?        @map("approved_commerce_snapshot")
+  approvedCommerceSnapshotHash String?  @map("approved_commerce_snapshot_hash") @db.Char(64)
   lastErrorCode         String?         @map("last_error_code") @db.VarChar(80)
   createdAt             DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1277,10 +1307,12 @@ model SocialPost {
   approvedBy            AdminUser?      @relation("SocialPostApprover", fields: [approvedByAdminId], references: [id], onDelete: SetNull)
   updatedBy             AdminUser?      @relation("SocialPostUpdater", fields: [updatedByAdminId], references: [id], onDelete: SetNull)
   sourceProduct         Product?        @relation(fields: [sourceProductId], references: [id], onDelete: SetNull)
+  sourceProductVariant  ProductPriceVariant? @relation(fields: [sourceProductVariantId], references: [id], onDelete: SetNull)
   sourceMarketingDraft  AiMarketingDraft? @relation(fields: [sourceMarketingDraftId], references: [id], onDelete: SetNull)
   targets               SocialPostTarget[]
 
   @@index([status, updatedAt(sort: Desc)])
+  @@index([updatedAt(sort: Desc), id(sort: Desc)])
   @@index([sourceProductId, createdAt(sort: Desc)])
   @@map("social_posts")
 }
@@ -1293,6 +1325,7 @@ model SocialPostTarget {
   platform             SocialPlatform
   caption              String             @default("") @db.VarChar(2200)
   linkUrl              String?            @map("link_url") @db.VarChar(1000)
+  linkSource           SocialLinkSource   @default(NONE) @map("link_source")
   status               SocialTargetStatus @default(DRAFT)
   approvedRevision     Int?               @map("approved_revision")
   approvedPayloadHash  String?            @map("approved_payload_hash") @db.Char(64)
@@ -1305,17 +1338,43 @@ model SocialPostTarget {
   permalink             String?            @db.Text
   publishedAt           DateTime?          @map("published_at") @db.Timestamptz(3)
   lastErrorCode         String?            @map("last_error_code") @db.VarChar(80)
+  reconciliationClaimedAt DateTime?        @map("reconciliation_claimed_at") @db.Timestamptz(3)
+  reconciliationClaimedByAdminId String?   @map("reconciliation_claimed_by_admin_id") @db.Uuid
   createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
   post                  SocialPost         @relation(fields: [postId], references: [id], onDelete: Cascade)
   account               SocialAccount?     @relation(fields: [accountId], references: [id], onDelete: SetNull)
   mediaAsset            MediaAsset?        @relation(fields: [mediaAssetId], references: [id], onDelete: Restrict)
+  reconciliationClaimedBy AdminUser?      @relation("SocialTargetReconciliationClaim", fields: [reconciliationClaimedByAdminId], references: [id], onDelete: SetNull)
   attempts              SocialPublishAttempt[]
+  reconciliations       SocialTargetReconciliation[]
 
   @@unique([postId, accountId])
   @@index([status, scheduledAt])
   @@index([publishRequestedAt, status])
+  @@index([reconciliationClaimedAt])
   @@map("social_post_targets")
+}
+
+model SocialTargetReconciliation {
+  id                  String                         @id @default(uuid()) @db.Uuid
+  targetId            String                         @map("target_id") @db.Uuid
+  adminId             String                         @map("admin_id") @db.Uuid
+  revision            Int
+  decision            SocialReconciliationDecision
+  source              SocialReconciliationSource
+  remoteIdQueried     String?                        @map("remote_id_queried") @db.VarChar(140)
+  resultCode          String?                        @map("result_code") @db.VarChar(80)
+  notes               String?                        @db.VarChar(1200)
+  evidenceReference   String?                        @map("evidence_reference") @db.VarChar(2000)
+  publishedAtReported DateTime?                      @map("published_at_reported") @db.Timestamptz(3)
+  createdAt           DateTime                       @default(now()) @map("created_at") @db.Timestamptz(3)
+  target              SocialPostTarget               @relation(fields: [targetId], references: [id], onDelete: Restrict)
+  admin               AdminUser                      @relation("SocialTargetReconciliationActor", fields: [adminId], references: [id], onDelete: Restrict)
+
+  @@index([targetId, createdAt(sort: Desc)])
+  @@index([adminId, createdAt(sort: Desc)])
+  @@map("social_target_reconciliations")
 }
 
 model SocialPublishAttempt {

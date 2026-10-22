@@ -31,3 +31,25 @@ export function socialPostStatusSummary(post) {
     needsReconciliation: post.status === "UNKNOWN" || post.targets?.some((target) => target.status === "UNKNOWN") || false,
   };
 }
+
+/** Product auto-links follow the selected product; manually edited links are preserved. */
+export function updateSocialProductLink(target, productId, productUrl) {
+  if (target.linkSource === "MANUAL") return { ...target };
+  if (!productId || !productUrl || target.platform !== "FACEBOOK_PAGE") return { ...target, linkUrl: "", linkSource: "NONE" };
+  return { ...target, linkUrl: productUrl, linkSource: "PRODUCT" };
+}
+
+export function socialProductLinkWarning(target, productUrl) {
+  return target.linkSource === "MANUAL" && Boolean(target.linkUrl) && Boolean(productUrl) && target.linkUrl !== productUrl;
+}
+
+export function mergeSocialPage(current, incoming, append) {
+  const rows = append ? [...current, ...incoming] : incoming;
+  const unique = new Map();
+  for (const row of rows) unique.set(row.id, row);
+  return [...unique.values()];
+}
+
+export function socialUpdatedAtLabel(post) {
+  return post.updatedAt || post.createdAt || null;
+}
