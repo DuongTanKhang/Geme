@@ -36,10 +36,11 @@ export default function ShopeeWorkspace({ initialTab = "overview" }: { initialTa
   const [orders, setOrders] = useState<Page<Row>>({ items: [], page: 1, limit: 50, total: 0, pages: 0 });
   const [runs, setRuns] = useState<Row[]>([]);
   const [unmatched, setUnmatched] = useState<Row[]>([]);
+  const [mappingReview, setMappingReview] = useState<Row[]>([]);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [sectionLoading, setSectionLoading] = useState<Record<string, boolean>>({ status: true, orders: true, runs: true, unmatched: true });
+  const [sectionLoading, setSectionLoading] = useState<Record<string, boolean>>({ status: true, orders: true, runs: true, unmatched: true, mappingReview: true });
   const [sectionErrors, setSectionErrors] = useState<Record<string, string>>({});
   const [page, setPage] = useState(1);
   const [orderSearch, setOrderSearch] = useState("");
@@ -105,15 +106,20 @@ export default function ShopeeWorkspace({ initialTab = "overview" }: { initialTa
     if (result) setUnmatched(result);
     return Boolean(result);
   }, [loadSection]);
+  const refreshMappingReview = useCallback(async () => {
+    const result = await loadSection<Row[]>("mappingReview", () => api<Row[]>("mappings/review?limit=250"));
+    if (result) setMappingReview(result);
+    return Boolean(result);
+  }, [loadSection]);
 
   const refresh = useCallback(async (showNotice = false) => {
     setBusy("refresh"); setError("");
     try {
-      const results = await Promise.all([refreshStatus(), refreshOrders(1), refreshRuns(), refreshUnmatched()]);
+      const results = await Promise.all([refreshStatus(), refreshOrders(1), refreshRuns(), refreshUnmatched(), refreshMappingReview()]);
       setPage(1);
       if (showNotice && results.every(Boolean)) setNotice("Đã cập nhật dữ liệu từ GEME.");
     } finally { setBusy(""); }
-  }, [refreshStatus, refreshOrders, refreshRuns, refreshUnmatched]);
+  }, [refreshStatus, refreshOrders, refreshRuns, refreshUnmatched, refreshMappingReview]);
 
   useEffect(() => { void refresh(); }, []); // initial load only
   useEffect(() => {
@@ -197,7 +203,7 @@ export default function ShopeeWorkspace({ initialTab = "overview" }: { initialTa
     try {
       await api(`mappings/${encodeURIComponent(row.id)}`, "POST", { connectionId: row.connectionId, productId: selected.productId, variantId: selected.variantId });
       setNotice(`Đã ghép ${row.modelSku || row.itemSku || row.itemId} với SKU ${selected.sku}.`);
-      await Promise.all([refreshUnmatched(), refreshOrders(page), refreshStatus()]);
+      await Promise.all([refreshUnmatched(), refreshMappingReview(), refreshOrders(page), refreshStatus()]);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Không lưu được mapping SKU."); }
     finally { setBusy(""); }
   };
@@ -242,8 +248,11 @@ export default function ShopeeWorkspace({ initialTab = "overview" }: { initialTa
       <div className="shopee-pagination"><span>Trang {orders.page || page} / {orders.pages || 1} · {orders.total} đơn</span><div><button className="shopee-button is-quiet" disabled={page <= 1} onClick={() => { const next = page - 1; setPage(next); void refreshOrders(next); }}>Trước</button><button className="shopee-button is-quiet" disabled={!orders.pages || page >= orders.pages} onClick={() => { const next = page + 1; setPage(next); void refreshOrders(next); }}>Sau</button></div></div>
     </section>}
 
-    {tab === "mappings" && <section className="shopee-panel"><div className="shopee-panel-heading"><div><span className="shopee-eyebrow">SKU MATCHING</span><h3>Sản phẩm chưa ghép SKU</h3><p>Chỉ tự ghép khi SKU Shopee khớp chính xác và duy nhất. Bạn có thể chọn đúng SKU/biến thể GEME ở đây.</p></div><button className="shopee-button is-quiet" onClick={() => void refreshUnmatched()}>Làm mới</button></div>{sectionErrors.unmatched && <div className="shopee-alert is-error" role="alert">Không tải được danh sách cần ghép: {sectionErrors.unmatched}<button onClick={() => void refreshUnmatched()}>Thử lại</button></div>}
+    {tab === "mappings" && <section className="shopee-panel"><div className="shopee-panel-heading"><div><span className="shopee-eyebrow">SKU MATCHING</span><h3>Sản phẩm chưa ghép SKU</h3><p>Chỉ tự ghép khi SKU Shopee khớp chính xác và duy nhất. Bạn có thể chọn đúng SKU/biến thể GEME ở đây.</p></div><button className="shopee-button is-quiet" onClick={() => { void refreshUnmatched(); void refreshMappingReview(); }}>Làm mới</button></div>{sectionErrors.unmatched && <div className="shopee-alert is-error" role="alert">Không tải được danh sách cần ghép: {sectionErrors.unmatched}<button onClick={() => void refreshUnmatched()}>Thử lại</button></div>}
       <div className="shopee-mapping-list">{unmatched.map(row => <div className="shopee-mapping-row" key={row.id}><div className="shopee-mapping-remote"><strong>{row.itemName}</strong><small>Đơn {row.order?.orderSn} · Shop {row.shopId}</small><small>Item {row.itemId}{row.modelId ? ` · Model ${row.modelId}` : ""}</small><small>SKU Shopee: {row.modelSku || row.itemSku || "Chưa cung cấp"}</small></div><div className="shopee-mapping-controls"><div className="shopee-mapping-search"><input className="shopee-input" value={catalogSearch[row.id] || ""} onChange={event => setCatalogSearch(old => ({ ...old, [row.id]: event.target.value }))} onKeyDown={event => { if (event.key === "Enter") void loadCatalog(row); }} placeholder="Tìm SKU/tên GEME"/><button className="shopee-button is-quiet" onClick={() => void loadCatalog(row)} disabled={Boolean(busy)}>Tìm</button></div>{catalogRows[row.id] && <><select className="shopee-input" value={catalogSelection[row.id] || ""} onChange={event => setCatalogSelection(old => ({ ...old, [row.id]: event.target.value }))}><option value="">Chọn sản phẩm hoặc biến thể</option>{catalogRows[row.id].map(item => <option key={`${item.productId}:${item.variantId || "product"}`} value={`${item.productId}:${item.variantId || "product"}`}>{item.label}</option>)}</select><button className="shopee-button is-primary" onClick={() => void saveMapping(row)} disabled={!catalogSelection[row.id] || busy === `map-${row.id}`}>{busy === `map-${row.id}` ? "Đang lưu…" : "Lưu mapping"}</button></>}</div></div>)}{!unmatched.length && <div className="shopee-empty">{sectionLoading.unmatched ? "Đang tải mặt hàng cần ghép…" : sectionErrors.unmatched ? "Danh sách cần ghép chưa tải được." : "Không có mặt hàng cần ghép SKU."}</div>}</div>
+      <div className="shopee-panel-heading"><div><span className="shopee-eyebrow">MAPPING REVIEW</span><h3>Mapping cần kiểm tra</h3><p>Báo cáo chỉ đọc 250 mapping gần nhất có SKU/biến thể không còn khớp. GEME không tự sửa hoặc xóa mapping trong phần này.</p></div><span className={`shopee-pill ${mappingReview.length ? "pending" : "success"}`}>{sectionLoading.mappingReview ? "Đang kiểm tra…" : `${mappingReview.length} cần xem`}</span></div>
+      {sectionErrors.mappingReview && <div className="shopee-alert is-error" role="alert">Không tải được báo cáo mapping: {sectionErrors.mappingReview}<button onClick={() => void refreshMappingReview()}>Thử lại</button></div>}
+      <div className="shopee-mapping-list">{mappingReview.map(row => <div className="shopee-mapping-row" key={`review-${row.id}`}><div className="shopee-mapping-remote"><strong>{row.itemName || `Item ${row.itemId}`}</strong><small>Shop {row.shopId} · Đơn gần nhất {row.orderSn || "chưa có"}</small><small>SKU Shopee: model {row.modelSku || "—"} · item {row.itemSku || "—"}</small></div><div className="shopee-mapping-controls"><span className="shopee-pill pending">{shortenError(row.reason)}</span><small>Mapping hiện tại: {row.target} · SKU {row.sku} · {row.source === "AUTO_SKU" ? "tự ghép trước đây" : "admin đã ghép"}</small></div></div>)}{!mappingReview.length && <div className="shopee-empty">{sectionLoading.mappingReview ? "Đang rà soát mapping…" : sectionErrors.mappingReview ? "Báo cáo mapping chưa tải được." : "Không thấy mapping sai lệch trong 100 mapping gần nhất."}</div>}</div>
     </section>}
 
     {tab === "history" && <section className="shopee-panel"><div className="shopee-panel-heading"><div><span className="shopee-eyebrow">DURABLE JOBS</span><h3>Lịch sử đồng bộ</h3></div><button className="shopee-button is-quiet" onClick={() => void refreshRuns()}>Làm mới</button></div>{sectionErrors.runs && <div className="shopee-alert is-error" role="alert">Không tải được lịch sử đồng bộ: {sectionErrors.runs}<button onClick={() => void refreshRuns()}>Thử lại</button></div>}<div className="shopee-table-wrap"><table><thead><tr><th>Thời điểm</th><th>Shop</th><th>Trạng thái</th><th>Khoảng truy vấn</th><th>Đơn đọc / tạo / cập nhật</th><th>Lỗi</th><th></th></tr></thead><tbody>{runs.map(run => <tr key={run.id}><td>{dateTime(run.createdAt)}</td><td>{run.connection?.shopName || run.connection?.shopId || "—"}</td><td><span className={`shopee-pill ${statusTone(run.status)}`}>{statusLabels[run.status] || run.status}</span></td><td>{run.fromTime ? dateTime(run.fromTime) : "—"} → {run.toTime ? dateTime(run.toTime) : "—"}</td><td>{run.ordersRead} / {run.ordersCreated} / {run.ordersUpdated}</td><td>{shortenError(run.errorCode)}</td><td>{run.status === "FAILED" && <button className="shopee-button is-quiet" onClick={() => void retryRun(run.id)} disabled={Boolean(busy)}>{busy === `retry-${run.id}` ? "Đang thử…" : "Thử lại"}</button>}</td></tr>)}{!runs.length && <tr><td colSpan={7}><div className="shopee-empty">{sectionLoading.runs ? "Đang tải lịch sử đồng bộ…" : sectionErrors.runs ? "Lịch sử đồng bộ chưa tải được." : "Chưa có lịch sử đồng bộ."}</div></td></tr>}</tbody></table></div></section>}

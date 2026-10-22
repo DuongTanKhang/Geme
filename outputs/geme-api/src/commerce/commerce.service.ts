@@ -8,6 +8,7 @@ import { MediaAssetsService } from "../media/media-assets.service.js";
 import { ensureCustomerForPaidOrder } from "./customer-profile.js";
 import { sanitizeBlogHtml } from "./blog-html.js";
 import { calculateCheckoutPrice, getCheckoutPromotionValue, loadActiveStorePromotions, type CheckoutPromotion } from "./checkout-pricing.js";
+import { canTransitionOrder } from "./order-state.js";
 
 type Input = Record<string, any>;
 const slugify = (value: string) => String(value || "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `item-${Date.now()}`;
@@ -170,6 +171,7 @@ const selectAdminOrder = {
     },
   },
   payments: { select: { method: true, status: true }, orderBy: { createdAt: "asc" as const }, take: 1 },
+  emailOutbox: { where: { eventType: "ORDER_CONFIRMATION" }, select: { status: true, attemptCount: true, lastError: true, nextAttemptAt: true, acceptedAt: true }, take: 1 },
 } satisfies Prisma.OrderSelect;
 
 @Injectable()
@@ -178,6 +180,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CommerceService.name);
   private soldOutCleanupTimer: ReturnType<typeof setInterval> | null = null;
   private promotionStatusTimer: ReturnType<typeof setInterval> | null = null;
+  private orderEmailOutboxTimer: ReturnType<typeof setInterval> | null = null;
+  private orderEmailOutboxRunning = false;
   private categoryCache: { expiresAt: number; records: any[] } | null = null;
   private categoryLoad: Promise<any[]> | null = null;
   private categoryCacheVersion = 0;
@@ -213,6 +217,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     void this.normalizeLegacyProductImages().catch((error) => this.logger.error("Không thể chuyển ảnh sản phẩm sang thư viện media trong database.", error));
     void this.hideExpiredSoldOutListings().catch((error) => this.logger.error("Không thể tự ẩn bài đăng hết hàng đã quá 3 ngày.", error));
     void this.syncPromotionStatuses().catch((error) => this.logger.error("Không thể đồng bộ trạng thái khuyến mãi theo thời gian.", error));
+    void this.processOrderEmailOutbox().catch((error) => this.logger.error("Không thể xử lý hàng đợi email xác nhận đơn.", error));
     this.soldOutCleanupTimer = setInterval(() => {
       void this.hideExpiredSoldOutListings().catch((error) => this.logger.error("Không thể tự ẩn bài đăng hết hàng đã quá 3 ngày.", error));
     }, 5 * 60_000);
@@ -221,11 +226,16 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       void this.syncPromotionStatuses().catch((error) => this.logger.error("Không thể đồng bộ trạng thái khuyến mãi theo thời gian.", error));
     }, 60_000);
     this.promotionStatusTimer.unref?.();
+    this.orderEmailOutboxTimer = setInterval(() => {
+      void this.processOrderEmailOutbox().catch((error) => this.logger.error("Không thể xử lý hàng đợi email xác nhận đơn.", error));
+    }, 5_000);
+    this.orderEmailOutboxTimer.unref?.();
   }
 
   onModuleDestroy() {
     if (this.soldOutCleanupTimer) clearInterval(this.soldOutCleanupTimer);
     if (this.promotionStatusTimer) clearInterval(this.promotionStatusTimer);
+    if (this.orderEmailOutboxTimer) clearInterval(this.orderEmailOutboxTimer);
   }
 
   private async persistDataImageReference(value: string, filename: string, alt?: string | null) {
@@ -2078,13 +2088,16 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const status = enumValue(statusInput, ["PENDING_CONFIRMATION", "PROCESSING", "SHIPPING", "DELIVERED", "CANCELLED"], "");
     if (!status) throw new BadRequestException("Trạng thái đơn hàng không hợp lệ.");
     const changedProductIds = new Set<string>();
+    let noOp = false;
     try {
       const order = await this.prisma.$transaction(async (tx) => {
         const current = await tx.order.findUnique({ where: { id }, include: { payments: true, items: true } });
         if (!current) throw new NotFoundException("Không tìm thấy đơn hàng.");
-        if (current.status === "CANCELLED" && status !== "CANCELLED") throw new BadRequestException("Đơn đã hủy không thể mở lại. Hãy tạo đơn mới để giữ tồn kho chính xác.");
-        if (current.status === "DELIVERED" && status === "CANCELLED") throw new BadRequestException("Đơn đã giao cần xử lý theo quy trình trả hàng, không thể hủy trực tiếp.");
-        if (status === "CANCELLED" && current.inventoryCommittedAt) throw new BadRequestException("Đơn đã ghi nhận thanh toán hoặc xuất hàng. Hãy xử lý theo quy trình hoàn tiền/trả hàng.");
+        if (current.status === status) { noOp = true; return current; }
+        if (!canTransitionOrder(current.status, status)) throw new BadRequestException(`Không thể chuyển đơn từ ${current.status} sang ${status}. Tải lại đơn và chọn bước kế tiếp hợp lệ.`);
+        if (status === "CANCELLED" && (current.inventoryCommittedAt || current.payments.some((payment: any) => payment.status === "PAID"))) {
+          throw new BadRequestException("Đơn đã thu tiền hoặc xuất hàng. Hãy xử lý theo quy trình hoàn tiền/trả hàng.");
+        }
         if (current.shippingProvider === "VIETTEL_POST" && status === "SHIPPING" && current.carrierShipmentStatus !== "IN_TRANSIT") {
           throw new BadRequestException("Chỉ chuyển đơn Viettel Post sang Đang giao khi hãng đã xác nhận nhận kiện.");
         }
@@ -2095,50 +2108,35 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           throw new BadRequestException("Vui lòng hủy hoặc xử lý hoàn vận đơn trên Viettel Post trước khi hủy đơn GEME.");
         }
 
-        const codPayment = current.payments.find((payment) => payment.method === "COD");
-        const markCodPaid = status === "DELIVERED" && codPayment && ["PENDING", "FAILED"].includes(codPayment.status);
-        let customer: any = null;
-        if (markCodPaid) {
-          customer = await ensureCustomerForPaidOrder(tx, current);
-          await tx.payment.update({ where: { id: codPayment.id }, data: { status: "PAID", paidAt: new Date() } });
-        }
         let inventoryReleasedAt: Date | undefined;
         let inventoryCommittedAt: Date | undefined;
         if (status === "CANCELLED" && current.inventoryReservedAt && !current.inventoryCommittedAt && !current.inventoryReleasedAt
           && ["PENDING_CONFIRMATION", "PROCESSING"].includes(current.status)) {
           const releasedAt = new Date();
-          const claimed = await tx.order.updateMany({
-            where: { id, status: current.status, inventoryReleasedAt: null, inventoryCommittedAt: null },
-            data: { inventoryReleasedAt: releasedAt },
-          });
-          if (claimed.count === 1) {
-            await this.releaseOrderReservation(tx, current, changedProductIds);
-            inventoryReleasedAt = releasedAt;
-          } else {
-            throw new ConflictException("Trạng thái giữ tồn của đơn vừa thay đổi. Tải lại đơn hàng rồi thử lại.");
-          }
+          await this.releaseOrderReservation(tx, current, changedProductIds);
+          inventoryReleasedAt = releasedAt;
         }
         if (status === "DELIVERED" && current.inventoryReservedAt && !current.inventoryReleasedAt && !current.inventoryCommittedAt) {
-          const committedAt = new Date();
-          const claimed = await tx.order.updateMany({
-            where: { id, status: current.status, inventoryReleasedAt: null, inventoryCommittedAt: null },
-            data: { inventoryCommittedAt: committedAt },
-          });
-          if (claimed.count !== 1) throw new ConflictException("Trạng thái giữ tồn của đơn vừa thay đổi. Tải lại đơn hàng rồi thử lại.");
-          inventoryCommittedAt = committedAt;
+          inventoryCommittedAt = new Date();
         }
-        return tx.order.update({
-          where: { id },
+        const updated = await tx.order.updateMany({
+          where: {
+            id, status: current.status, updatedAt: current.updatedAt,
+            ...(inventoryReleasedAt || inventoryCommittedAt ? { inventoryReservedAt: { not: null }, inventoryReleasedAt: null, inventoryCommittedAt: null } : {}),
+          },
           data: {
             status: status as any,
             ...(inventoryReleasedAt ? { inventoryReleasedAt } : {}),
             ...(inventoryCommittedAt ? { inventoryCommittedAt } : {}),
-            ...(markCodPaid && customer && !current.customerId ? { customer: { connect: { id: customer.id } } } : {}),
             ...(this.pos365.isSyncEnabled() ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: new Date(), pos365SyncError: null } : {}),
           },
-          include: { items: true, payments: true, customer: true },
         });
+        if (updated.count !== 1) throw new ConflictException("Đơn vừa được cập nhật bởi người khác. Tải lại thông tin rồi thử lại.");
+        const updatedOrder = await tx.order.findUnique({ where: { id }, include: { items: true, payments: true, customer: true } });
+        if (!updatedOrder) throw new NotFoundException("Không tìm thấy đơn hàng sau khi cập nhật.");
+        return updatedOrder;
       });
+      if (noOp) return order;
       if (changedProductIds.size) {
         await this.queueProductStockSync(this.prisma, changedProductIds).catch(() => undefined);
         for (const productId of changedProductIds) this.publishCatalogChange("product", "updated", productId);
@@ -2159,16 +2157,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         if (!payment) throw new BadRequestException("Đơn hàng chưa có thông tin thanh toán.");
         if (payment.status === "REFUNDED" || payment.status === "PARTIALLY_REFUNDED") throw new BadRequestException("Không thể ghi nhận đã thanh toán cho giao dịch đã hoàn tiền.");
         if (current.status === "CANCELLED") throw new BadRequestException("Không thể ghi nhận thanh toán cho đơn đã hủy.");
-        if (payment.method === "COD" && current.status !== "DELIVERED") throw new BadRequestException("Đơn COD chỉ được ghi nhận đã thanh toán sau khi giao thành công.");
+        if (payment.method === "COD" && current.status !== "DELIVERED") throw new BadRequestException("Đơn COD chỉ được ghi nhận tiền đã thu sau khi giao thành công.");
         if (payment.status !== "PAID") await tx.payment.update({ where: { id: payment.id }, data: { status: "PAID", paidAt: new Date() } });
         const customer = await ensureCustomerForPaidOrder(tx, current);
-        if (current.inventoryReservedAt && !current.inventoryReleasedAt && !current.inventoryCommittedAt) {
-          const committed = await tx.order.updateMany({
-            where: { id, status: { not: "CANCELLED" }, inventoryReleasedAt: null, inventoryCommittedAt: null },
-            data: { inventoryCommittedAt: new Date() },
-          });
-          if (committed.count !== 1) throw new ConflictException("Không thể ghi nhận thanh toán vì trạng thái giữ tồn đơn hàng vừa thay đổi.");
-        }
         return tx.order.update({
           where: { id },
           data: {
@@ -2257,7 +2248,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const code = `GME-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 5).toUpperCase()}`;
     const customerId = String(authenticatedCustomerId || input.customerId || "");
     const idempotencyKey = String(idempotencyKeyInput || "").trim();
-    if (!storeSale && !idempotencyKey) throw new BadRequestException("Thiếu mã chống tạo đơn trùng. Hãy tải lại trang đặt hàng.");
+    if (!idempotencyKey) throw new BadRequestException("Thiếu mã chống tạo đơn trùng. Hãy tải lại màn hình rồi thử lại.");
     if (idempotencyKey && !/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) throw new BadRequestException("Mã chống tạo đơn trùng không hợp lệ.");
     const idempotencyRequestHash = idempotencyKey ? createHash("sha256").update(JSON.stringify({
       customerId,
@@ -2267,6 +2258,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       shippingAddress: input.shippingAddress,
       note: input.note,
       paymentMethod: method,
+      salesChannel: input.salesChannel || input.channel || null,
+      paid: input.paid === true,
+      discountAmount: input.discountAmount ?? null,
+      shippingFee: input.shippingFee ?? null,
+      shippingMethod: input.shippingMethod ?? null,
       expectedTotalAmount: input.expectedTotalAmount,
       items: items.map((line: Input) => ({ productId: line.productId, variantId: line.variantId, sku: line.sku, quantity: line.quantity })),
     })).digest("hex") : null;
@@ -2327,7 +2323,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         const lineTotal = pricing.saleUnitPrice * quantity;
         if (!unitPrice) throw new BadRequestException(`Sản phẩm ${product.name} chưa có giá bán.`);
         const variantLabel = variantDisplayLabel(variant);
-        const shouldReserveInventory = !storeSale || paid;
+        // Hold stock for unpaid counter orders too. Payment and inventory issue
+        // are separate events; a later payment must not be the first stock check.
+        const shouldReserveInventory = true;
         if (shouldReserveInventory) {
           let stockBefore: number;
           let stockAfter: number;
@@ -2415,13 +2413,22 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         shippingMethod: storeSale ? "Bán trực tiếp tại cửa hàng" : input.shippingMethod || null,
         note: input.note || null, subtotal, discountAmount, shippingFee, totalAmount,
         status: paid ? "DELIVERED" as any : "PENDING_CONFIRMATION" as any,
-        ...(!paid && !storeSale ? { inventoryReservedAt: new Date() } : {}),
+        ...(!paid ? { inventoryReservedAt: new Date() } : {}),
         ...(paid ? { inventoryCommittedAt: new Date() } : {}),
         ...(this.pos365.isSyncEnabled() ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: new Date() } : {}),
         ...(orderCustomer ? { customer: { connect: { id: orderCustomer.id } } } : {}),
         items: { create: placedItems },
         payments: { create: { method: method as any, amount: totalAmount, status: paid ? "PAID" as any : "PENDING" as any, ...(paid ? { paidAt: new Date() } : {}) } },
       }, include: { items: true, payments: true, customer: true } });
+      if (!storeSale && savedOrder.customerEmail) {
+        await tx.orderEmailOutbox.create({ data: {
+          orderId: savedOrder.id,
+          eventType: "ORDER_CONFIRMATION",
+          idempotencyKey: `order-confirmation:${savedOrder.id}`,
+          recipient: savedOrder.customerEmail.trim().toLowerCase(),
+          payload: this.orderConfirmationPayload(savedOrder),
+        } });
+      }
       await this.queueProductStockSync(tx, changedProductIds);
       created = true;
       return savedOrder;
@@ -2436,26 +2443,14 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (!created) return order;
     for (const id of changedProductIds) this.publishCatalogChange("product", "updated", id);
     if (this.pos365.isSyncEnabled()) void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đánh thức hàng đợi POS365 cho đơn ${order.code}.`, error));
-    if (!storeSale) void this.queueOrderConfirmationEmail(order);
+    if (!storeSale) void this.processOrderEmailOutbox();
     return order;
   }
 
-  private async queueOrderConfirmationEmail(order: any) {
+  private orderConfirmationPayload(order: any) {
     const recipient = typeof order.customerEmail === "string" ? order.customerEmail.trim().toLowerCase() : "";
-    if (!recipient) {
-      this.logger.warn(`Đơn ${order.code} chưa có email nhận xác nhận.`);
-      return;
-    }
-
-    const baseUrl = (process.env.AEGIS_ORDER_EMAIL_URL || process.env.AEGIS_AUTH_API_URL || "http://127.0.0.1:5130").trim().replace(/\/+$/, "");
-    const apiKey = process.env.GEME_ORDER_EMAIL_API_KEY?.trim();
-    if (!apiKey) {
-      this.logger.warn(`Chưa cấu hình dịch vụ email xác nhận cho đơn ${order.code}.`);
-      return;
-    }
-
     const payment = order.payments?.[0];
-    const requestBody = {
+    return {
       recipient,
       customerName: order.customerName || null,
       orderCode: order.code,
@@ -2482,18 +2477,87 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         lineTotal: Number(item.lineTotal),
       })),
     };
+  }
 
+  private async processOrderEmailOutbox() {
+    if (this.orderEmailOutboxRunning) return;
+    this.orderEmailOutboxRunning = true;
+    try {
+      const now = new Date();
+      const staleProcessingBefore = new Date(now.getTime() - 2 * 60_000);
+      // A timeout/crash after Aegis accepted a request has an ambiguous result.
+      // Stop automatic resend; an operator must verify or explicitly retry.
+      await this.prisma.orderEmailOutbox.updateMany({
+        where: { status: "PROCESSING", updatedAt: { lte: staleProcessingBefore } },
+        data: { status: "UNKNOWN", lastError: "AEGIS_RESULT_UNKNOWN" },
+      });
+      const candidates = await this.prisma.orderEmailOutbox.findMany({
+        where: { status: { in: ["PENDING", "FAILED"] }, nextAttemptAt: { lte: now } },
+        orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }],
+        take: 20,
+      });
+      for (const candidate of candidates) await this.deliverOrderEmailOutbox(candidate);
+    } finally {
+      this.orderEmailOutboxRunning = false;
+    }
+  }
+
+  private async deliverOrderEmailOutbox(candidate: any) {
+    const claimed = await this.prisma.orderEmailOutbox.updateMany({
+      where: { id: candidate.id, status: candidate.status, updatedAt: candidate.updatedAt },
+      data: { status: "PROCESSING", attemptCount: { increment: 1 }, lastError: null },
+    });
+    if (claimed.count !== 1) return;
+    const attempt = Number(candidate.attemptCount || 0) + 1;
+    const apiKey = process.env.GEME_ORDER_EMAIL_API_KEY?.trim();
+    if (!apiKey) {
+      await this.failOrderEmailOutbox(candidate.id, attempt, "EMAIL_SERVICE_NOT_CONFIGURED");
+      return;
+    }
+    const baseUrl = (process.env.AEGIS_ORDER_EMAIL_URL || process.env.AEGIS_AUTH_API_URL || "http://127.0.0.1:5130").trim().replace(/\/+$/, "");
     try {
       const response = await fetch(`${baseUrl}/internal/email/order-confirmation`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-GEME-Internal-Key": apiKey },
-        body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(2500),
+        headers: {
+          "Content-Type": "application/json",
+          "X-GEME-Internal-Key": apiKey,
+          "Idempotency-Key": candidate.idempotencyKey,
+        },
+        body: JSON.stringify(candidate.payload),
+        signal: AbortSignal.timeout(5_000),
       });
-      if (!response.ok) this.logger.warn(`Không thể đưa email xác nhận đơn ${order.code} vào hàng đợi (HTTP ${response.status}).`);
-    } catch (error) {
-      this.logger.warn(`Không thể kết nối dịch vụ email xác nhận cho đơn ${order.code}.`, error);
+      if (response.ok) {
+        await this.prisma.orderEmailOutbox.updateMany({ where: { id: candidate.id, status: "PROCESSING" }, data: { status: "ACCEPTED", acceptedAt: new Date(), lastError: null } });
+        return;
+      }
+      if (response.status >= 500) {
+        await this.prisma.orderEmailOutbox.updateMany({ where: { id: candidate.id, status: "PROCESSING" }, data: { status: "UNKNOWN", lastError: `AEGIS_HTTP_${response.status}_RESULT_UNKNOWN` } });
+        return;
+      }
+      await this.failOrderEmailOutbox(candidate.id, attempt, `AEGIS_HTTP_${response.status}`);
+    } catch (error: any) {
+      await this.prisma.orderEmailOutbox.updateMany({
+        where: { id: candidate.id, status: "PROCESSING" },
+        data: { status: "UNKNOWN", lastError: error?.name === "TimeoutError" || error?.name === "AbortError" ? "AEGIS_TIMEOUT_RESULT_UNKNOWN" : "AEGIS_CONNECTION_RESULT_UNKNOWN" },
+      });
     }
+  }
+
+  private async failOrderEmailOutbox(id: string, attempt: number, code: string) {
+    const delayMs = Math.min(60 * 60_000, 5_000 * 2 ** Math.min(Math.max(attempt - 1, 0), 10));
+    await this.prisma.orderEmailOutbox.updateMany({
+      where: { id, status: "PROCESSING" },
+      data: { status: "FAILED", lastError: code, nextAttemptAt: new Date(Date.now() + delayMs) },
+    });
+  }
+
+  async retryOrderConfirmationEmail(orderId: string) {
+    const entry = await this.prisma.orderEmailOutbox.findUnique({ where: { orderId_eventType: { orderId, eventType: "ORDER_CONFIRMATION" } } });
+    if (!entry) throw new NotFoundException("Không có email xác nhận đã lưu cho đơn này.");
+    if (entry.status === "ACCEPTED") return entry;
+    await this.prisma.orderEmailOutbox.updateMany({ where: { id: entry.id, status: { in: ["FAILED", "PENDING", "UNKNOWN"] } }, data: { status: "PENDING", nextAttemptAt: new Date(), lastError: null } });
+    void this.processOrderEmailOutbox();
+    return this.prisma.orderEmailOutbox.findUnique({ where: { id: entry.id } });
   }
 
   async promotions(query: Record<string, string> = {}) {

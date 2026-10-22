@@ -72,6 +72,29 @@ export function validateShopeeCursor(more: boolean, cursor: string, current: str
   return !more || Boolean(cursor && cursor !== current && !seen.has(cursor));
 }
 
+/**
+ * Conservative identity rule for the order detail fields. A positive model_id
+ * or a non-empty model_sku is enough to require an exact variation mapping.
+ * When Shopee sends model_id=0/blank without model_sku, the line is only a
+ * parent-product candidate; callers must still prove that the chosen product
+ * has no variations. This deliberately prefers an unmatched line over a
+ * parent fallback when the payload is ambiguous.
+ */
+export function isShopeeVariantLine(input: { modelId?: unknown; modelSku?: unknown }) {
+  const modelId = input.modelId === null || input.modelId === undefined ? "" : String(input.modelId).trim();
+  const modelSku = typeof input.modelSku === "string" ? input.modelSku.trim() : "";
+  const hasPositiveModelId = /^\d+$/.test(modelId) && !/^0+$/.test(modelId);
+  return hasPositiveModelId || Boolean(modelSku);
+}
+
+export type ShopeeAutoSkuTarget = { productId: string; variantId: string | null; sku: string };
+
+/** Select a safe auto-match only when the complete candidate set is unique. */
+export function selectUniqueShopeeSkuTarget(candidates: ShopeeAutoSkuTarget[]) {
+  const unique = [...new Map(candidates.map((candidate) => [`${candidate.productId}:${candidate.variantId ?? ""}`, candidate])).values()];
+  return unique.length === 1 ? unique[0]! : null;
+}
+
 export function validateShopeeOrderDetails(value: unknown, requestedOrderSns: string[]): ContractResult<Array<Record<string, unknown>>> {
   if (!Array.isArray(value)) return { ok: false, code: "SHOPEE_ORDER_DETAIL_LIST_INVALID" };
   const requested = new Set(requestedOrderSns);

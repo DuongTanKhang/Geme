@@ -1,23 +1,50 @@
+import { BadRequestException } from "@nestjs/common";
+
 const ONLINE_PAYMENT_METHODS = new Set(["COD", "BANK_TRANSFER", "MOMO", "CREDIT_CARD"]);
 
-/** Accept only checkout fields; all price, payment and sales-channel facts are server-owned. */
+/** Accept only checkout fields; validate instead of silently truncating buyer data. */
 export function onlineOrderInput(body: Record<string, any>) {
-  const items = Array.isArray(body.items) ? body.items.slice(0, 30).map((line: Record<string, unknown>) => ({
-    productId: typeof line?.productId === "string" ? line.productId.slice(0, 64) : "",
-    variantId: typeof line?.variantId === "string" ? line.variantId.slice(0, 64) : undefined,
-    sku: typeof line?.sku === "string" ? line.sku.slice(0, 64) : "",
-    quantity: line?.quantity,
-  })) : [];
-  const paymentMethod = typeof body.paymentMethod === "string" && ONLINE_PAYMENT_METHODS.has(body.paymentMethod)
-    ? body.paymentMethod
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new BadRequestException("Thông tin đặt hàng không hợp lệ.");
+  if (!Array.isArray(body.items) || body.items.length < 1) throw new BadRequestException("Đơn hàng cần ít nhất một sản phẩm.");
+  if (body.items.length > 30) throw new BadRequestException("Giỏ hàng tối đa 30 dòng sản phẩm. Hãy gộp các dòng SKU trùng nhau rồi thử lại.");
+  const items = body.items.map((line: Record<string, unknown>) => {
+    if (!line || typeof line !== "object" || Array.isArray(line)) throw new BadRequestException("Một dòng sản phẩm trong giỏ hàng không hợp lệ.");
+    const productId = typeof line.productId === "string" ? line.productId.trim() : "";
+    const variantId = typeof line.variantId === "string" ? line.variantId.trim() : "";
+    const sku = typeof line.sku === "string" ? line.sku.trim() : "";
+    if (productId.length > 64 || variantId.length > 64 || sku.length > 64) throw new BadRequestException("Mã sản phẩm hoặc SKU trong giỏ hàng quá dài.");
+    return { productId, variantId: variantId || undefined, sku, quantity: line.quantity };
+  });
+
+  const paymentMethod = typeof body.paymentMethod === "string" && body.paymentMethod.trim()
+    ? body.paymentMethod.trim()
     : "COD";
+  if (!ONLINE_PAYMENT_METHODS.has(paymentMethod)) throw new BadRequestException("Phương thức thanh toán không được hỗ trợ.");
+
+  const name = typeof body.customerName === "string" ? body.customerName.trim() : "";
+  const phoneInput = typeof body.phone === "string" ? body.phone.trim() : "";
+  const digits = phoneInput.replace(/\D/g, "");
+  const phone = phoneInput.startsWith("+84") && digits.startsWith("84") ? `0${digits.slice(2)}` : digits.startsWith("84") && digits.length === 11 ? `0${digits.slice(2)}` : phoneInput;
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const shippingAddress = typeof body.shippingAddress === "string" ? body.shippingAddress.trim() : "";
+  const note = typeof body.note === "string" ? body.note : "";
+  if (!digits || digits.length < 9 || digits.length > 12 || /[^+\d().\s-]/.test(phoneInput)) throw new BadRequestException("Nhập số điện thoại người nhận hợp lệ (9–12 chữ số).");
+  if (!shippingAddress || shippingAddress.length < 8) throw new BadRequestException("Nhập đầy đủ địa chỉ giao hàng trước khi đặt hàng.");
+  if (name.length > 160 || phone.length > 32 || email.length > 320 || shippingAddress.length > 1000 || note.length > 2000) throw new BadRequestException("Thông tin giao hàng vượt quá độ dài cho phép. Hãy chỉnh nội dung rồi thử lại.");
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BadRequestException("Địa chỉ email không hợp lệ.");
+
+  let expectedTotalAmount: number | undefined;
+  if (body.expectedTotalAmount !== undefined && body.expectedTotalAmount !== null && body.expectedTotalAmount !== "") {
+    expectedTotalAmount = Number(body.expectedTotalAmount);
+    if (!Number.isSafeInteger(expectedTotalAmount) || expectedTotalAmount < 0) throw new BadRequestException("Tổng tiền kiểm tra không hợp lệ. Hãy tải lại báo giá.");
+  }
 
   return {
-    customerName: typeof body.customerName === "string" ? body.customerName.slice(0, 160) : "",
-    phone: typeof body.phone === "string" ? body.phone.slice(0, 32) : "",
-    email: typeof body.email === "string" ? body.email.slice(0, 320) : "",
-    shippingAddress: typeof body.shippingAddress === "string" ? body.shippingAddress.slice(0, 1000) : "",
-    note: typeof body.note === "string" ? body.note.slice(0, 2000) : "",
+    customerName: name,
+    phone,
+    email,
+    shippingAddress,
+    note,
     paymentMethod,
     items,
     salesChannel: "ONLINE",
@@ -25,7 +52,7 @@ export function onlineOrderInput(body: Record<string, any>) {
     paid: false,
     discountAmount: 0,
     shippingFee: 0,
-    expectedTotalAmount: Number.isFinite(Number(body.expectedTotalAmount)) && Number(body.expectedTotalAmount) >= 0 ? Math.round(Number(body.expectedTotalAmount)) : undefined,
+    expectedTotalAmount,
     shippingMethod: "Giao hàng",
   };
 }

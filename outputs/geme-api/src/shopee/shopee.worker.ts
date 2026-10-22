@@ -9,6 +9,7 @@ import { PrismaService } from "../prisma/prisma.service.js";
 import { ShopeeSyncQueue, SHOPEE_SYNC_QUEUE, SHOPEE_WORKER_HEARTBEAT_KEY, type ShopeeSyncPayload } from "./shopee.queue.js";
 import { ShopeeService } from "./shopee.service.js";
 import { ShopeeApiError, shopeeConfig } from "./shopee.client.js";
+import { shopeeBackoffStrategy } from "./shopee.retry.js";
 
 const logger = new Logger("ShopeeReadOnlyWorker");
 const databaseUrl = process.env.DATABASE_URL;
@@ -59,12 +60,7 @@ const worker = new Worker<ShopeeSyncPayload>(SHOPEE_SYNC_QUEUE, async (job: Job<
   }
 }, {
   connection: redisConnectionOptions(true), concurrency, lockDuration: 10 * 60_000, stalledInterval: 60_000,
-  settings: { backoffStrategy: (attemptsMade, type, error) => {
-    if (type !== "exponential") return -1;
-    const exponential = Math.min(300_000, 5_000 * 2 ** Math.max(0, attemptsMade - 1));
-    const retryAfter = error instanceof ShopeeApiError ? Math.max(0, (error.retryAfterSeconds || 0) * 1000) : 0;
-    return Math.min(600_000, Math.max(exponential, retryAfter));
-  } },
+  settings: { backoffStrategy: shopeeBackoffStrategy },
 });
 
 worker.on("completed", (job) => logger.log(JSON.stringify({ event: "shopee.worker.job_completed", jobId: job.id, name: job.name })));

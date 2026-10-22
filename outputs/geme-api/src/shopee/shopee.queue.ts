@@ -5,24 +5,18 @@ import { Redis } from "ioredis";
 import { redisConnectionOptions } from "../ai-studio/ai-studio.queue.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { shopeeConfig } from "./shopee.client.js";
+import { SHOPEE_SYNC_JOB_OPTIONS } from "./shopee.retry.js";
 
 export const SHOPEE_SYNC_QUEUE = "geme-shopee-readonly-sync";
 export const SHOPEE_WORKER_HEARTBEAT_KEY = "geme-shopee-readonly-worker:heartbeat";
 export type ShopeeSyncPayload = { connectionId?: string; syncRunId?: string };
-const defaultJobOptions = {
-  attempts: 5,
-  backoff: { type: "exponential" as const, delay: 5_000, jitter: 0.25 },
-  removeOnComplete: { age: 86_400, count: 3000 },
-  removeOnFail: { age: 604_800, count: 5000 },
-};
-
 @Injectable()
 export class ShopeeSyncQueue implements OnModuleDestroy {
   private readonly logger = new Logger(ShopeeSyncQueue.name);
   private readonly redis = new Redis({ ...redisConnectionOptions(), maxRetriesPerRequest: 1, lazyConnect: true });
   private readonly queue = new Queue<ShopeeSyncPayload>(SHOPEE_SYNC_QUEUE, {
     connection: redisConnectionOptions(),
-    defaultJobOptions,
+    defaultJobOptions: SHOPEE_SYNC_JOB_OPTIONS,
   });
 
   constructor(private readonly prisma: PrismaService) {}
@@ -44,7 +38,7 @@ export class ShopeeSyncQueue implements OnModuleDestroy {
 
     const syncRun = await this.prisma.shopeeSyncRun.create({ data: { connectionId, status: "QUEUED", fromTime: connection.syncCursorAt, retryOfId: retryOfId ?? null, createdByAdminId: adminId ?? null } });
     try {
-      const job = await this.queue.add("sync-orders", { connectionId, syncRunId: syncRun.id }, { jobId, ...defaultJobOptions });
+      const job = await this.queue.add("sync-orders", { connectionId, syncRunId: syncRun.id }, { jobId, ...SHOPEE_SYNC_JOB_OPTIONS });
       if (job.data.syncRunId !== syncRun.id) {
         await this.prisma.shopeeSyncRun.update({ where: { id: syncRun.id }, data: { status: "CANCELLED", finishedAt: new Date(), errorCode: "SHOPEE_SYNC_ALREADY_QUEUED" } });
         return { queued: false, syncRunId: job.data.syncRunId };

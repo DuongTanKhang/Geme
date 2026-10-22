@@ -676,6 +676,7 @@ model Order {
   customer        Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
   items           OrderItem[]
   payments        Payment[]
+  emailOutbox     OrderEmailOutbox[]
   promotionUsage  PromotionUsage?
 
   @@index([status, placedAt(sort: Desc)])
@@ -729,6 +730,27 @@ model Payment {
   @@index([orderId, status])
   @@index([status, paidAt(sort: Desc)])
   @@map("payments")
+}
+
+model OrderEmailOutbox {
+  id             String   @id @default(uuid()) @db.Uuid
+  orderId        String   @map("order_id") @db.Uuid
+  eventType      String   @default("ORDER_CONFIRMATION") @map("event_type") @db.VarChar(40)
+  idempotencyKey String   @unique @map("idempotency_key") @db.VarChar(180)
+  recipient      String   @db.VarChar(320)
+  payload        Json
+  status         String   @default("PENDING") @db.VarChar(20)
+  attemptCount   Int      @default(0) @map("attempt_count")
+  nextAttemptAt  DateTime @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  acceptedAt     DateTime? @map("accepted_at") @db.Timestamptz(3)
+  lastError      String?  @map("last_error") @db.VarChar(500)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  order          Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, eventType])
+  @@index([status, nextAttemptAt])
+  @@map("order_email_outbox")
 }
 
 model Promotion {
@@ -1364,6 +1386,7 @@ model ShopeeItemMapping {
   productId      String                    @map("product_id") @db.Uuid
   variantId      String?                   @map("variant_id") @db.Uuid
   sku            String                    @db.VarChar(64)
+  source         String                    @default("MANUAL") @db.VarChar(20)
   createdAt      DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
   connection     ShopeeConnection          @relation(fields: [connectionId], references: [id], onDelete: Cascade)

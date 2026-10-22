@@ -75,9 +75,10 @@ export class CommerceController {
   @Post("orders") createStoreOrder(@Body() body: Record<string, any>, @Headers("idempotency-key") idempotencyKey?: string) {
     return this.commerce.createOrder(onlineOrderInput(body), undefined, false, idempotencyKey);
   }
-  @Post("admin/orders") @admin() createAdminOrder(@Body() body: Record<string, any>) { return this.commerce.createOrder(body, undefined, true); }
+  @Post("admin/orders") @admin() createAdminOrder(@Body() body: Record<string, any>, @Headers("idempotency-key") idempotencyKey?: string) { return this.commerce.createOrder(body, undefined, true, idempotencyKey); }
   @Patch("orders/:id/status") @admin() orderStatus(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.updateOrderStatus(id, body.status); }
   @Patch("orders/:id/payment") @admin() orderPayment(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.markOrderPaid(id, body.status); }
+  @Post("orders/:id/email/retry") @admin() retryOrderEmail(@Param("id") id: string) { return this.commerce.retryOrderConfirmationEmail(id); }
 
   @Get("promotions/storefront") storefrontPromotions() { return this.commerce.storefrontPromotions(); }
   @Get("promotions") @admin() promotions(@Query() query: Record<string, string>) { return this.commerce.promotions(query); }

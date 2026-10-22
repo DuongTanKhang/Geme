@@ -14,6 +14,7 @@ type Props = {
   onDispatch: () => void;
   onDelivered: () => void;
   onMarkPaid: () => Promise<void>;
+  onRetryOrderEmail: () => Promise<void>;
   onShowBill: () => void;
   onCustomerHistory: () => void;
   onGetViettelPostStatus: () => Promise<VtpStatus>;
@@ -56,7 +57,7 @@ function posSyncName(status?: string | null) {
   return ({ PENDING: "Đang chờ gửi", SYNCING: "Đang đồng bộ", RETRYING: "Sẽ tự thử lại", SYNCED: "Đã đồng bộ", BLOCKED: "Cần cấu hình thanh toán" } as Record<string, string>)[status || ""] || "Chưa gửi lên POS365";
 }
 
-export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch, onDelivered, onMarkPaid, onShowBill, onCustomerHistory, onGetViettelPostStatus, onGetViettelPostPrintUrl, onQuoteViettelPost, onCreateViettelPostShipment, onRefreshOrders }: Props) {
+export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch, onDelivered, onMarkPaid, onRetryOrderEmail, onShowBill, onCustomerHistory, onGetViettelPostStatus, onGetViettelPostPrintUrl, onQuoteViettelPost, onCreateViettelPostShipment, onRefreshOrders }: Props) {
   const defaultWeight = Math.round(order.items.reduce((sum, item) => sum + (Number(item.weightGrams) || 0) * item.quantity, 0));
   const [shipmentOpen, setShipmentOpen] = useState(false);
   const [shipmentStatus, setShipmentStatus] = useState<VtpStatus | null>(null);
@@ -79,6 +80,8 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
   const [refreshError, setRefreshError] = useState("");
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [paymentError, setPaymentError] = useState("");
+  const [emailRetryLoading, setEmailRetryLoading] = useState(false);
+  const [emailRetryError, setEmailRetryError] = useState("");
 
   useEffect(() => {
     setShipmentOpen(false);
@@ -91,6 +94,7 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
     setShippingNote(order.note || "");
     setRefreshError("");
     setPaymentError("");
+    setEmailRetryError("");
     setPrintError("");
     setPrintUrl("");
   }, [order.id, defaultWeight, order.note]);
@@ -149,6 +153,13 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
     catch (error) { setPaymentError(error instanceof Error ? error.message : "Không thể ghi nhận thanh toán."); }
     finally { setPaymentLoading(false); }
   };
+  const retryOrderEmail = async () => {
+    setEmailRetryLoading(true);
+    setEmailRetryError("");
+    try { await onRetryOrderEmail(); }
+    catch (error) { setEmailRetryError(error instanceof Error ? error.message : "Không thể thử gửi lại email."); }
+    finally { setEmailRetryLoading(false); }
+  };
 
   const statusSteps = ["Đặt hàng", "Chờ xác nhận", "Đang xử lý", "Đang giao", "Đã giao", "Đã hủy"];
   const statusIndex = Math.max(0, statusSteps.indexOf(order.status));
@@ -157,6 +168,7 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
     <div className="drawer-title"><h2>Chi tiết đơn hàng #{order.id}</h2><button className="icon-button" type="button" onClick={onClose} aria-label="Đóng chi tiết"><SectionIcon name="close" /></button></div>
     <div className="drawer-meta"><span className="status-pill amber">{order.status}</span><span>Đặt hàng lúc {order.date} {order.time}</span></div>
     <div className={`pos365-order-sync ${order.pos365SyncStatus === "SYNCED" ? "is-synced" : order.pos365SyncStatus === "BLOCKED" ? "is-blocked" : ""}`}><strong>POS365</strong><span>{posSyncName(order.pos365SyncStatus)}</span>{order.pos365SyncError && <small>{order.pos365SyncError}</small>}</div>
+    {order.emailOutbox && <div className="pos365-order-sync"><strong>Email xác nhận</strong><span>{({ PENDING: "Đang chờ gửi", PROCESSING: "Đang gửi", ACCEPTED: "Aegis đã nhận yêu cầu", FAILED: "Gửi lỗi", UNKNOWN: "Cần kiểm tra kết quả tại Aegis" } as Record<string, string>)[order.emailOutbox.status] || order.emailOutbox.status}</span>{order.emailOutbox.lastError && <small>{order.emailOutbox.lastError}</small>}{["FAILED", "PENDING", "UNKNOWN"].includes(order.emailOutbox.status) && <button type="button" onClick={retryOrderEmail} disabled={emailRetryLoading}>{emailRetryLoading ? "Đang thử lại…" : order.emailOutbox.status === "UNKNOWN" ? "Xác minh rồi thử lại" : "Thử gửi lại email"}</button>}{emailRetryError && <small className="vtp-error" role="alert">{emailRetryError}</small>}</div>}
 
     <div className="drawer-info-timeline">
       <div className="drawer-info-card">

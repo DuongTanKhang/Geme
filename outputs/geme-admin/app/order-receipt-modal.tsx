@@ -27,6 +27,7 @@ export type OrderReceiptData = {
   status: string;
   payment: string;
   paymentStatus: string;
+  emailOutbox?: { status: string; attemptCount: number; lastError?: string | null; nextAttemptAt?: string | null; acceptedAt?: string | null } | null;
   shipping: string;
   address: string;
   trackingCode: string;

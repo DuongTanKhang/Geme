@@ -2,7 +2,7 @@ import { BadGatewayException, BadRequestException, ConflictException, Injectable
 import { timingSafeEqual } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { Pos365Service } from "../pos365/pos365.service.js";
-import { ensureCustomerForPaidOrder } from "../commerce/customer-profile.js";
+import { canTransitionOrder } from "../commerce/order-state.js";
 
 type Input = Record<string, any>;
 type VtpConfig = { baseUrl: string; token: string; senderName: string; senderPhone: string; senderAddress: string; enabled: boolean };
@@ -196,15 +196,14 @@ export class ViettelPostService {
     const trackingCode = String(data?.ORDER_NUMBER || "").trim();
     if (!trackingCode) return { accepted: true };
     const order = await this.prisma.order.findFirst({ where: { trackingCode }, select: {
-      id: true, code: true, status: true, carrierStatusAt: true, carrierShipmentStatus: true,
-      customerId: true, customerName: true, customerPhone: true, customerEmail: true, shippingAddress: true,
-      payments: { select: { id: true, method: true, status: true } },
+      id: true, code: true, status: true, updatedAt: true, carrierStatusAt: true, carrierShipmentStatus: true,
+      inventoryReservedAt: true, inventoryCommittedAt: true, inventoryReleasedAt: true,
     } });
     if (!order) return { accepted: true };
     const statusCode = Number(data?.ORDER_STATUS);
     if (!Number.isInteger(statusCode)) return { accepted: true };
     const occurredAt = this.parseVtpDate(data?.ORDER_STATUSDATE) || new Date();
-    if (order.carrierStatusAt && occurredAt < order.carrierStatusAt) return { accepted: true };
+    if (order.carrierStatusAt && occurredAt <= order.carrierStatusAt) return { accepted: true };
 
     const carrierStatusName = String(data?.STATUS_NAME || "").trim().slice(0, 180) || null;
     const normalizedStatusName = (carrierStatusName || "").toLocaleLowerCase("vi");
@@ -215,25 +214,23 @@ export class ViettelPostService {
     const moving = /đã lấy hàng|đã nhận hàng|đang vận chuyển|đang giao|đã nhập kho|rời bưu cục|đến bưu cục|đang khai thác/.test(normalizedStatusName);
     const previousShipmentStatus = String(order.carrierShipmentStatus || "").toUpperCase();
     const carrierShipmentStatus = delivered ? "DELIVERED" : returning ? "RETURNING" : cancelled ? "CANCELLED" : deliveryFailed ? "EXCEPTION" : moving ? "IN_TRANSIT" : ["IN_TRANSIT", "EXCEPTION", "RETURNING", "CANCELLED"].includes(previousShipmentStatus) ? previousShipmentStatus : "AWAITING_PICKUP";
-    const orderStatus = delivered
+    const proposedOrderStatus = delivered
       ? ("DELIVERED" as const)
       : moving && order.status !== "DELIVERED" && order.status !== "CANCELLED"
         ? ("SHIPPING" as const)
         : order.status;
-
-    const codPayment = order.payments.find((payment) => payment.method === "COD");
-    const paymentChanged = Boolean(delivered && codPayment && ["PENDING", "FAILED"].includes(codPayment.status));
+    const nextOrderStatus = canTransitionOrder(order.status, proposedOrderStatus, "CARRIER") ? proposedOrderStatus : order.status;
+    const shouldCommitLegacyReservation = nextOrderStatus === "DELIVERED" && order.inventoryReservedAt && !order.inventoryCommittedAt && !order.inventoryReleasedAt;
     const updated = await this.prisma.$transaction(async (tx) => {
-      let customer: any = null;
-      if (paymentChanged && codPayment) {
-        customer = await ensureCustomerForPaidOrder(tx, order);
-        await tx.payment.update({ where: { id: codPayment.id }, data: { status: "PAID", paidAt: new Date() } });
-      }
-      return tx.order.update({
-        where: { id: order.id },
+      const saved = await tx.order.updateMany({
+        where: {
+          id: order.id, status: order.status, updatedAt: order.updatedAt,
+          OR: [{ carrierStatusAt: null }, { carrierStatusAt: { lt: occurredAt } }],
+          ...(shouldCommitLegacyReservation ? { inventoryReservedAt: { not: null }, inventoryCommittedAt: null, inventoryReleasedAt: null } : {}),
+        },
         data: {
-          ...(orderStatus !== order.status ? { status: orderStatus } : {}),
-          ...(paymentChanged && customer && !order.customerId ? { customer: { connect: { id: customer.id } } } : {}),
+          ...(nextOrderStatus !== order.status ? { status: nextOrderStatus } : {}),
+          ...(shouldCommitLegacyReservation ? { inventoryCommittedAt: new Date() } : {}),
           carrierShipmentStatus,
           carrierStatusCode: Number.isFinite(statusCode) ? statusCode : null,
           carrierStatusName,
@@ -242,8 +239,11 @@ export class ViettelPostService {
           ...(Number.isFinite(Number(data?.MONEY_TOTALFEE)) ? { carrierFee: Number(data.MONEY_TOTALFEE) } : {}),
         },
       });
+      if (saved.count !== 1) return null;
+      return tx.order.findUnique({ where: { id: order.id }, select: { id: true, status: true } });
     });
-    if (updated.status !== order.status || paymentChanged) void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đưa trạng thái đơn ${order.code} vào hàng đợi POS365.`, error));
+    if (!updated) return { accepted: true };
+    if (updated.status !== order.status) void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đưa trạng thái đơn ${order.code} vào hàng đợi POS365.`, error));
     return { accepted: true };
   }
 

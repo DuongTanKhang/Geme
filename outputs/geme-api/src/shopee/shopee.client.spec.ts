@@ -148,7 +148,22 @@ test("refresh-token request signs the public path and keeps token credentials in
   assert.deepEqual(body, { refresh_token: "refresh-secret", partner_id: 123456, shop_id: 456 });
 }));
 
-test("Shopee token rejection is surfaced as a reauthorization requirement", async () => withShopeeConfig(async () => {
+test("an expired shop access token is distinguishable and retryable", async () => withShopeeConfig(async () => {
   const client = new ShopeeClient(async () => new Response(JSON.stringify({ error: "error_access_token_expired" }), { status: 200 }));
-  await assert.rejects(client.getOrderList({ accessToken: "expired", shopId: "456", from: 1, to: 100 }), (error: unknown) => error instanceof ShopeeApiError && error.code === "SHOPEE_REAUTH_REQUIRED" && !error.retryable);
+  await assert.rejects(client.getOrderList({ accessToken: "expired", shopId: "456", from: 1, to: 100 }), (error: unknown) => error instanceof ShopeeApiError && error.code === "SHOPEE_ACCESS_TOKEN_EXPIRED" && error.retryable && error.kind === "access_token_expired");
+}));
+
+test("only an exact refresh-token rejection requests reauthorization", async () => withShopeeConfig(async () => {
+  const client = new ShopeeClient(async () => Response.json({ error: "error_access_token_expired" }));
+  await assert.rejects(client.refreshAccessToken("rejected-refresh", "456"), (error: unknown) => error instanceof ShopeeApiError && error.code === "SHOPEE_REFRESH_TOKEN_REJECTED" && !error.retryable && error.kind === "reauthorization_required");
+}));
+
+test("unknown provider errors and transient HTTP statuses never masquerade as reauthorization", async () => withShopeeConfig(async () => {
+  const unknown = new ShopeeClient(async () => Response.json({ error: "error_shop_access_unknown" }));
+  await assert.rejects(unknown.getOrderList({ accessToken: "token", shopId: "456", from: 1, to: 100 }), (error: unknown) => error instanceof ShopeeApiError && error.code === "SHOPEE_API_ERROR" && error.retryable && error.kind === "other");
+
+  for (const status of [429, 503]) {
+    const transient = new ShopeeClient(async () => new Response("{}", { status, headers: { "retry-after": "7" } }));
+    await assert.rejects(transient.getOrderList({ accessToken: "token", shopId: "456", from: 1, to: 100 }), (error: unknown) => error instanceof ShopeeApiError && error.retryable && error.kind === "other" && error.retryAfterSeconds === 7);
+  }
 }));

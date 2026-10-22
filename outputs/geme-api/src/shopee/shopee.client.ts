@@ -25,7 +25,13 @@ export type ShopeeConfig = {
 };
 
 export class ShopeeApiError extends Error {
-  constructor(readonly code: string, readonly retryable: boolean, readonly status?: number, readonly retryAfterSeconds?: number) {
+  constructor(
+    readonly code: string,
+    readonly retryable: boolean,
+    readonly status?: number,
+    readonly retryAfterSeconds?: number,
+    readonly kind: "access_token_expired" | "reauthorization_required" | "application_configuration" | "other" = "other",
+  ) {
     super(code);
     this.name = "ShopeeApiError";
   }
@@ -172,6 +178,7 @@ export class ShopeeClient {
     return this.postJson<{ access_token?: string; refresh_token?: string; expire_in?: number; refresh_token_expire_in?: number; shop_id?: number | string }>(
       `${shopeeApiOrigin(config.environment)}${path}?${new URLSearchParams({ partner_id: config.partnerId, timestamp: String(timestamp), sign })}`,
       { code, shop_id: Number(shopId), partner_id: Number(config.partnerId) },
+      "exchange",
     );
   }
 
@@ -184,6 +191,7 @@ export class ShopeeClient {
     return this.postJson<{ access_token?: string; refresh_token?: string; expire_in?: number; refresh_token_expire_in?: number }>(
       `${shopeeApiOrigin(config.environment)}${path}?${new URLSearchParams({ partner_id: config.partnerId, timestamp: String(timestamp), sign })}`,
       { refresh_token: refreshToken, partner_id: Number(config.partnerId), shop_id: Number(shopId) },
+      "refresh",
     );
   }
 
@@ -195,7 +203,7 @@ export class ShopeeClient {
     query.set("time_to", String(input.to));
     query.set("page_size", "100");
     if (input.cursor) query.set("cursor", input.cursor);
-    return this.getJson<{ order_list?: Array<{ order_sn?: string; order_status?: string }>; more?: boolean; next_cursor?: string }>(`${this.apiUrl(path)}?${query}`);
+    return this.getJson<{ order_list?: Array<{ order_sn?: string; order_status?: string }>; more?: boolean; next_cursor?: string }>(`${this.apiUrl(path)}?${query}`, "shop");
   }
 
   async getOrderDetails(input: { accessToken: string; shopId: string; orderSnList: string[] }) {
@@ -204,7 +212,7 @@ export class ShopeeClient {
     const query = this.shopQuery(path, input.accessToken, input.shopId);
     query.set("order_sn_list", input.orderSnList.join(","));
     query.set("response_optional_fields", "item_list,total_amount,estimated_shipping_fee,actual_shipping_fee,recipient_address,pay_time,payment_method,shipping_carrier,cod,message_to_seller");
-    return this.getJson<{ order_list?: ShopeeOrderDetail[] }>(`${this.apiUrl(path)}?${query}`);
+    return this.getJson<{ order_list?: ShopeeOrderDetail[] }>(`${this.apiUrl(path)}?${query}`, "shop");
   }
 
   private shopQuery(path: string, accessToken: string, shopId: string) {
@@ -226,37 +234,51 @@ export class ShopeeClient {
     return config;
   }
 
-  private async getJson<T>(url: string): Promise<T> {
+  private async getJson<T>(url: string, context: "shop" | "exchange" | "refresh"): Promise<T> {
     let response: Response;
     try { response = await this.fetcher(url, { method: "GET", headers: { Accept: "application/json" }, signal: AbortSignal.timeout(20_000) }); }
     catch { throw new ShopeeApiError("SHOPEE_NETWORK_ERROR", true); }
-    return this.parseResponse<T>(response);
+    return this.parseResponse<T>(response, context);
   }
 
-  private async postJson<T>(url: string, body: unknown): Promise<T> {
+  private async postJson<T>(url: string, body: unknown, context: "shop" | "exchange" | "refresh" = "shop"): Promise<T> {
     let response: Response;
     try { response = await this.fetcher(url, { method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) }); }
     catch { throw new ShopeeApiError("SHOPEE_NETWORK_ERROR", true); }
-    return this.parseResponse<T>(response);
+    return this.parseResponse<T>(response, context);
   }
 
-  private async parseResponse<T>(response: Response): Promise<T> {
+  private async parseResponse<T>(response: Response, context: "shop" | "exchange" | "refresh"): Promise<T> {
     const body = await response.json().catch(() => null) as ShopeeResponse<T> | null;
+    const retryAfterHeader = response.headers.get("retry-after");
+    const retryAfter = retryAfterHeader
+      ? /^\d+$/.test(retryAfterHeader)
+        ? Number(retryAfterHeader)
+        : Number.isNaN(Date.parse(retryAfterHeader)) ? undefined : Math.max(0, Math.ceil((Date.parse(retryAfterHeader) - Date.now()) / 1000))
+      : undefined;
+    const providerError = body && typeof body.error === "string" ? body.error.trim().toLowerCase() : "";
+    if (providerError) {
+      // Exact, path-aware codes only. Unknown Shopee errors remain generic and
+      // cannot revoke a stored connection. Confirm this allowlist in the
+      // authenticated app documentation before enabling production.
+      if (context === "shop" && providerError === "error_access_token_expired") {
+        throw new ShopeeApiError("SHOPEE_ACCESS_TOKEN_EXPIRED", true, response.status, retryAfter, "access_token_expired");
+      }
+      if (context === "refresh" && providerError === "error_access_token_expired") {
+        throw new ShopeeApiError("SHOPEE_REFRESH_TOKEN_REJECTED", false, response.status, retryAfter, "reauthorization_required");
+      }
+      if (context === "shop" && ["error_shop_no_linked", "error_shop_access_expired", "error_access_denied"].includes(providerError)) {
+        throw new ShopeeApiError("SHOPEE_REAUTH_REQUIRED", false, response.status, retryAfter, "reauthorization_required");
+      }
+      if (["error_sign", "error_partner_id_not_match", "error_shop_id_not_match"].includes(providerError)) {
+        throw new ShopeeApiError("SHOPEE_APPLICATION_CONFIGURATION_MISMATCH", false, response.status, retryAfter, "application_configuration");
+      }
+    }
     if (!response.ok) {
-      const retryAfterHeader = response.headers.get("retry-after");
-      const retryAfter = retryAfterHeader
-        ? /^\d+$/.test(retryAfterHeader)
-          ? Number(retryAfterHeader)
-          : Number.isNaN(Date.parse(retryAfterHeader)) ? undefined : Math.max(0, Math.ceil((Date.parse(retryAfterHeader) - Date.now()) / 1000))
-        : undefined;
       throw new ShopeeApiError(response.status === 429 ? "SHOPEE_RATE_LIMITED" : `SHOPEE_HTTP_${response.status}`, response.status === 429 || response.status >= 500, response.status, retryAfter);
     }
     if (!body || typeof body !== "object") throw new ShopeeApiError("SHOPEE_RESPONSE_INVALID", true);
-    if (typeof body.error === "string" && body.error) {
-      const error = body.error.toLowerCase();
-      const invalidAuth = /token|auth|permission|shop_no_linked|shop_access_expired|shop_id_not_match|access_denied/.test(error);
-      throw new ShopeeApiError(invalidAuth ? "SHOPEE_REAUTH_REQUIRED" : "SHOPEE_API_ERROR", !invalidAuth);
-    }
+    if (providerError) throw new ShopeeApiError("SHOPEE_API_ERROR", true, response.status, retryAfter);
     if (body.response && typeof body.response === "object") return body.response;
     return body as T;
   }

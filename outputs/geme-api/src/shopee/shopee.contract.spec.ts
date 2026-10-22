@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHmac } from "node:crypto";
-import { chunk, createShopeeState, orderStatusCanAdvance, parseShopeeAmount, shopeeApiOrigin, shopeeAuthorizationOrigin, shopeeEnvironment, shopeeTokenExpiry, signShopeeRequest, unixSecondsDate, validateShopeeCursor, validateShopeeOrderDetails, validateShopeeOrderListPage } from "./shopee.contract.js";
+import { chunk, createShopeeState, isShopeeVariantLine, orderStatusCanAdvance, parseShopeeAmount, selectUniqueShopeeSkuTarget, shopeeApiOrigin, shopeeAuthorizationOrigin, shopeeEnvironment, shopeeTokenExpiry, signShopeeRequest, unixSecondsDate, validateShopeeCursor, validateShopeeOrderDetails, validateShopeeOrderListPage } from "./shopee.contract.js";
 
 test("Shopee signatures include shop credentials only for shop-scoped API paths", () => {
   const signature = signShopeeRequest({ partnerId: "123", partnerKey: "secret", path: "/api/v2/order/get_order_list", timestamp: 1_700_000_000, accessToken: "token", shopId: "456" });
@@ -16,6 +16,20 @@ test("Shopee production and sandbox endpoints are isolated", () => {
   assert.equal(shopeeAuthorizationOrigin("sandbox"), "https://open.test-stable.shopee.com");
   assert.equal(shopeeEnvironment("prod"), null);
   assert.equal(shopeeEnvironment("production"), "production");
+});
+
+test("variant detection treats positive model IDs or model SKU as variation evidence and handles zero/blank explicitly", () => {
+  assert.equal(isShopeeVariantLine({ modelId: 7, modelSku: "" }), true);
+  assert.equal(isShopeeVariantLine({ modelId: "0", modelSku: "MODEL-1" }), true);
+  assert.equal(isShopeeVariantLine({ modelId: "000", modelSku: null }), false);
+  assert.equal(isShopeeVariantLine({ modelId: "", modelSku: " " }), false);
+});
+
+test("SKU auto-match requires one unique target of the permitted type", () => {
+  const variant = { productId: "p1", variantId: "v1", sku: "SKU-1" };
+  assert.deepEqual(selectUniqueShopeeSkuTarget([variant]), variant);
+  assert.equal(selectUniqueShopeeSkuTarget([variant, { productId: "p2", variantId: "v2", sku: "SKU-1" }]), null);
+  assert.equal(selectUniqueShopeeSkuTarget([]), null);
 });
 
 test("OAuth state is unpredictable and stored as a one-way hash", () => {

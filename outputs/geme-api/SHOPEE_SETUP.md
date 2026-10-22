@@ -85,15 +85,18 @@ Redis chỉ ở network nội bộ Compose, không publish port. Worker không m
 3. Callback quay về Admin. GEME kiểm tra state một lần, đổi code ở server rồi lưu access/refresh token bằng AES-256-GCM. Admin thấy Shop ID thật; không giả tên shop nếu chưa đọc được tên qua API.
 4. Bấm **Đồng bộ ngay**. Tác vụ được xếp vào BullMQ/Redis; giao diện hiển thị hàng đợi, heartbeat worker và các trạng thái chờ/đang chạy/thử lại/thành công/thất bại. Redis lỗi hiển thị unavailable, không báo queue rỗng.
 5. Mở **Đơn Shopee** để xem danh sách, bộ lọc server theo từ khóa/trạng thái/shop/môi trường/ngày, chi tiết dòng hàng, trạng thái, phí và dữ liệu vận chuyển mà API trả về. Ngày hiển thị Asia/Ho_Chi_Minh; database lưu UTC.
-6. Mở **Ghép SKU**. Chỉ tự ghép SKU chính xác, duy nhất; SKU/model mơ hồ cần chọn thủ công. Mapping lưu theo shop + item + model và được dùng cho lần import sau.
-7. Mở **Lịch sử đồng bộ** để theo dõi hoặc thử lại job thất bại. Việc job vào hàng đợi không đồng nghĩa đồng bộ đã thành công.
+6. Mở **Ghép SKU**. Mapping biến thể chỉ ghép `model_sku` chính xác, duy nhất; không thử fallback sang SKU sản phẩm cha. Mapping cha chỉ được tự ghép khi Shopee không gửi model ID dương và không gửi `model_sku`, đồng thời `item_sku` trùng chính xác một sản phẩm đang hoạt động, không có biến thể. SKU/model mơ hồ cần chọn thủ công. Mapping lưu theo shop + item + model và được dùng cho lần import sau.
+7. Trong cùng tab, phần **Mapping cần kiểm tra** là báo cáo chỉ đọc cho các mapping cũ có sản phẩm đã lưu trữ/xóa, SKU đã đổi hoặc quan hệ cha/biến thể không còn đúng. Báo cáo không tự sửa/xóa. Mapping không nằm trong 100 dòng gần nhất sẽ cần gọi API với `limit` lớn hơn (tối đa 250) hoặc phân trang ở lần sau.
+8. Mở **Lịch sử đồng bộ** để theo dõi hoặc thử lại job thất bại. Việc job vào hàng đợi không đồng nghĩa đồng bộ đã thành công.
 
 ## Cô lập môi trường và dữ liệu
 
 - Mỗi kết nối lưu môi trường và Partner ID; worker chỉ polling/process kết nối trùng môi trường và Partner ID cấu hình hiện tại. Cấu hình đổi App/môi trường không tự dùng lại token cũ.
 - Sync sử dụng cửa sổ tối đa 14 ngày với overlap 5 phút, phân trang có phát hiện cursor lặp, chi tiết tối đa 50 mã/lần, và chỉ tiến checkpoint khi đủ chi tiết cho mọi order ID trong cửa sổ. Response thiếu order, sai schema hoặc thiếu `item_list` làm job lỗi; không coi thiếu dữ liệu là thành công.
 - Upsert chống trùng theo shop + mã đơn; cập nhật có điều kiện theo `update_time`. Response thiếu item list không xóa dòng cũ. Giá gốc/giá sau giảm được giữ riêng; null/chuỗi trống không đổi thành 0.
-- Job retry có backoff tăng dần, tối đa theo cấu hình queue, tôn trọng Retry-After; lỗi quyền/cấu hình không retry vô hạn. Một rate gate nội bộ giới hạn yêu cầu Shopee ở mức bảo thủ 1 request/giây dùng chung Redis. Đây là giới hạn an toàn của GEME, không phải tuyên bố quota chính thức của Shopee.
+- Mỗi trang `get_order_list` và mỗi batch `get_order_detail` lấy token hoạt động mới nhất trước request. Nếu Shopee báo token hết hạn, worker refresh có lease chia sẻ giữa nhiều job và thử lại cùng cursor/batch đúng một lần. Kết quả refresh cũ không thể ghi đè reconnect/disconnect. Chỉ mã lỗi quyền được allowlist theo ngữ cảnh mới đánh dấu cần cấp quyền lại; lỗi mạng, 429, 5xx và mã chưa biết không đổi trạng thái shop.
+- Job retry dùng custom backoff của BullMQ (`type=custom`), tăng dần tối đa 5 phút và tôn trọng `Retry-After`, giới hạn delay tối đa 24 giờ; lỗi không retry được dừng job. Test gọi chính `Backoffs.calculate` từ BullMQ đang cài để xác nhận strategy được chạy. Một rate gate nội bộ giới hạn yêu cầu Shopee ở mức bảo thủ 1 request/giây dùng chung Redis. Đây là giới hạn an toàn của GEME, không phải tuyên bố quota chính thức của Shopee.
+- Migration `20261028000000_shopee_mapping_source` thêm cột `source` không phá hủy; các mapping đã tồn tại được gán `MANUAL` để giữ nguyên thay vì giả định chúng từng được tạo tự động. Mapping mới từ catalog sẽ ghi `MANUAL`, auto SKU match mới ghi `AUTO_SKU`.
 - Ngắt kết nối chỉ xóa token cục bộ, chặn job/poll tiếp theo và giữ đơn/mapping/lịch sử. Nó không thu hồi grant trên Shopee; seller cần thu hồi tại Shopee/Open Platform nếu muốn.
 - Bảng Shopee riêng; không nhập vào `Order`, không giữ/trừ tồn, không tạo shipment, không gọi POS365/Viettel Post và không xuất hiện trong báo cáo doanh thu web.
 
@@ -121,5 +124,5 @@ Không copy token, connection hoặc shop grant sandbox sang Production. Tài kh
 
 ## Giới hạn hiện tại
 
-- Chưa thử credential, consent, API request, quota/rate limit hoặc đơn thật. Tài liệu Open Platform trả 403 trong lần xác minh hiện tại; hãy mở các trang link ở trên sau khi đăng nhập Shopee Console trước khi bật Production.
+- Chưa thử credential, consent, API request, quota/rate limit hoặc đơn thật. Tài liệu Open Platform trả 403 trong lần xác minh hiện tại. Các mã quyền và token trong client hiện là allowlist bảo thủ theo tên mã, chưa được xác minh với tài liệu của App GEME; trước Production cần đối chiếu bảng mã lỗi/auth trong Shopee Console và cập nhật theo đúng response thật. Hãy mở các trang link ở trên sau khi đăng nhập Shopee Console trước khi bật Production.
 - Test tự động dùng fixture/mocks, không thay cho sandbox end-to-end bằng app đã được cấp quyền. Không deploy, không chạy migration production và không kết nối shop thật trong thay đổi này.

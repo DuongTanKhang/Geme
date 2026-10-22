@@ -5,7 +5,7 @@ import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { ShopeeSyncQueue } from "./shopee.queue.js";
 import { decryptShopeeToken, encryptShopeeToken, ShopeeApiError, ShopeeClient, shopeeConfig, shopeeSafeConfig, type ShopeeOrderDetail } from "./shopee.client.js";
-import { chunk, createShopeeState, orderStatusCanAdvance, parseShopeeAmount, shopeeTokenExpiry, unixSecondsDate, validateShopeeCursor, validateShopeeOrderDetails, validateShopeeOrderListPage } from "./shopee.contract.js";
+import { chunk, createShopeeState, isShopeeVariantLine, orderStatusCanAdvance, parseShopeeAmount, selectUniqueShopeeSkuTarget, shopeeTokenExpiry, unixSecondsDate, validateShopeeCursor, validateShopeeOrderDetails, validateShopeeOrderListPage } from "./shopee.contract.js";
 
 const CURSOR_OVERLAP_SECONDS = 300;
 const MAX_TIME_RANGE_SECONDS = 14 * 24 * 60 * 60;
@@ -35,6 +35,24 @@ function optionalTokenExpiry(value: unknown, now: Date) {
 }
 
 function toIsoSeconds(seconds: number) { return new Date(seconds * 1000); }
+
+function mappingTargetIssue(mapping: any, line?: { modelId?: unknown; modelSku?: unknown; itemSku?: unknown }) {
+  const modelSku = typeof line?.modelSku === "string" ? line.modelSku.trim() : "";
+  const itemSku = typeof line?.itemSku === "string" ? line.itemSku.trim() : "";
+  if (!mapping?.product) return "PRODUCT_MISSING";
+  if (mapping.product.status === "ARCHIVED") return "PRODUCT_ARCHIVED";
+  if (mapping.variantId) {
+    if (!mapping.variant) return "VARIANT_MISSING";
+    if (mapping.variant.productId !== mapping.productId) return "VARIANT_PRODUCT_CHANGED";
+    if (!mapping.variant.sku || mapping.variant.sku !== mapping.sku) return "VARIANT_SKU_CHANGED";
+    if (mapping.source === "AUTO_SKU" && line && (!isShopeeVariantLine(line) || modelSku !== mapping.sku)) return "AUTO_VARIANT_SKU_NO_LONGER_MATCHES";
+    return null;
+  }
+  if (!mapping.product.sku || mapping.product.sku !== mapping.sku) return "PRODUCT_SKU_CHANGED";
+  if ((mapping.product.variants || []).length > 0) return "PARENT_PRODUCT_HAS_VARIANTS";
+  if (mapping.source === "AUTO_SKU" && line && (isShopeeVariantLine(line) || itemSku !== mapping.sku)) return "AUTO_PRODUCT_SKU_NO_LONGER_MATCHES";
+  return null;
+}
 
 @Injectable()
 export class ShopeeService {
@@ -244,14 +262,42 @@ export class ShopeeService {
     }).slice(0, limit).map((row) => ({ ...row, connectionId: row.order.connectionId, shopId: row.order.connection.shopId }));
   }
 
+  async mappingReview(limitInput?: string) {
+    const limit = Math.max(1, Math.min(250, Number(limitInput) || 100));
+    const mappings = await this.prisma.shopeeItemMapping.findMany({
+      where: { connection: { status: "ACTIVE" } },
+      take: limit,
+      orderBy: { updatedAt: "desc" },
+      select: {
+        id: true, connectionId: true, itemId: true, modelId: true, productId: true, variantId: true, sku: true, source: true, updatedAt: true,
+        connection: { select: { shopId: true } },
+        product: { select: { name: true, sku: true, status: true, variants: { select: { id: true }, take: 1 } } },
+        variant: { select: { id: true, productId: true, sku: true, quality: true, shape: true, beadSize: true } },
+        importedItems: { take: 1, orderBy: { createdAt: "desc" }, select: { itemName: true, itemSku: true, modelSku: true, modelId: true, order: { select: { orderSn: true } } } },
+      },
+    });
+    return mappings.flatMap((mapping) => {
+      const latestItem = mapping.importedItems[0];
+      const reason = mappingTargetIssue(mapping, latestItem || undefined);
+      if (!reason) return [];
+      return [{
+        id: mapping.id, connectionId: mapping.connectionId, shopId: mapping.connection.shopId, itemId: mapping.itemId, modelId: mapping.modelId,
+        orderSn: latestItem?.order.orderSn || null, itemName: latestItem?.itemName || null, itemSku: latestItem?.itemSku || null, modelSku: latestItem?.modelSku || null,
+        sku: mapping.sku, source: mapping.source, reason,
+        target: mapping.variant ? `${mapping.product?.name || "Sản phẩm đã xóa"} · ${mapping.variant.quality}${mapping.variant.shape ? ` · ${mapping.variant.shape}` : ""}${mapping.variant.beadSize ? ` · ${mapping.variant.beadSize}` : ""} · ${mapping.variant.sku || "chưa có SKU"}` : `${mapping.product?.name || "Sản phẩm đã xóa"} · ${mapping.product?.sku || "không còn SKU"}`,
+        updatedAt: mapping.updatedAt,
+      }];
+    });
+  }
+
   async searchCatalog(searchInput?: string) {
     const search = searchInput?.trim().slice(0, 80) || "";
     const where: Prisma.ProductWhereInput = { status: { not: "ARCHIVED" } };
     if (search) where.OR = [{ sku: { contains: search, mode: "insensitive" } }, { name: { contains: search, mode: "insensitive" } }, { variants: { some: { sku: { contains: search, mode: "insensitive" } } } }];
     const products = await this.prisma.product.findMany({ where, take: 50, orderBy: [{ status: "asc" }, { updatedAt: "desc" }], select: { id: true, sku: true, name: true, status: true, variants: { where: { sku: { not: null } }, select: { id: true, sku: true, quality: true, shape: true, beadSize: true }, orderBy: { sortOrder: "asc" } } } });
     return products.flatMap((product) => [
-      { productId: product.id, variantId: null, sku: product.sku, label: `${product.name} · ${product.sku}`, status: product.status },
-      ...product.variants.filter((variant) => variant.sku).map((variant) => ({ productId: product.id, variantId: variant.id, sku: variant.sku!, label: `${product.name} · ${variant.quality}${variant.shape ? ` · ${variant.shape}` : ""}${variant.beadSize ? ` · ${variant.beadSize}` : ""} · ${variant.sku}`, status: product.status })),
+      { productId: product.id, variantId: null, targetType: "product", sku: product.sku, label: `Sản phẩm cha · ${product.name} · SKU ${product.sku}`, status: product.status },
+      ...product.variants.filter((variant) => variant.sku).map((variant) => ({ productId: product.id, variantId: variant.id, targetType: "variant", sku: variant.sku!, label: `Biến thể · ${product.name} · ${variant.quality}${variant.shape ? ` · ${variant.shape}` : ""}${variant.beadSize ? ` · ${variant.beadSize}` : ""} · SKU ${variant.sku}`, status: product.status })),
     ]);
   }
 
@@ -262,24 +308,68 @@ export class ShopeeService {
     const productId = typeof body?.productId === "string" ? body.productId : "";
     const variantId = typeof body?.variantId === "string" && body.variantId ? body.variantId : null;
     if (!UUID.test(connectionId) || !UUID.test(productId) || (variantId && !UUID.test(variantId))) throw new BadRequestException("Chọn một sản phẩm/biến thể GEME hợp lệ.");
-    const row = await this.prisma.shopeeImportedOrderItem.findUnique({ where: { id: itemId }, select: { id: true, itemId: true, modelId: true, order: { select: { connectionId: true } } } });
+    const row = await this.prisma.shopeeImportedOrderItem.findUnique({ where: { id: itemId }, select: { id: true, itemId: true, modelId: true, modelSku: true, itemSku: true, order: { select: { connectionId: true } } } });
     if (!row || row.order.connectionId !== connectionId) throw new NotFoundException("Không tìm thấy mặt hàng thuộc shop Shopee này.");
-    const product = await this.prisma.product.findUnique({ where: { id: productId }, select: { id: true, sku: true, status: true } });
+    const variantLine = isShopeeVariantLine({ modelId: row.modelId, modelSku: row.modelSku });
+    const product = await this.prisma.product.findUnique({ where: { id: productId }, select: { id: true, sku: true, status: true, variants: { select: { id: true }, take: 1 } } });
     if (!product || product.status === "ARCHIVED") throw new BadRequestException("Sản phẩm GEME không còn khả dụng để ghép.");
     let sku = product.sku;
     if (variantId) {
       const variant = await this.prisma.productPriceVariant.findUnique({ where: { id: variantId }, select: { id: true, productId: true, sku: true } });
       if (!variant || variant.productId !== product.id || !variant.sku) throw new BadRequestException("Biến thể không thuộc sản phẩm đã chọn hoặc chưa có SKU.");
       sku = variant.sku;
+    } else {
+      if (variantLine) throw new BadRequestException("Dòng Shopee có mã biến thể; hãy chọn đúng biến thể GEME, không chọn sản phẩm cha.");
+      if (product.variants.length > 0) throw new BadRequestException("Sản phẩm GEME có biến thể; không thể ghép dòng này vào sản phẩm cha.");
     }
     const mapping = await this.prisma.shopeeItemMapping.upsert({
       where: { connectionId_itemId_modelId: { connectionId, itemId: row.itemId, modelId: row.modelId } },
-      create: { connectionId, itemId: row.itemId, modelId: row.modelId, productId: product.id, variantId, sku },
-      update: { productId: product.id, variantId, sku },
-      select: { id: true, sku: true, productId: true, variantId: true },
+      create: { connectionId, itemId: row.itemId, modelId: row.modelId, productId: product.id, variantId, sku, source: "MANUAL" },
+      update: { productId: product.id, variantId, sku, source: "MANUAL" },
+      select: { id: true, sku: true, productId: true, variantId: true, source: true },
     });
     await this.prisma.shopeeImportedOrderItem.updateMany({ where: { itemId: row.itemId, modelId: row.modelId, order: { connectionId } }, data: { mappingId: mapping.id, mappedSku: mapping.sku, mappedProductId: mapping.productId, mappedVariantId: mapping.variantId } });
     return mapping;
+  }
+
+  private async assertConnectionUsable(connectionId: string) {
+    const config = shopeeConfig();
+    const current = await this.prisma.shopeeConnection.findUnique({ where: { id: connectionId }, select: { status: true, environment: true, partnerId: true } });
+    if (!current || current.status !== "ACTIVE") throw new Error("SHOPEE_CONNECTION_INACTIVE");
+    if (!config.configured || current.environment !== config.environment || current.partnerId !== config.partnerId) throw new Error("SHOPEE_CONNECTION_INCOMPATIBLE");
+    return current;
+  }
+
+  private async requestWithAccessToken<T>(connectionId: string, signal: AbortSignal | undefined, request: (accessToken: string) => Promise<T>): Promise<T> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (signal?.aborted) throw new Error("SHOPEE_SYNC_CANCELLED");
+      const accessToken = await this.ensureAccessToken(connectionId);
+      try {
+        const result = await request(accessToken);
+        if (signal?.aborted) throw new Error("SHOPEE_SYNC_CANCELLED");
+        await this.assertConnectionUsable(connectionId);
+        return result;
+      } catch (error) {
+        if (error instanceof ShopeeApiError && error.kind === "access_token_expired" && attempt === 0) {
+          // Compare-and-refresh: use a token written by a concurrent refresh or
+          // reconnect; force a refresh only if the rejected token is still current.
+          await this.ensureAccessToken(connectionId, { rejectedToken: accessToken });
+          continue;
+        }
+        if (error instanceof ShopeeApiError && error.kind === "reauthorization_required") {
+          const markedCurrentToken = await this.markReauthIfTokenStillCurrent(connectionId, accessToken);
+          if (!markedCurrentToken && attempt === 0) {
+            // A late rejection from the previous grant must not fail a sync
+            // after the administrator has reconnected the shop.
+            await this.assertConnectionUsable(connectionId);
+            const latest = await this.prisma.shopeeConnection.findUnique({ where: { id: connectionId }, select: { accessTokenCiphertext: true } });
+            if (latest && decryptShopeeToken(latest.accessTokenCiphertext) !== accessToken) continue;
+          }
+        }
+        throw error;
+      }
+    }
+    throw new ShopeeApiError("SHOPEE_ACCESS_TOKEN_RETRY_EXHAUSTED", true);
   }
 
   // Worker-only entry point; never called by website checkout, POS365 or shipping services.
@@ -300,7 +390,6 @@ export class ShopeeService {
     let ordersCreated = 0;
     let ordersUpdated = 0;
     try {
-      let accessToken = await this.ensureAccessToken(connectionId);
       const startSeconds = connection.syncCursorAt
         ? Math.max(1, Math.floor(connection.syncCursorAt.getTime() / 1000) - CURSOR_OVERLAP_SECONDS)
         : Math.max(1, Math.floor(Date.now() / 1000) - shopeeConfig().initialSyncDays * 86_400);
@@ -316,12 +405,8 @@ export class ShopeeService {
         let pages = 0;
         let more = true;
         while (more) {
-          const latest = await this.prisma.shopeeConnection.findUnique({ where: { id: connectionId }, select: { status: true, environment: true, partnerId: true } });
-          if (latest?.status !== "ACTIVE") throw new Error("SHOPEE_CONNECTION_INACTIVE");
-          if (latest.environment !== config.environment || latest.partnerId !== config.partnerId) throw new Error("SHOPEE_CONNECTION_INCOMPATIBLE");
-          let page: Awaited<ReturnType<ShopeeClient["getOrderList"]>>;
-          try { page = await this.client.getOrderList({ accessToken, shopId: connection.shopId, from, to, ...(nextCursor ? { cursor: nextCursor } : {}) }); }
-          catch (error) { if (error instanceof ShopeeApiError && error.code === "SHOPEE_REAUTH_REQUIRED") await this.markReauthIfTokenStillCurrent(connectionId, accessToken); throw error; }
+          await this.assertConnectionUsable(connectionId);
+          const page = await this.requestWithAccessToken(connectionId, signal, (accessToken) => this.client.getOrderList({ accessToken, shopId: connection.shopId, from, to, ...(nextCursor ? { cursor: nextCursor } : {}) }));
           const parsedPage = validateShopeeOrderListPage(page);
           if (!parsedPage.ok) throw new ShopeeApiError(parsedPage.code, false);
           orderSns.push(...parsedPage.value.orderSns);
@@ -335,10 +420,7 @@ export class ShopeeService {
         }
         for (const orderBatch of chunk([...new Set(orderSns)], 50)) {
           if (signal?.aborted) throw new Error("SHOPEE_SYNC_CANCELLED");
-          accessToken = await this.ensureAccessToken(connectionId);
-          let detailResponse: Awaited<ReturnType<ShopeeClient["getOrderDetails"]>>;
-          try { detailResponse = await this.client.getOrderDetails({ accessToken, shopId: connection.shopId, orderSnList: orderBatch }); }
-          catch (error) { if (error instanceof ShopeeApiError && error.code === "SHOPEE_REAUTH_REQUIRED") await this.markReauthIfTokenStillCurrent(connectionId, accessToken); throw error; }
+          const detailResponse = await this.requestWithAccessToken(connectionId, signal, (accessToken) => this.client.getOrderDetails({ accessToken, shopId: connection.shopId, orderSnList: orderBatch }));
           const validation = validateShopeeOrderDetails(detailResponse.order_list, orderBatch);
           if (!validation.ok) throw new ShopeeApiError(validation.code, validation.code === "SHOPEE_ORDER_DETAIL_MISSING");
           const details = validation.value as unknown as ShopeeOrderDetail[];
@@ -354,10 +436,11 @@ export class ShopeeService {
         await this.prisma.shopeeConnection.updateMany({ where: { id: connectionId, status: "ACTIVE", environment: config.environment, partnerId: config.partnerId, OR: [{ syncCursorAt: null }, { syncCursorAt: { lt: toIsoSeconds(to) } }] }, data: { syncCursorAt: toIsoSeconds(to) } });
         from = to + 1;
       }
-      await this.prisma.$transaction([
-        this.prisma.shopeeSyncRun.update({ where: { id: runId }, data: { status: "SUCCEEDED", ordersRead, ordersCreated, ordersUpdated, finishedAt: new Date(), errorCode: null } }),
-        this.prisma.shopeeConnection.update({ where: { id: connectionId }, data: { lastSyncCompletedAt: new Date(), lastErrorCode: null } }),
-      ]);
+      await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.shopeeConnection.updateMany({ where: { id: connectionId, status: "ACTIVE", environment: config.environment, partnerId: config.partnerId }, data: { lastSyncCompletedAt: new Date(), lastErrorCode: null } });
+        if (updated.count !== 1) throw new Error("SHOPEE_CONNECTION_INACTIVE");
+        await tx.shopeeSyncRun.update({ where: { id: runId }, data: { status: "SUCCEEDED", ordersRead, ordersCreated, ordersUpdated, finishedAt: new Date(), errorCode: null } });
+      });
       this.logger.log(JSON.stringify({ event: "shopee.sync.succeeded", connectionId, runId, ordersRead, ordersCreated, ordersUpdated }));
     } catch (error) {
       const code = safeCode(error);
@@ -368,28 +451,42 @@ export class ShopeeService {
     }
   }
 
-  private async ensureAccessToken(connectionId: string) {
+  private async ensureAccessToken(connectionId: string, options: { rejectedToken?: string } = {}) {
     const config = shopeeConfig();
     if (!config.configured) throw new Error(config.enabled ? "SHOPEE_CONFIGURATION_INVALID" : "SHOPEE_DISABLED");
     let connection = await this.prisma.shopeeConnection.findUnique({ where: { id: connectionId } });
     if (!connection || connection.status !== "ACTIVE") throw new Error("SHOPEE_CONNECTION_INACTIVE");
     if (connection.environment !== config.environment || connection.partnerId !== config.partnerId) throw new Error("SHOPEE_CONNECTION_INCOMPATIBLE");
-    if (connection.accessTokenExpiresAt.getTime() > Date.now() + 60_000) return decryptShopeeToken(connection.accessTokenCiphertext);
+    const originalAccessCiphertext = connection.accessTokenCiphertext;
+    const originalRefreshCiphertext = connection.refreshTokenCiphertext;
+    const currentToken = decryptShopeeToken(connection.accessTokenCiphertext);
+    const currentTokenFresh = connection.accessTokenExpiresAt.getTime() > Date.now() + 60_000;
+    const tokenWasRejected = Boolean(options.rejectedToken && currentToken === options.rejectedToken);
+    if (currentTokenFresh && !tokenWasRejected) return currentToken;
     if (connection.refreshTokenExpiresAt && connection.refreshTokenExpiresAt.getTime() <= Date.now()) {
-      await this.prisma.shopeeConnection.updateMany({ where: { id: connectionId, status: "ACTIVE", environment: config.environment, partnerId: config.partnerId, accessTokenCiphertext: connection.accessTokenCiphertext, refreshTokenCiphertext: connection.refreshTokenCiphertext }, data: { status: "REAUTH_REQUIRED", lastErrorCode: "SHOPEE_REFRESH_TOKEN_EXPIRED" } });
+      const expired = await this.prisma.shopeeConnection.updateMany({ where: { id: connectionId, status: "ACTIVE", environment: config.environment, partnerId: config.partnerId, accessTokenCiphertext: originalAccessCiphertext, refreshTokenCiphertext: originalRefreshCiphertext }, data: { status: "REAUTH_REQUIRED", lastErrorCode: "SHOPEE_REFRESH_TOKEN_EXPIRED" } });
+      if (expired.count !== 1) {
+        const latest = await this.prisma.shopeeConnection.findUnique({ where: { id: connectionId } });
+        if (!latest || latest.status !== "ACTIVE") throw new Error("SHOPEE_CONNECTION_INACTIVE");
+        if (latest.environment !== config.environment || latest.partnerId !== config.partnerId) throw new Error("SHOPEE_CONNECTION_INCOMPATIBLE");
+        if (latest.accessTokenCiphertext !== originalAccessCiphertext && latest.accessTokenExpiresAt.getTime() > Date.now() + 60_000) return decryptShopeeToken(latest.accessTokenCiphertext);
+        throw new ShopeeApiError("SHOPEE_TOKEN_STATE_CHANGED", true);
+      }
       throw new ShopeeApiError("SHOPEE_REAUTH_REQUIRED", false);
     }
 
     const now = new Date();
     const leaseUntil = new Date(now.getTime() + 60_000);
-    const lease = await this.prisma.shopeeConnection.updateMany({ where: { id: connectionId, status: "ACTIVE", environment: config.environment, partnerId: config.partnerId, refreshTokenCiphertext: connection.refreshTokenCiphertext, OR: [{ refreshLeaseUntil: null }, { refreshLeaseUntil: { lt: now } }] }, data: { refreshLeaseUntil: leaseUntil } });
+    const lease = await this.prisma.shopeeConnection.updateMany({ where: { id: connectionId, status: "ACTIVE", environment: config.environment, partnerId: config.partnerId, accessTokenCiphertext: originalAccessCiphertext, refreshTokenCiphertext: originalRefreshCiphertext, OR: [{ refreshLeaseUntil: null }, { refreshLeaseUntil: { lt: now } }] }, data: { refreshLeaseUntil: leaseUntil } });
     if (lease.count !== 1) {
       for (let attempt = 0; attempt < 12; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 250));
         connection = await this.prisma.shopeeConnection.findUnique({ where: { id: connectionId } });
         if (!connection || connection.status !== "ACTIVE") throw new Error("SHOPEE_CONNECTION_INACTIVE");
         if (connection.environment !== config.environment || connection.partnerId !== config.partnerId) throw new Error("SHOPEE_CONNECTION_INCOMPATIBLE");
-        if (connection.accessTokenExpiresAt.getTime() > Date.now() + 60_000) return decryptShopeeToken(connection.accessTokenCiphertext);
+        const latestToken = decryptShopeeToken(connection.accessTokenCiphertext);
+        if (connection.accessTokenCiphertext !== originalAccessCiphertext && connection.accessTokenExpiresAt.getTime() > Date.now() + 60_000) return latestToken;
+        if (!options.rejectedToken && connection.accessTokenExpiresAt.getTime() > Date.now() + 60_000) return latestToken;
       }
       throw new ShopeeApiError("SHOPEE_TOKEN_REFRESH_BUSY", true);
     }
@@ -399,6 +496,13 @@ export class ShopeeService {
       if (!connection || connection.status !== "ACTIVE") throw new Error("SHOPEE_CONNECTION_INACTIVE");
       if (connection.environment !== config.environment || connection.partnerId !== config.partnerId) throw new Error("SHOPEE_CONNECTION_INCOMPATIBLE");
       if (connection.refreshLeaseUntil?.getTime() !== leaseUntil.getTime()) throw new ShopeeApiError("SHOPEE_TOKEN_REFRESH_BUSY", true);
+      if (connection.accessTokenCiphertext !== originalAccessCiphertext || connection.refreshTokenCiphertext !== originalRefreshCiphertext) {
+        if (connection.accessTokenExpiresAt.getTime() > Date.now() + 60_000) {
+          await this.prisma.shopeeConnection.updateMany({ where: { id: connectionId, refreshLeaseUntil: leaseUntil }, data: { refreshLeaseUntil: null } });
+          return decryptShopeeToken(connection.accessTokenCiphertext);
+        }
+        throw new ShopeeApiError("SHOPEE_TOKEN_STATE_CHANGED", true);
+      }
       const refreshToken = decryptShopeeToken(connection.refreshTokenCiphertext);
       const rotated = await this.client.refreshAccessToken(refreshToken, connection.shopId);
       if (typeof rotated.access_token !== "string" || !rotated.access_token.trim() || typeof rotated.refresh_token !== "string" || !rotated.refresh_token.trim()) throw new Error("SHOPEE_TOKEN_RESPONSE_INVALID");
@@ -407,19 +511,22 @@ export class ShopeeService {
       const refreshTokenExpiresAt = optionalTokenExpiry(rotated.refresh_token_expire_in, refreshedAt);
       // Persist both rotated credentials in one transaction before returning the new access token.
       await this.prisma.$transaction(async (tx) => {
-        const update = await tx.shopeeConnection.updateMany({ where: { id: connectionId, status: "ACTIVE", environment: config.environment, partnerId: config.partnerId, refreshLeaseUntil: leaseUntil }, data: { accessTokenCiphertext: encryptShopeeToken(rotated.access_token!), refreshTokenCiphertext: encryptShopeeToken(rotated.refresh_token!), accessTokenExpiresAt, refreshTokenExpiresAt, refreshLeaseUntil: null } });
+        const update = await tx.shopeeConnection.updateMany({ where: { id: connectionId, status: "ACTIVE", environment: config.environment, partnerId: config.partnerId, accessTokenCiphertext: originalAccessCiphertext, refreshTokenCiphertext: originalRefreshCiphertext, refreshLeaseUntil: leaseUntil }, data: { accessTokenCiphertext: encryptShopeeToken(rotated.access_token!), refreshTokenCiphertext: encryptShopeeToken(rotated.refresh_token!), accessTokenExpiresAt, refreshTokenExpiresAt, refreshLeaseUntil: null } });
         if (update.count !== 1) throw new Error("SHOPEE_TOKEN_ROTATION_SAVE_FAILED");
       });
       return rotated.access_token;
     } catch (error) {
-      if (error instanceof ShopeeApiError && error.code === "SHOPEE_REAUTH_REQUIRED") {
-        await this.prisma.shopeeConnection.updateMany({
-          where: { id: connectionId, status: "ACTIVE", environment: config.environment, partnerId: config.partnerId, refreshLeaseUntil: leaseUntil },
+      const reauthorizationFailure = error instanceof ShopeeApiError && error.kind === "reauthorization_required";
+      if (reauthorizationFailure) {
+        const marked = await this.prisma.shopeeConnection.updateMany({
+          where: { id: connectionId, status: "ACTIVE", environment: config.environment, partnerId: config.partnerId, accessTokenCiphertext: originalAccessCiphertext, refreshTokenCiphertext: originalRefreshCiphertext, refreshLeaseUntil: leaseUntil },
           data: { status: "REAUTH_REQUIRED", lastErrorCode: error.code, refreshLeaseUntil: null },
-        }).catch(() => undefined);
-      } else {
-        await this.prisma.shopeeConnection.updateMany({ where: { id: connectionId, refreshLeaseUntil: leaseUntil }, data: { refreshLeaseUntil: null } }).catch(() => undefined);
+        }).catch(() => ({ count: 0 }));
+        if (marked.count === 1) throw error;
       }
+      await this.prisma.shopeeConnection.updateMany({ where: { id: connectionId, accessTokenCiphertext: originalAccessCiphertext, refreshTokenCiphertext: originalRefreshCiphertext, refreshLeaseUntil: leaseUntil }, data: { refreshLeaseUntil: null } }).catch(() => undefined);
+      const latest = await this.prisma.shopeeConnection.findUnique({ where: { id: connectionId } }).catch(() => null);
+      if (latest?.status === "ACTIVE" && latest.environment === config.environment && latest.partnerId === config.partnerId && latest.accessTokenCiphertext !== originalAccessCiphertext && latest.accessTokenExpiresAt.getTime() > Date.now() + 60_000) return decryptShopeeToken(latest.accessTokenCiphertext);
       throw error;
     }
   }
@@ -427,14 +534,37 @@ export class ShopeeService {
   private async markReauthIfTokenStillCurrent(connectionId: string, rejectedAccessToken: string) {
     const config = shopeeConfig();
     const current = await this.prisma.shopeeConnection.findUnique({ where: { id: connectionId }, select: { status: true, environment: true, partnerId: true, accessTokenCiphertext: true } });
-    if (!current || current.status !== "ACTIVE" || current.environment !== config.environment || current.partnerId !== config.partnerId) return;
+    if (!current || current.status !== "ACTIVE" || current.environment !== config.environment || current.partnerId !== config.partnerId) return false;
     let storedAccessToken: string;
-    try { storedAccessToken = decryptShopeeToken(current.accessTokenCiphertext); } catch { return; }
-    if (storedAccessToken !== rejectedAccessToken) return;
-    await this.prisma.shopeeConnection.updateMany({
+    try { storedAccessToken = decryptShopeeToken(current.accessTokenCiphertext); } catch { return false; }
+    if (storedAccessToken !== rejectedAccessToken) return false;
+    const result = await this.prisma.shopeeConnection.updateMany({
       where: { id: connectionId, status: "ACTIVE", environment: config.environment, partnerId: config.partnerId, accessTokenCiphertext: current.accessTokenCiphertext },
       data: { status: "REAUTH_REQUIRED", lastErrorCode: "SHOPEE_REAUTH_REQUIRED" },
     });
+    return result.count === 1;
+  }
+
+  private async findAutoSkuTarget(tx: Prisma.TransactionClient, item: { model_id?: number | string; model_sku?: string; item_sku?: string }) {
+    const variantLine = isShopeeVariantLine({ modelId: item.model_id, modelSku: item.model_sku });
+    const sku = (variantLine ? item.model_sku : item.item_sku)?.trim() || "";
+    if (!sku) return null;
+    const [products, variants] = await Promise.all([
+      tx.product.findMany({ where: { sku }, select: { id: true, sku: true, status: true, variants: { select: { id: true }, take: 1 } }, take: 2 }),
+      tx.productPriceVariant.findMany({ where: { sku }, select: { id: true, productId: true, sku: true, product: { select: { status: true } } }, take: 2 }),
+    ]);
+
+    if (variantLine) {
+      // A model SKU may only identify a unique active variant. Item SKU is
+      // intentionally never used as a fallback for a variation line.
+      if (products.length > 0 || variants.length !== 1 || variants[0]?.product.status === "ARCHIVED") return null;
+      return selectUniqueShopeeSkuTarget(variants.map((variant) => ({ productId: variant.productId, variantId: variant.id, sku: variant.sku! })));
+    }
+
+    // model_id=0/blank without model_sku is only a parent candidate when the
+    // exact item SKU belongs to one active, non-variant product and no variant.
+    if (variants.length > 0 || products.length !== 1 || products[0]?.status === "ARCHIVED" || products[0]!.variants.length > 0) return null;
+    return selectUniqueShopeeSkuTarget(products.map((product) => ({ productId: product.id, variantId: null, sku: product.sku })));
   }
 
   private async upsertOrder(connectionId: string, detail: ShopeeOrderDetail): Promise<"created" | "updated" | "ignored"> {
@@ -494,26 +624,28 @@ export class ShopeeService {
       if (existing) await tx.shopeeImportedOrderItem.deleteMany({ where: { orderId } });
       const itemRows: Prisma.ShopeeImportedOrderItemCreateManyInput[] = [];
       for (const { item, itemId, modelId, quantity } of itemInputs) {
-        const mapping = await tx.shopeeItemMapping.findUnique({ where: { connectionId_itemId_modelId: { connectionId, itemId, modelId } }, select: { id: true, sku: true, productId: true, variantId: true } });
-        const skuCandidates = [...new Set([item.model_sku, item.item_sku].filter((sku): sku is string => Boolean(sku?.trim())).map((sku) => sku.trim()))];
-        let appliedMapping = mapping;
-        if (!appliedMapping && skuCandidates.length) {
-          const matches: Array<{ productId: string; variantId: string | null; sku: string }> = [];
-          for (const sku of skuCandidates) {
-            const [product, variants] = await Promise.all([
-              tx.product.findMany({ where: { sku }, select: { id: true, sku: true }, take: 2 }),
-              tx.productPriceVariant.findMany({ where: { sku }, select: { id: true, productId: true, sku: true }, take: 2 }),
-            ]);
-            matches.push(...product.map((match) => ({ productId: match.id, variantId: null, sku: match.sku })));
-            matches.push(...variants.map((match) => ({ productId: match.productId, variantId: match.id, sku: match.sku || sku })));
-          }
-          const distinctMatches = [...new Map(matches.map((match) => [`${match.productId}:${match.variantId ?? ""}`, match])).values()];
-          if (distinctMatches.length === 1) {
-            const match = distinctMatches[0]!;
+        const mapping = await tx.shopeeItemMapping.findUnique({
+          where: { connectionId_itemId_modelId: { connectionId, itemId, modelId } },
+          select: {
+            id: true, sku: true, productId: true, variantId: true, source: true,
+            product: { select: { sku: true, status: true, variants: { select: { id: true }, take: 1 } } },
+            variant: { select: { id: true, productId: true, sku: true } },
+          },
+        });
+        let appliedMapping = mapping && !mappingTargetIssue(mapping, { modelId, modelSku: item.model_sku, itemSku: item.item_sku }) ? mapping : null;
+        // Never replace a stale historical mapping automatically. It is shown
+        // in the read-only review report and can be corrected by an admin.
+        if (!mapping) {
+          const match = await this.findAutoSkuTarget(tx, { model_id: item.model_id, model_sku: item.model_sku, item_sku: item.item_sku });
+          if (match) {
             appliedMapping = await tx.shopeeItemMapping.upsert({
               where: { connectionId_itemId_modelId: { connectionId, itemId, modelId } },
-              create: { connectionId, itemId, modelId, productId: match.productId, variantId: match.variantId, sku: match.sku },
-              update: {}, select: { id: true, sku: true, productId: true, variantId: true },
+              create: { connectionId, itemId, modelId, productId: match.productId, variantId: match.variantId, sku: match.sku, source: "AUTO_SKU" },
+              update: {}, select: {
+                id: true, sku: true, productId: true, variantId: true, source: true,
+                product: { select: { sku: true, status: true, variants: { select: { id: true }, take: 1 } } },
+                variant: { select: { id: true, productId: true, sku: true } },
+              },
             });
           }
         }

@@ -18,6 +18,7 @@ export class ShopeeAdminController {
   @Get("orders") orders(@Query("page") page?: string, @Query("limit") limit?: string, @Query("status") status?: string, @Query("q") q?: string, @Query("from") from?: string, @Query("to") to?: string, @Query("connectionId") connectionId?: string, @Query("environment") environment?: string, @Query("shopId") shopId?: string) { return this.shopee.listOrders({ page, limit, status, q, from, to, connectionId, environment, shopId }); }
   @Get("orders/:id") order(@Param("id", new ParseUUIDPipe()) id: string) { return this.shopee.getOrder(id); }
   @Get("mappings/unmatched") unmatched(@Query("limit") limit?: string) { return this.shopee.unmatchedItems(limit); }
+  @Get("mappings/review") mappingReview(@Query("limit") limit?: string) { return this.shopee.mappingReview(limit); }
   @Get("mappings/catalog") catalog(@Query("q") q?: string) { return this.shopee.searchCatalog(q); }
   @Post("mappings/:id") mapItem(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: unknown) { return this.shopee.mapItem(id, body); }
   @Get("sync-runs") syncRuns(@Query("limit") limit?: string, @Query("connectionId") connectionId?: string, @Query("environment") environment?: string) { return this.shopee.syncHistory({ limit, connectionId, environment }); }
