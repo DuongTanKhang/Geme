@@ -4,7 +4,7 @@ import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
 import { ShopeeService } from "./shopee.service.js";
 
 type AdminRequest = { adminIdentity: AdminIdentity };
-type RedirectResponse = { redirect(statusCode: number, url: string): unknown };
+type RedirectResponse = { redirect(statusCode: number, url: string): unknown; status(statusCode: number): { send(body: string): unknown } };
 
 @Controller("admin/shopee")
 @UseGuards(AdminAuthGuard)
@@ -15,12 +15,12 @@ export class ShopeeAdminController {
   @Post("authorize") authorize(@Req() request: AdminRequest) { return this.shopee.startAuthorization(request.adminIdentity); }
   @Delete("connections/:id") disconnect(@Param("id", new ParseUUIDPipe()) id: string) { return this.shopee.disconnect(id); }
   @Post("connections/:id/sync") sync(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.shopee.enqueueSync(id, request.adminIdentity); }
-  @Get("orders") orders(@Query("page") page?: string, @Query("limit") limit?: string, @Query("status") status?: string, @Query("q") q?: string, @Query("from") from?: string, @Query("to") to?: string) { return this.shopee.listOrders({ page, limit, status, q, from, to }); }
+  @Get("orders") orders(@Query("page") page?: string, @Query("limit") limit?: string, @Query("status") status?: string, @Query("q") q?: string, @Query("from") from?: string, @Query("to") to?: string, @Query("connectionId") connectionId?: string, @Query("environment") environment?: string, @Query("shopId") shopId?: string) { return this.shopee.listOrders({ page, limit, status, q, from, to, connectionId, environment, shopId }); }
   @Get("orders/:id") order(@Param("id", new ParseUUIDPipe()) id: string) { return this.shopee.getOrder(id); }
   @Get("mappings/unmatched") unmatched(@Query("limit") limit?: string) { return this.shopee.unmatchedItems(limit); }
   @Get("mappings/catalog") catalog(@Query("q") q?: string) { return this.shopee.searchCatalog(q); }
   @Post("mappings/:id") mapItem(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: unknown) { return this.shopee.mapItem(id, body); }
-  @Get("sync-runs") syncRuns(@Query("limit") limit?: string) { return this.shopee.syncHistory(limit); }
+  @Get("sync-runs") syncRuns(@Query("limit") limit?: string, @Query("connectionId") connectionId?: string, @Query("environment") environment?: string) { return this.shopee.syncHistory({ limit, connectionId, environment }); }
   @Post("sync-runs/:id/retry") retrySync(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.shopee.retrySyncRun(id, request.adminIdentity); }
 }
 
@@ -46,9 +46,16 @@ export class ShopeeOAuthCallbackController {
         const candidate = error instanceof Error ? error.message : "SHOPEE_CALLBACK_FAILED";
         this.logger.warn(JSON.stringify({ event: "shopee.oauth.callback_failed", code: /^[A-Z0-9_]{3,80}$/.test(candidate) ? candidate : "SHOPEE_CALLBACK_FAILED" }));
       }
-    } else if (oauthError) {
-      this.logger.warn(JSON.stringify({ event: "shopee.oauth.denied" }));
+    } else if (oauthError && state) {
+      try {
+        result = await this.shopee.consumeAuthorizationDenial(state) ? "denied" : "error";
+      } catch {
+        result = "error";
+      }
+      this.logger.warn(JSON.stringify({ event: "shopee.oauth.denied", stateAccepted: result === "denied" }));
     }
-    return response.redirect(302, await this.shopee.callbackReturnUrl(result));
+    const returnUrl = await this.shopee.callbackReturnUrl(result);
+    if (!returnUrl) return response.status(503).send("Shopee callback đã nhận nhưng SHOPEE_ADMIN_RETURN_URL chưa được cấu hình hợp lệ. Vui lòng quay lại GEME Admin.");
+    return response.redirect(302, returnUrl);
   }
 }

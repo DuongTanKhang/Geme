@@ -9,6 +9,10 @@ import {
 } from "./shopee.contract.js";
 
 export type ShopeeConfig = {
+  enabled: boolean;
+  configurationStatus: "ready" | "missing_configuration" | "invalid_configuration";
+  missing: string[];
+  invalid: string[];
   configured: boolean;
   partnerId: string;
   partnerKey: string;
@@ -17,6 +21,7 @@ export type ShopeeConfig = {
   adminReturnUrl: string;
   initialSyncDays: number;
   pollIntervalMinutes: number;
+  workerConcurrency: number;
 };
 
 export class ShopeeApiError extends Error {
@@ -27,22 +32,91 @@ export class ShopeeApiError extends Error {
 }
 
 export function shopeeConfig(): ShopeeConfig {
+  const enabledInput = process.env.SHOPEE_ENABLED?.trim().toLowerCase() || "false";
+  const enabled = enabledInput === "true";
+  const invalid: string[] = [];
+  const missing: string[] = [];
+  if (enabledInput !== "true" && enabledInput !== "false") invalid.push("SHOPEE_ENABLED");
+
+  const environmentInput = process.env.SHOPEE_ENVIRONMENT?.trim().toLowerCase() || "sandbox";
+  const parsedEnvironment = shopeeEnvironment(environmentInput);
+  if (!parsedEnvironment) invalid.push("SHOPEE_ENVIRONMENT");
+  const environment: ShopeeEnvironment = parsedEnvironment || "sandbox";
   const partnerId = process.env.SHOPEE_PARTNER_ID?.trim() || "";
   const partnerKey = process.env.SHOPEE_PARTNER_KEY?.trim() || "";
   const redirectUri = process.env.SHOPEE_REDIRECT_URI?.trim() || "";
   const adminReturnUrl = process.env.SHOPEE_ADMIN_RETURN_URL?.trim() || "";
-  const initialDaysInput = Number(process.env.SHOPEE_INITIAL_SYNC_DAYS);
-  const pollInput = Number(process.env.SHOPEE_POLL_INTERVAL_MINUTES);
+  const workerConcurrencyInput = process.env.SHOPEE_WORKER_CONCURRENCY?.trim() || "2";
+  const initialDaysInput = process.env.SHOPEE_INITIAL_SYNC_DAYS?.trim() || "30";
+  const pollInput = process.env.SHOPEE_POLL_INTERVAL_MINUTES?.trim() || "5";
+  const initialDays = Number(initialDaysInput);
+  const pollIntervalMinutes = Number(pollInput);
+  const workerConcurrency = Number(workerConcurrencyInput);
+  const production = environment === "production";
+  const validCallback = validUrl(redirectUri, production) && safePath(redirectUri, "/api/v1/shopee/callback");
+  const validReturn = validUrl(adminReturnUrl, production);
+
+  if (!partnerId) missing.push("SHOPEE_PARTNER_ID");
+  else if (!/^\d{1,16}$/.test(partnerId) || !Number.isSafeInteger(Number(partnerId)) || Number(partnerId) <= 0) invalid.push("SHOPEE_PARTNER_ID");
+  if (!partnerKey) missing.push("SHOPEE_PARTNER_KEY");
+  if (!redirectUri) missing.push("SHOPEE_REDIRECT_URI");
+  else if (!validCallback) invalid.push("SHOPEE_REDIRECT_URI");
+  if (!adminReturnUrl) missing.push("SHOPEE_ADMIN_RETURN_URL");
+  else if (!validReturn) invalid.push("SHOPEE_ADMIN_RETURN_URL");
+  if (!encryptionKeyConfigured()) {
+    if (!process.env.SHOPEE_TOKEN_ENCRYPTION_KEY?.trim()) missing.push("SHOPEE_TOKEN_ENCRYPTION_KEY");
+    else invalid.push("SHOPEE_TOKEN_ENCRYPTION_KEY");
+  }
+  if (!Number.isInteger(initialDays) || initialDays < 1 || initialDays > 365) invalid.push("SHOPEE_INITIAL_SYNC_DAYS");
+  if (!Number.isInteger(pollIntervalMinutes) || pollIntervalMinutes < 5 || pollIntervalMinutes > 60) invalid.push("SHOPEE_POLL_INTERVAL_MINUTES");
+  if (!Number.isInteger(workerConcurrency) || workerConcurrency < 1 || workerConcurrency > 8) invalid.push("SHOPEE_WORKER_CONCURRENCY");
+  const configurationStatus = invalid.length ? "invalid_configuration" : missing.length ? "missing_configuration" : "ready";
   return {
-    configured: Boolean(partnerId && partnerKey && redirectUri && encryptionKeyConfigured()),
+    enabled,
+    configurationStatus,
+    missing,
+    invalid,
+    configured: enabled && configurationStatus === "ready",
     partnerId,
     partnerKey,
-    environment: shopeeEnvironment(process.env.SHOPEE_ENVIRONMENT),
+    environment,
     redirectUri,
     adminReturnUrl,
-    initialSyncDays: Number.isInteger(initialDaysInput) ? Math.max(1, Math.min(365, initialDaysInput)) : 30,
-    pollIntervalMinutes: Number.isInteger(pollInput) ? Math.max(5, Math.min(60, pollInput)) : 5,
+    initialSyncDays: Number.isInteger(initialDays) && initialDays >= 1 && initialDays <= 365 ? initialDays : 30,
+    pollIntervalMinutes: Number.isInteger(pollIntervalMinutes) && pollIntervalMinutes >= 5 && pollIntervalMinutes <= 60 ? pollIntervalMinutes : 5,
+    workerConcurrency: Number.isInteger(workerConcurrency) && workerConcurrency >= 1 && workerConcurrency <= 8 ? workerConcurrency : 2,
   };
+}
+
+export function shopeeSafeConfig(config = shopeeConfig()) {
+  return {
+    enabled: config.enabled,
+    configurationStatus: config.configurationStatus,
+    missing: config.missing,
+    invalid: config.invalid,
+    configured: config.configured,
+    environment: config.environment,
+    redirectUri: config.redirectUri || null,
+    partnerConfigured: Boolean(config.partnerId && config.partnerKey),
+    encryptionConfigured: encryptionKeyConfigured(),
+    initialSyncDays: config.initialSyncDays,
+    pollIntervalMinutes: config.pollIntervalMinutes,
+    workerConcurrency: config.workerConcurrency,
+  };
+}
+
+function validUrl(value: string, requireHttps: boolean) {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password || url.hash) return false;
+    if (requireHttps && url.protocol !== "https:") return false;
+    if (!requireHttps && url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname))) return false;
+    return Boolean(url.hostname);
+  } catch { return false; }
+}
+
+function safePath(value: string, expectedPath: string) {
+  try { const url = new URL(value); return url.pathname === expectedPath && !url.search; } catch { return false; }
 }
 
 function encryptionKey() {
@@ -80,7 +154,7 @@ export class ShopeeClient {
 
   authorizationUrl(state: string) {
     const config = shopeeConfig();
-    if (!config.configured) throw new ServiceUnavailableException("Cần cấu hình Shopee Partner ID/Key, callback URL và khóa mã hóa phía backend trước khi kết nối.");
+    this.requireCredentials();
     const url = new URL("/auth", shopeeAuthorizationOrigin(config.environment));
     url.searchParams.set("partner_id", config.partnerId);
     url.searchParams.set("auth_type", "seller");
@@ -94,9 +168,9 @@ export class ShopeeClient {
     const path = "/api/v2/auth/token/get";
     const config = this.requireCredentials();
     const timestamp = Math.floor(Date.now() / 1000);
-    const sign = signShopeeRequest({ partnerId: config.partnerId, partnerKey: config.partnerKey, path, timestamp, shopId });
+    const sign = signShopeeRequest({ partnerId: config.partnerId, partnerKey: config.partnerKey, path, timestamp });
     return this.postJson<{ access_token?: string; refresh_token?: string; expire_in?: number; refresh_token_expire_in?: number; shop_id?: number | string }>(
-      `${shopeeApiOrigin(config.environment)}${path}?${new URLSearchParams({ partner_id: config.partnerId, timestamp: String(timestamp), sign, shop_id: shopId })}`,
+      `${shopeeApiOrigin(config.environment)}${path}?${new URLSearchParams({ partner_id: config.partnerId, timestamp: String(timestamp), sign })}`,
       { code, shop_id: Number(shopId), partner_id: Number(config.partnerId) },
     );
   }
@@ -105,7 +179,7 @@ export class ShopeeClient {
     const path = "/api/v2/auth/access_token/get";
     const config = this.requireCredentials();
     const timestamp = Math.floor(Date.now() / 1000);
-    // Shopee documents refresh as a public API: its signature excludes the access token and shop id.
+    // Keep public-auth signing separate from the shop-scoped signature. Verify this contract in the authenticated app docs before production.
     const sign = signShopeeRequest({ partnerId: config.partnerId, partnerKey: config.partnerKey, path, timestamp });
     return this.postJson<{ access_token?: string; refresh_token?: string; expire_in?: number; refresh_token_expire_in?: number }>(
       `${shopeeApiOrigin(config.environment)}${path}?${new URLSearchParams({ partner_id: config.partnerId, timestamp: String(timestamp), sign })}`,
@@ -147,7 +221,8 @@ export class ShopeeClient {
 
   private requireCredentials() {
     const config = shopeeConfig();
-    if (!config.partnerId || !config.partnerKey) throw new ServiceUnavailableException("Shopee Partner ID/Key chưa được cấu hình phía backend.");
+    if (!config.enabled) throw new ServiceUnavailableException("Tích hợp Shopee đang tắt. Đặt SHOPEE_ENABLED=true để bật.");
+    if (config.configurationStatus !== "ready") throw new ServiceUnavailableException(`Cấu hình Shopee chưa hợp lệ: ${[...config.missing, ...config.invalid].join(", ") || "không xác định"}.`);
     return config;
   }
 
@@ -168,13 +243,18 @@ export class ShopeeClient {
   private async parseResponse<T>(response: Response): Promise<T> {
     const body = await response.json().catch(() => null) as ShopeeResponse<T> | null;
     if (!response.ok) {
-      const retryAfter = Number(response.headers.get("retry-after"));
-      throw new ShopeeApiError(response.status === 429 ? "SHOPEE_RATE_LIMITED" : `SHOPEE_HTTP_${response.status}`, response.status === 429 || response.status >= 500, response.status, Number.isFinite(retryAfter) ? retryAfter : undefined);
+      const retryAfterHeader = response.headers.get("retry-after");
+      const retryAfter = retryAfterHeader
+        ? /^\d+$/.test(retryAfterHeader)
+          ? Number(retryAfterHeader)
+          : Number.isNaN(Date.parse(retryAfterHeader)) ? undefined : Math.max(0, Math.ceil((Date.parse(retryAfterHeader) - Date.now()) / 1000))
+        : undefined;
+      throw new ShopeeApiError(response.status === 429 ? "SHOPEE_RATE_LIMITED" : `SHOPEE_HTTP_${response.status}`, response.status === 429 || response.status >= 500, response.status, retryAfter);
     }
     if (!body || typeof body !== "object") throw new ShopeeApiError("SHOPEE_RESPONSE_INVALID", true);
     if (typeof body.error === "string" && body.error) {
       const error = body.error.toLowerCase();
-      const invalidAuth = /token|auth|permission|shop_no_linked|shop_access_expired/.test(error);
+      const invalidAuth = /token|auth|permission|shop_no_linked|shop_access_expired|shop_id_not_match|access_denied/.test(error);
       throw new ShopeeApiError(invalidAuth ? "SHOPEE_REAUTH_REQUIRED" : "SHOPEE_API_ERROR", !invalidAuth);
     }
     if (body.response && typeof body.response === "object") return body.response;
@@ -197,5 +277,5 @@ export type ShopeeOrderDetail = {
   pay_time?: number;
   recipient_address?: Record<string, unknown>;
   message_to_seller?: string;
-  item_list?: Array<{ item_id?: number | string; model_id?: number | string; item_name?: string; item_sku?: string; model_sku?: string; model_name?: string; model_quantity_purchased?: number; item_price?: number; variation_discounted_price?: number }>;
+  item_list?: Array<{ item_id?: number | string; model_id?: number | string; item_name?: string; item_sku?: string; model_sku?: string; model_name?: string; model_quantity_purchased?: number; model_original_price?: number | string; model_discounted_price?: number | string }>;
 };

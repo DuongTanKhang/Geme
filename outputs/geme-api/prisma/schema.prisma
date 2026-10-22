@@ -1256,6 +1256,7 @@ model ShopeeOAuthState {
   stateHash  String       @id @map("state_hash") @db.Char(64)
   adminId    String       @map("admin_id") @db.Uuid
   environment String      @db.VarChar(20)
+  partnerId  String?      @map("partner_id") @db.VarChar(20)
   expiresAt  DateTime     @map("expires_at") @db.Timestamptz(3)
   consumedAt DateTime?    @map("consumed_at") @db.Timestamptz(3)
   createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -1268,6 +1269,7 @@ model ShopeeOAuthState {
 model ShopeeConnection {
   id                       String             @id @default(uuid()) @db.Uuid
   environment              String             @db.VarChar(20)
+  partnerId                String?            @map("partner_id") @db.VarChar(20)
   shopId                   String             @map("shop_id") @db.VarChar(40)
   shopName                 String?            @map("shop_name") @db.VarChar(180)
   status                   String             @default("ACTIVE") @db.VarChar(20)
@@ -1334,6 +1336,8 @@ model ShopeeImportedOrderItem {
   quantity                 Int
   unitPrice                Decimal?               @map("unit_price") @db.Decimal(14, 2)
   variationDiscountedPrice Decimal?               @map("variation_discounted_price") @db.Decimal(14, 2)
+  modelOriginalPrice       Decimal?               @map("model_original_price") @db.Decimal(14, 2)
+  modelDiscountedPrice     Decimal?               @map("model_discounted_price") @db.Decimal(14, 2)
   currency                 String?                @db.VarChar(12)
   mappedSku                String?                @map("mapped_sku") @db.VarChar(64)
   mappedProductId          String?                @map("mapped_product_id") @db.Uuid

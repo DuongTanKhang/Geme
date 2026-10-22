@@ -1,78 +1,125 @@
-# GEME Shopee read-only order import
+# Kết nối Shopee với GEME (chỉ đọc đơn)
 
-This integration imports Shopee order snapshots into separate `shopee_*` tables. It deliberately does not create or modify website orders, reserve/decrement GEME stock, update Shopee prices/stock, confirm or cancel Shopee orders, create shipments, call POS365/Viettel Post, or add Shopee sales to website revenue reports.
+Tích hợp lưu ảnh chụp đơn Shopee trong các bảng `shopee_*`, tách khỏi đơn website. GEME không sửa giá/tồn Shopee, không xác nhận/hủy/hoàn tiền, không tạo vận đơn, không trừ kho GEME, không gọi POS365/Viettel Post, không gửi email/SMS khách và không cộng đơn này vào doanh thu website.
 
-## Configure the Shopee Open Platform app
+## Trạng thái xác minh tài liệu Shopee
 
-1. Create/configure a Shopee Open Platform partner application and obtain its Partner ID and Partner Key.
-2. Add the exact callback URL to the application. The production URL must point to the public NestJS API:
+Ứng dụng Shopee/Open Platform thật chưa được kết nối trong môi trường này. Các trang tài liệu Open Platform bên dưới trả HTTP 403 khi truy cập từ môi trường kiểm tra hiện tại (có thể cần đăng nhập/quyền Developer Console), nên không thể xác minh tại đây quyền của app GEME, quota/rate limit đang áp dụng cho app, hoặc nghiệm thu request thật. Nội dung hợp đồng của app cụ thể cần được mở lại trong Shopee Console trước khi chuyển Production. Không coi các bài/SDK cộng đồng là bằng chứng thay thế.
+
+Các trang cần đối chiếu trong Shopee Console:
+
+- Authorization and Authentication: <https://open.shopee.com/developer-guide/20>
+- Thông báo cập nhật luồng authorization: <https://open.shopee.com/announcements/902>
+- `get_order_list`: <https://open.shopee.com/documents/v2/v2.order.get_order_list?module=94&type=1>
+- `get_order_detail`: <https://open.shopee.com/documents/v2/v2.order.get_order_detail?module=94&type=1>
+- Lấy access token: <https://open.shopee.com/documents/v2/v2.public.get_access_token?module=120&type=1>
+- Refresh access token: <https://open.shopee.com/documents/v2/v2.public.refresh_access_token?module=120&type=1>
+
+Code hiện dùng fixed authorization URL `/auth` cho live và sandbox, với `partner_id`, `auth_type=seller`, `redirect_uri`, `response_type=code`, `state`; authorization URL không ký bằng Partner Key. Chuỗi `state` ngẫu nhiên được lưu một lần, hết hạn sau 10 phút, gắn với admin, môi trường và Partner ID. Các endpoint API v2 được ký HMAC-SHA256; endpoint public cấp/refresh token ký theo partner ID + path + timestamp, còn endpoint shop-level thêm access token + shop ID. Client đọc response JSON và không ghi URL có code/token vào log. Hình dạng request/response và quyền `order` vẫn cần xác nhận trong tài liệu của đúng app; nếu Shopee trả schema khác, job sẽ lỗi và checkpoint không tiến.
+
+## Chuẩn bị bên Shopee
+
+1. Có tài khoản Open Platform chưa có nghĩa là ứng dụng đã được duyệt production hoặc đã có mọi quyền. Tạo/chọn App trong **App Management**, ghi lại Partner ID/Partner Key trong secret store cá nhân; không gửi chúng trong chat.
+2. Bật đúng quyền đọc thông tin đơn hàng trong phần API Permission của App. App sandbox và production có credentials, shop grant, domain redirect, host API riêng; không dùng token giữa hai môi trường.
+3. Khai báo **Test Redirect URL Domain** hoặc **Live Redirect URL Domain** trong đúng app. Domain callback phải trùng khai báo của môi trường. Shopee yêu cầu seller tự cấp quyền ở trang Shopee sau khi bấm kết nối trong GEME.
+4. Đăng ký callback chính xác theo domain thật, ví dụ:
 
    ```text
-   https://api.geme.vn/api/v1/shopee/callback
+   https://api.example.com/api/v1/shopee/callback
    ```
 
-   For local testing use a public HTTPS development tunnel mapped to the local API, and register that exact URL. Shopee cannot redirect to a private LAN address or localhost. Do not expose the worker or Redis port.
-3. Configure the environment variables below in the API and its private worker. `.env.docker.example` and `outputs/geme-api/.env.example` contain empty examples; put real secrets only in the local deployment secret store or ignored `.env.docker` file.
+   Domain trên chỉ là ví dụ. Dùng hostname API public thật của GEME. Không đăng ký `localhost`, địa chỉ LAN hoặc URL Admin làm callback. Local callback cần tunnel HTTPS công khai và domain đó phải được khai báo trong app.
+5. `SHOPEE_ADMIN_RETURN_URL` là URL Admin để quay về, ví dụ `https://admin.example.com/?view=shopee`. Production bắt buộc HTTPS. Sandbox local có thể dùng `http://localhost:3001/?view=shopee`.
 
-   ```dotenv
-   SHOPEE_ENVIRONMENT=sandbox
-   SHOPEE_PARTNER_ID=
-   SHOPEE_PARTNER_KEY=
-   SHOPEE_REDIRECT_URI=https://api.geme.vn/api/v1/shopee/callback
-   SHOPEE_ADMIN_RETURN_URL=https://admin.geme.vn/?view=shopee
-   SHOPEE_TOKEN_ENCRYPTION_KEY=
-   SHOPEE_INITIAL_SYNC_DAYS=30
-   SHOPEE_POLL_INTERVAL_MINUTES=5
-   SHOPEE_WORKER_CONCURRENCY=2
-   ```
+## Cấu hình duy nhất cho Docker Compose
 
-   Use `SHOPEE_ENVIRONMENT=production` only when the partner app/shop is enabled for production. The API and worker must use the same environment, Partner ID/Key, callback URL, and encryption key.
-4. Generate a dedicated 32-byte encryption key once, then preserve it in the secret store and backups. Changing it makes saved tokens unreadable and requires the shop to authorize again.
+Từ thư mục gốc repo, sao chép mẫu nếu chưa có file cá nhân:
 
-   ```powershell
-   [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
-   ```
+```powershell
+Copy-Item .env.docker.example .env.docker
+```
 
-   Copy the output into `SHOPEE_TOKEN_ENCRYPTION_KEY`. Do not paste it into chat, commit it, or reuse the Meta/AI key.
+Mở `.env.docker` ở thư mục gốc repo. Điền các biến Shopee phía dưới; không sửa source code, route, schema hoặc Compose để thay Partner ID/domain. Tạo khóa mã hóa một lần bằng PowerShell:
 
-## Start locally
+```powershell
+[Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+```
 
-After reviewing the migration and setting the variables, start the API, private worker, Admin, PostgreSQL, and the internal Redis service using the repository's standard Compose workflow. The worker connects to `ai-redis` on the internal Compose network and does not publish a host port. The API applies the existing startup migration workflow; do not point a local command at production without the normal release review.
+Đưa kết quả vào `SHOPEE_TOKEN_ENCRYPTION_KEY`, lưu khóa trong secret store/backup riêng và không commit. Mất/thay khóa làm các token đang lưu không giải mã được, cần cấp quyền lại shop. `SHOPEE_ENABLED=false` là mặc định an toàn; chỉ đổi thành `true` sau khi điền cấu hình.
 
-Open Admin → **Shopee** → **Kết nối shop**. The app redirects to Shopee for the seller's consent. On callback, a one-time state tied to the initiating active Admin is checked before tokens are exchanged and stored encrypted. Shopee access tokens expire and refresh tokens rotate; the worker persists both replacement tokens together.
+| Biến | Bắt buộc | Nội dung |
+|---|---|---|
+| `SHOPEE_ENABLED` | Có | `false` tắt hoàn toàn polling; `true` bật tích hợp. Chỉ nhận `true`/`false`. |
+| `SHOPEE_ENVIRONMENT` | Có | `sandbox` hoặc `production`; giá trị sai không tự chuyển sang production. |
+| `SHOPEE_PARTNER_ID` | Khi bật | Partner ID số của App trong Open Platform, thuộc đúng môi trường. |
+| `SHOPEE_PARTNER_KEY` | Khi bật | Partner Key của cùng App; chỉ API và worker nhận. |
+| `SHOPEE_REDIRECT_URI` | Khi bật | HTTPS public URL `/api/v1/shopee/callback`; sandbox local có thể dùng HTTP tunnel/localhost theo cấu hình và giới hạn môi trường. |
+| `SHOPEE_ADMIN_RETURN_URL` | Khi bật | URL Admin GEME; Production phải HTTPS và thường có `?view=shopee`. |
+| `SHOPEE_TOKEN_ENCRYPTION_KEY` | Khi bật | Base64 chuẩn của đúng 32 bytes ngẫu nhiên. |
+| `SHOPEE_INITIAL_SYNC_DAYS` | Tùy chọn | Số ngày import lần đầu, 1–365; mặc định 30. |
+| `SHOPEE_POLL_INTERVAL_MINUTES` | Tùy chọn | Chu kỳ kiểm tra shop, 5–60 phút; mặc định 5. |
+| `SHOPEE_WORKER_CONCURRENCY` | Tùy chọn | 1–8 job đồng thời; mặc định 2. |
 
-Use **Đồng bộ ngay** for a manual run. A scheduled worker checks active shops at the configured interval. Imported orders appear under **Đơn hàng → Đơn Shopee**. Exact, unique SKU matches are attached automatically; ambiguous or missing matches remain in **Ghép SKU** for an Admin to resolve. A manual mapping applies to subsequent imports and existing matching lines for that shop.
+API và `shopee-worker` đọc chung các biến này từ `.env.docker`; không khai báo biến Shopee nào là `NEXT_PUBLIC_*`. API trả trạng thái cấu hình dạng tên biến thiếu/sai, không trả Partner Key/token/khóa mã hóa. Kết nối, trạng thái môi trường và cấu hình hợp lệ là các trạng thái riêng.
 
-## Operational behavior and data handling
+## Khởi động local bằng Compose
 
-- Order-list windows are limited to 14 days, with cursor pagination and a five-minute overlap to pick up late Shopee updates. The initial lookback defaults to 30 days and is configurable from 1 to 365 days.
-- Order detail requests are batched at up to 50 order numbers. Redis jobs are durable, idempotent per shop, retried with backoff, and tracked in `ShopeeSyncRun`.
-- Marketplace records stay outside the website `Order` model so existing checkout, inventory, payments, shipping, POS365, and sales reports keep their existing behavior.
-- The Admin can read order details and shipping information but has no Shopee write actions. Disconnecting removes local credentials only; it retains imported orders and mappings and does not revoke the seller grant at Shopee. Reauthorize from Shopee/Open Platform if remote revocation is required.
-- Shopee recipient/shipping details can contain personal data. They are stored in the GEME database only when the Shopee API returns them, and access is behind Admin authentication. Apply the deployment's existing database backup, access, and retention controls.
-- The migration only creates new Shopee tables, indexes, and relations. It does not rewrite or delete existing commerce records. No production migration or real shop connection is performed as part of this implementation.
+Mở PowerShell ở thư mục gốc repo đã chứa `compose.yaml` và `.env.docker`. Lệnh sau dùng đúng luồng Compose phát triển của repo: API chạy `prisma generate`, triển khai migration bằng `prisma migrate deploy`, build API rồi mới healthy; worker phụ thuộc API healthy và Redis healthy nên không chạy trước schema.
 
-## API endpoints
+```powershell
+docker compose --env-file .env.docker config --quiet
+docker compose --env-file .env.docker up -d --build geme-api admin shopee-worker
+docker compose --env-file .env.docker ps
+docker compose --env-file .env.docker exec geme-api pnpm shopee:check-config
+docker compose --env-file .env.docker logs --tail 100 geme-api shopee-worker
+```
 
-All Admin endpoints use the existing `AdminAuthGuard` and `/api/v1/admin/shopee` prefix:
+Compose local này tự áp **migration phát triển** khi API khởi động. Không trỏ cấu hình Compose local vào database production và không dùng lệnh này thay release process. Production migration phải chạy trong bước migration của quy trình phát hành hiện có, sau khi review migration; khởi động API/worker chỉ sau khi bước đó thành công. Không có migration production nào được chạy ở đây.
 
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| `GET` | `/status` | Config, shop connections, Redis queue summary |
-| `POST` | `/authorize` | Start a state-bound seller consent flow |
-| `POST` | `/connections/:id/sync` | Queue a read-only import |
-| `DELETE` | `/connections/:id` | Disconnect locally and clear local tokens |
-| `GET` | `/orders` / `/orders/:id` | Search and inspect imported marketplace orders |
-| `GET` | `/mappings/unmatched` / `/mappings/catalog` | List unmatched lines and find GEME products/SKUs |
-| `POST` | `/mappings/:id` | Save an explicit item/model-to-SKU mapping |
-| `GET` | `/sync-runs` | Read sync history |
-| `POST` | `/sync-runs/:id/retry` | Retry a failed run |
+Redis chỉ ở network nội bộ Compose, không publish port. Worker không mở HTTP/public port. Tắt `SHOPEE_ENABLED` không tắt các chức năng GEME khác và worker không schedule polling/gọi Shopee.
 
-The sole public endpoint is `GET /api/v1/shopee/callback`; it accepts short-lived authorization parameters only and consumes the matching one-time state. It does not return tokens to the browser.
+## Kết nối và nhập đơn đầu tiên
 
-## References
+1. Mở GEME Admin → **Shopee** → **Kết nối shop**. Nút chỉ bật khi `SHOPEE_ENABLED=true` và toàn bộ cấu hình hợp lệ.
+2. Shopee hiện trang consent. Đăng nhập seller account cần kết nối và xác nhận quyền đọc đơn.
+3. Callback quay về Admin. GEME kiểm tra state một lần, đổi code ở server rồi lưu access/refresh token bằng AES-256-GCM. Admin thấy Shop ID thật; không giả tên shop nếu chưa đọc được tên qua API.
+4. Bấm **Đồng bộ ngay**. Tác vụ được xếp vào BullMQ/Redis; giao diện hiển thị hàng đợi, heartbeat worker và các trạng thái chờ/đang chạy/thử lại/thành công/thất bại. Redis lỗi hiển thị unavailable, không báo queue rỗng.
+5. Mở **Đơn Shopee** để xem danh sách, bộ lọc server theo từ khóa/trạng thái/shop/môi trường/ngày, chi tiết dòng hàng, trạng thái, phí và dữ liệu vận chuyển mà API trả về. Ngày hiển thị Asia/Ho_Chi_Minh; database lưu UTC.
+6. Mở **Ghép SKU**. Chỉ tự ghép SKU chính xác, duy nhất; SKU/model mơ hồ cần chọn thủ công. Mapping lưu theo shop + item + model và được dùng cho lần import sau.
+7. Mở **Lịch sử đồng bộ** để theo dõi hoặc thử lại job thất bại. Việc job vào hàng đợi không đồng nghĩa đồng bộ đã thành công.
 
-- [Shopee Open Platform: order list](https://open.shopee.com/documents/v2/v2.order.get_order_list?module=94&type=1)
-- [Shopee Open Platform: order detail](https://open.shopee.com/documents/v2/v2.order.get_order_detail?module=94&type=1)
-- [Shopee Open Platform: get access token](https://open.shopee.com/documents/v2/v2.public.get_access_token?module=120&type=1)
-- [Shopee Open Platform: refresh access token](https://open.shopee.com/documents/v2/v2.public.refresh_access_token?module=120&type=1)
+## Cô lập môi trường và dữ liệu
+
+- Mỗi kết nối lưu môi trường và Partner ID; worker chỉ polling/process kết nối trùng môi trường và Partner ID cấu hình hiện tại. Cấu hình đổi App/môi trường không tự dùng lại token cũ.
+- Sync sử dụng cửa sổ tối đa 14 ngày với overlap 5 phút, phân trang có phát hiện cursor lặp, chi tiết tối đa 50 mã/lần, và chỉ tiến checkpoint khi đủ chi tiết cho mọi order ID trong cửa sổ. Response thiếu order, sai schema hoặc thiếu `item_list` làm job lỗi; không coi thiếu dữ liệu là thành công.
+- Upsert chống trùng theo shop + mã đơn; cập nhật có điều kiện theo `update_time`. Response thiếu item list không xóa dòng cũ. Giá gốc/giá sau giảm được giữ riêng; null/chuỗi trống không đổi thành 0.
+- Job retry có backoff tăng dần, tối đa theo cấu hình queue, tôn trọng Retry-After; lỗi quyền/cấu hình không retry vô hạn. Một rate gate nội bộ giới hạn yêu cầu Shopee ở mức bảo thủ 1 request/giây dùng chung Redis. Đây là giới hạn an toàn của GEME, không phải tuyên bố quota chính thức của Shopee.
+- Ngắt kết nối chỉ xóa token cục bộ, chặn job/poll tiếp theo và giữ đơn/mapping/lịch sử. Nó không thu hồi grant trên Shopee; seller cần thu hồi tại Shopee/Open Platform nếu muốn.
+- Bảng Shopee riêng; không nhập vào `Order`, không giữ/trừ tồn, không tạo shipment, không gọi POS365/Viettel Post và không xuất hiện trong báo cáo doanh thu web.
+
+## Sandbox sang Production
+
+1. Trên Shopee Console, xác nhận App đã qua duyệt và có quyền đọc order phù hợp cho production; tạo/copy Partner ID và Key production.
+2. Khai báo live redirect domain và callback public HTTPS chính xác. Mở tài liệu auth/order/token đã đăng nhập để đối chiếu request/response, time window, phân trang, quyền và rate limit hiện hành.
+3. Backup `.env.docker`/secrets; đặt `SHOPEE_ENVIRONMENT=production`, Partner ID/Key production, callback production, Admin return HTTPS. Giữ nguyên khóa mã hóa nếu cần giữ token hiện tại; nhưng sandbox token sẽ không được dùng trong production.
+4. Chạy config validation, review migration release và health check worker. Sau đó mới bấm cấp quyền shop production và đồng bộ thử với đơn kiểm tra.
+
+Không copy token, connection hoặc shop grant sandbox sang Production. Tài khoản Open Platform không đồng nghĩa với app production đã được Shopee duyệt/cấp mọi API permission.
+
+## Xử lý lỗi
+
+| Lỗi | Kiểm tra |
+|---|---|
+| Nút kết nối bị khóa | `SHOPEE_ENABLED=true`, `pnpm shopee:check-config`; xem tên biến thiếu/sai trong trang Shopee. |
+| Shopee báo sai domain redirect | Redirect domain trong app chưa khai báo/không trùng; kiểm tra đúng sandbox/live app và `SHOPEE_REDIRECT_URI`. |
+| `error_sign` | Đối chiếu Partner ID/Key/host cùng môi trường, đồng hồ máy chủ, đường dẫn API và đúng request signer trong tài liệu app. Không gửi Key vào chat/log. |
+| Callback quay lại báo lỗi | Kiểm tra callback public tới được API, state còn hạn/chưa dùng, Partner ID/môi trường chưa đổi trong lúc cấp quyền, và `SHOPEE_ADMIN_RETURN_URL`. Bắt đầu kết nối mới nếu state đã bị tiêu thụ. |
+| Cần cấp quyền lại | Access/refresh token hết hạn hoặc Shopee từ chối quyền; kết nối lại shop. Lỗi mạng/5xx tạm thời được retry, không tự xóa token. |
+| Migration/API không healthy | Xem log `geme-api`, database URL và trạng thái migration. Không chạy migrate trên production bằng Compose local. |
+| Queue unavailable / worker offline | Kiểm tra `ai-redis`, `shopee-worker` health/log, `SHOPEE_ENABLED`, config, và API/worker có cùng env. Worker cần heartbeat Redis trong 30 giây gần nhất. |
+| Thiếu chi tiết đơn / cursor lặp | Job không tiến checkpoint; xem `errorCode` và lịch sử. Xác nhận permission/response schema trong tài liệu chính thức của app rồi thử lại. |
+
+## Giới hạn hiện tại
+
+- Chưa thử credential, consent, API request, quota/rate limit hoặc đơn thật. Tài liệu Open Platform trả 403 trong lần xác minh hiện tại; hãy mở các trang link ở trên sau khi đăng nhập Shopee Console trước khi bật Production.
+- Test tự động dùng fixture/mocks, không thay cho sandbox end-to-end bằng app đã được cấp quyền. Không deploy, không chạy migration production và không kết nối shop thật trong thay đổi này.

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { NextRequest } from "next/server.js";
-import { GET, POST } from "../app/api/admin/[...path]/route.ts";
+import { DELETE, GET, POST } from "../app/api/admin/[...path]/route.ts";
 import { getCollectionState, socialPostStatusSummary } from "../lib/social-ui-state.mjs";
 
 const originalFetch = globalThis.fetch;
@@ -46,6 +46,51 @@ test("social admin POST preserves body and safe headers", async () => {
   assert.equal(response.status, 201);
 });
 
+test("Shopee admin routes preserve method, query, body, session auth and same-origin protections", async () => {
+  process.env.GEME_API_BASE_URL = "http://geme-api:4000/api/v1/";
+  let observed;
+  globalThis.fetch = async (url, init) => {
+    observed = { url: String(url), init };
+    return Response.json({ queued: true }, { status: 202 });
+  };
+  const response = await POST(makeRequest("shopee/connections/abc/sync?source=admin", {
+    method: "POST",
+    headers: { host: "localhost:3001", origin: "http://localhost:3001", cookie: "geme_admin_session=secret", "content-type": "application/json" },
+    body: JSON.stringify({ run: "now" }),
+  }), { params: Promise.resolve({ path: ["shopee", "connections", "abc", "sync"] }) });
+  assert.equal(observed.url, "http://geme-api:4000/api/v1/admin/shopee/connections/abc/sync?source=admin");
+  assert.equal(observed.init.method, "POST");
+  assert.equal(observed.init.headers.get("authorization"), "Bearer secret");
+  assert.deepEqual(JSON.parse(Buffer.from(observed.init.body).toString("utf8")), { run: "now" });
+  assert.equal(response.status, 202);
+});
+
+test("Shopee GET and DELETE keep the admin controller prefix and never forward cookies", async () => {
+  process.env.GEME_API_BASE_URL = "http://geme-api:4000/api/v1";
+  const observed = [];
+  globalThis.fetch = async (url, init) => {
+    observed.push({ url: String(url), init });
+    return new Response(null, { status: 204 });
+  };
+  const getResponse = await GET(makeRequest("shopee/orders?environment=sandbox&page=2", {
+    headers: { host: "localhost:3001", cookie: "geme_admin_session=secret" },
+  }), { params: Promise.resolve({ path: ["shopee", "orders"] }) });
+  const deleteResponse = await DELETE(makeRequest("shopee/connections/connection-id", {
+    method: "DELETE",
+    headers: { host: "localhost:3001", origin: "http://localhost:3001", cookie: "geme_admin_session=secret" },
+  }), { params: Promise.resolve({ path: ["shopee", "connections", "connection-id"] }) });
+  assert.equal(observed[0].url, "http://geme-api:4000/api/v1/admin/shopee/orders?environment=sandbox&page=2");
+  assert.equal(observed[0].init.method, "GET");
+  assert.equal(observed[0].init.headers.get("authorization"), "Bearer secret");
+  assert.equal(observed[0].init.headers.has("cookie"), false);
+  assert.equal(observed[1].url, "http://geme-api:4000/api/v1/admin/shopee/connections/connection-id");
+  assert.equal(observed[1].init.method, "DELETE");
+  assert.equal(observed[1].init.headers.get("authorization"), "Bearer secret");
+  assert.equal(observed[1].init.headers.has("cookie"), false);
+  assert.equal(getResponse.status, 204);
+  assert.equal(deleteResponse.status, 204);
+});
+
 test("non-social paths retain legacy mapping and OAuth callback stays outside admin mapping", async () => {
   process.env.GEME_API_BASE_URL = "http://geme-api:4000/api/v1";
   let observedUrl = "";
@@ -54,6 +99,8 @@ test("non-social paths retain legacy mapping and OAuth callback stays outside ad
   assert.equal(observedUrl, "http://geme-api:4000/api/v1/orders?limit=3");
   await GET(makeRequest("social/meta/callback?state=redacted", { headers: { cookie: "geme_admin_session=secret" } }), { params: Promise.resolve({ path: ["social", "meta", "callback"] }) });
   assert.equal(observedUrl, "http://geme-api:4000/api/v1/social/meta/callback?state=redacted");
+  await GET(makeRequest("orders?limit=3", { headers: { cookie: "geme_admin_session=secret" } }), { params: Promise.resolve({ path: ["orders"] }) });
+  assert.equal(observedUrl, "http://geme-api:4000/api/v1/orders?limit=3");
 });
 
 test("proxy still rejects missing admin session and cross-origin mutations", async () => {

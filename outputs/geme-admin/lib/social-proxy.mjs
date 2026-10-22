@@ -10,7 +10,9 @@ const READ_ONLY_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 function mapAdminSegments(segments) {
   const isSocialAdminRoute = segments[0] === "social"
     && !(segments[1] === "meta" && segments[2] === "callback");
-  return isSocialAdminRoute ? ["admin", ...segments] : segments;
+  if (isSocialAdminRoute) return ["admin", ...segments];
+  if (segments[0] === "shopee") return ["admin", ...segments];
+  return segments;
 }
 
 /** @param {string} baseUrl @param {string[]} segments @param {string} search */

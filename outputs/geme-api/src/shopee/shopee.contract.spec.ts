@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHmac } from "node:crypto";
-import { chunk, createShopeeState, orderStatusCanAdvance, parseShopeeAmount, shopeeApiOrigin, shopeeAuthorizationOrigin, signShopeeRequest, unixSecondsDate } from "./shopee.contract.js";
+import { chunk, createShopeeState, orderStatusCanAdvance, parseShopeeAmount, shopeeApiOrigin, shopeeAuthorizationOrigin, shopeeEnvironment, shopeeTokenExpiry, signShopeeRequest, unixSecondsDate, validateShopeeCursor, validateShopeeOrderDetails, validateShopeeOrderListPage } from "./shopee.contract.js";
 
 test("Shopee signatures include shop credentials only for shop-scoped API paths", () => {
   const signature = signShopeeRequest({ partnerId: "123", partnerKey: "secret", path: "/api/v2/order/get_order_list", timestamp: 1_700_000_000, accessToken: "token", shopId: "456" });
@@ -14,6 +14,8 @@ test("Shopee production and sandbox endpoints are isolated", () => {
   assert.equal(shopeeApiOrigin("production"), "https://partner.shopeemobile.com");
   assert.equal(shopeeApiOrigin("sandbox"), "https://partner.test-stable.shopeemobile.com");
   assert.equal(shopeeAuthorizationOrigin("sandbox"), "https://open.test-stable.shopee.com");
+  assert.equal(shopeeEnvironment("prod"), null);
+  assert.equal(shopeeEnvironment("production"), "production");
 });
 
 test("OAuth state is unpredictable and stored as a one-way hash", () => {
@@ -30,8 +32,43 @@ test("timestamps, money, chunking and status ordering reject malformed data", ()
   assert.equal(unixSecondsDate("not-a-time"), null);
   assert.equal(unixSecondsDate(-1), null);
   assert.equal(parseShopeeAmount("1200.50"), 1200.5);
+  assert.equal(parseShopeeAmount(""), null);
+  assert.equal(parseShopeeAmount(null), null);
   assert.equal(parseShopeeAmount("NaN"), null);
   assert.deepEqual(chunk([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
   assert.equal(orderStatusCanAdvance(new Date(100), new Date(99)), false);
   assert.equal(orderStatusCanAdvance(new Date(100), new Date(100)), true);
+});
+
+test("token expiry accepts bounded TTL values without inventing a fallback", () => {
+  const now = Date.UTC(2026, 0, 1);
+  assert.equal(shopeeTokenExpiry(14_400, now)?.toISOString(), "2026-01-01T04:00:00.000Z");
+  assert.equal(shopeeTokenExpiry("14400", now)?.getTime(), now + 14_400_000);
+  for (const invalid of [undefined, null, "", "NaN", 0, -1, 31_536_001, 1.5]) assert.equal(shopeeTokenExpiry(invalid, now), null);
+});
+
+test("order list page and cursor validation reject missing IDs, malformed pages and repeated cursors", () => {
+  const parsed = validateShopeeOrderListPage({ order_list: [{ order_sn: " A-1 " }, { order_sn: "A-2" }], more: true, next_cursor: "page-2" });
+  assert.deepEqual(parsed, { ok: true, value: { orderSns: ["A-1", "A-2"], more: true, cursor: "page-2" } });
+  assert.deepEqual(validateShopeeOrderListPage({ order_list: [{ order_sn: "A-1" }], more: true }), { ok: false, code: "SHOPEE_CURSOR_MISSING" });
+  assert.deepEqual(validateShopeeOrderListPage({ order_list: [{}], more: false }), { ok: false, code: "SHOPEE_ORDER_ID_MISSING" });
+  assert.deepEqual(validateShopeeOrderListPage({ order_list: [], more: "false" }), { ok: false, code: "SHOPEE_ORDER_LIST_INVALID" });
+  assert.equal(validateShopeeCursor(true, "page-2", undefined, new Set()), true);
+  assert.equal(validateShopeeCursor(true, "page-2", "page-2", new Set()), false);
+  assert.equal(validateShopeeCursor(true, "page-1", "page-2", new Set(["page-1"])), false);
+  assert.equal(validateShopeeCursor(false, "", undefined, new Set()), true);
+});
+
+test("order detail must cover exactly every requested order and include item_list", () => {
+  const valid = (order_sn: string) => ({ order_sn, order_status: "READY_TO_SHIP", create_time: 1_700_000_000, update_time: 1_700_000_001, item_list: [{ item_id: 1, model_quantity_purchased: 1 }] });
+  assert.deepEqual(validateShopeeOrderDetails([valid("A"), valid("B")], ["A", "B"]).ok, true);
+  assert.deepEqual(validateShopeeOrderDetails([valid("A")], ["A", "B"]), { ok: false, code: "SHOPEE_ORDER_DETAIL_MISSING" });
+  assert.deepEqual(validateShopeeOrderDetails([valid("A"), valid("A")], ["A", "B"]), { ok: false, code: "SHOPEE_ORDER_DETAIL_SET_INVALID" });
+  assert.deepEqual(validateShopeeOrderDetails([valid("OTHER")], ["A"]), { ok: false, code: "SHOPEE_ORDER_DETAIL_SET_INVALID" });
+  const withoutItems = { ...valid("A") } as Record<string, unknown>;
+  delete withoutItems.item_list;
+  assert.deepEqual(validateShopeeOrderDetails([withoutItems], ["A"]), { ok: false, code: "SHOPEE_ORDER_DETAIL_INCOMPLETE" });
+  assert.deepEqual(validateShopeeOrderDetails([valid("A")], ["A"]).ok, true);
+  assert.deepEqual(validateShopeeOrderDetails([{ ...valid("A"), item_list: [] }], ["A"]), { ok: false, code: "SHOPEE_ORDER_DETAIL_INCOMPLETE" });
+  assert.deepEqual(validateShopeeOrderDetails({ order_list: [] }, ["A"]), { ok: false, code: "SHOPEE_ORDER_DETAIL_LIST_INVALID" });
 });
