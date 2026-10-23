@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Logger, Param, ParseUUIDPipe, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
 import { AdminAuthGuard } from "../admin-auth/admin-auth.guard.js";
+import { RequireAdminPermissions } from "../admin-auth/admin-permissions.js";
 import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
 import { ShopeeService } from "./shopee.service.js";
 
@@ -8,21 +9,22 @@ type RedirectResponse = { redirect(statusCode: number, url: string): unknown; st
 
 @Controller("admin/shopee")
 @UseGuards(AdminAuthGuard)
+@RequireAdminPermissions("integrations.read")
 export class ShopeeAdminController {
   constructor(private readonly shopee: ShopeeService) {}
 
   @Get("status") status() { return this.shopee.status(); }
-  @Post("authorize") authorize(@Req() request: AdminRequest) { return this.shopee.startAuthorization(request.adminIdentity); }
-  @Delete("connections/:id") disconnect(@Param("id", new ParseUUIDPipe()) id: string) { return this.shopee.disconnect(id); }
-  @Post("connections/:id/sync") sync(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.shopee.enqueueSync(id, request.adminIdentity); }
+  @Post("authorize") @RequireAdminPermissions("integrations.manage") authorize(@Req() request: AdminRequest) { return this.shopee.startAuthorization(request.adminIdentity); }
+  @Delete("connections/:id") @RequireAdminPermissions("integrations.manage") disconnect(@Param("id", new ParseUUIDPipe()) id: string) { return this.shopee.disconnect(id); }
+  @Post("connections/:id/sync") @RequireAdminPermissions("integrations.manage") sync(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.shopee.enqueueSync(id, request.adminIdentity); }
   @Get("orders") orders(@Query("page") page?: string, @Query("limit") limit?: string, @Query("status") status?: string, @Query("q") q?: string, @Query("from") from?: string, @Query("to") to?: string, @Query("connectionId") connectionId?: string, @Query("environment") environment?: string, @Query("shopId") shopId?: string) { return this.shopee.listOrders({ page, limit, status, q, from, to, connectionId, environment, shopId }); }
   @Get("orders/:id") order(@Param("id", new ParseUUIDPipe()) id: string) { return this.shopee.getOrder(id); }
   @Get("mappings/unmatched") unmatched(@Query("limit") limit?: string) { return this.shopee.unmatchedItems(limit); }
   @Get("mappings/review") mappingReview(@Query("limit") limit?: string) { return this.shopee.mappingReview(limit); }
   @Get("mappings/catalog") catalog(@Query("q") q?: string) { return this.shopee.searchCatalog(q); }
-  @Post("mappings/:id") mapItem(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: unknown) { return this.shopee.mapItem(id, body); }
+  @Post("mappings/:id") @RequireAdminPermissions("integrations.manage") mapItem(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: unknown) { return this.shopee.mapItem(id, body); }
   @Get("sync-runs") syncRuns(@Query("limit") limit?: string, @Query("connectionId") connectionId?: string, @Query("environment") environment?: string) { return this.shopee.syncHistory({ limit, connectionId, environment }); }
-  @Post("sync-runs/:id/retry") retrySync(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.shopee.retrySyncRun(id, request.adminIdentity); }
+  @Post("sync-runs/:id/retry") @RequireAdminPermissions("integrations.manage") retrySync(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.shopee.retrySyncRun(id, request.adminIdentity); }
 }
 
 // Shopee redirects to this callback with a short-lived, one-time state. The

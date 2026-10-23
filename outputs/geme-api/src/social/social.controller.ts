@@ -1,5 +1,6 @@
 import { Body, Controller, Get, HttpException, Logger, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
 import { AdminAuthGuard } from "../admin-auth/admin-auth.guard.js";
+import { RequireAdminPermissions } from "../admin-auth/admin-permissions.js";
 import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
 import { SocialService } from "./social.service.js";
 import { MetaRequestError } from "./social-meta.client.js";
@@ -9,29 +10,30 @@ type RedirectResponse = { redirect(statusCode: number, url: string): unknown };
 
 @Controller("admin/social")
 @UseGuards(AdminAuthGuard)
+@RequireAdminPermissions("social.read")
 export class SocialController {
   constructor(private readonly social: SocialService) {}
 
   @Get("status") status() { return this.social.status(); }
   @Get("accounts") accounts() { return this.social.accounts(); }
-  @Post("meta/authorize") authorize(@Req() request: AdminRequest) { return this.social.startOAuth(request.adminIdentity); }
-  @Patch("accounts/selection") selectAccounts(@Req() request: AdminRequest, @Body() body: Record<string, unknown>) { return this.social.selectAccounts(request.adminIdentity, body?.accountIds); }
-  @Post("connections/:id/disconnect") disconnect(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.social.disconnect(request.adminIdentity, id); }
+  @Post("meta/authorize") @RequireAdminPermissions("social.manage") authorize(@Req() request: AdminRequest) { return this.social.startOAuth(request.adminIdentity); }
+  @Patch("accounts/selection") @RequireAdminPermissions("social.manage") selectAccounts(@Req() request: AdminRequest, @Body() body: Record<string, unknown>) { return this.social.selectAccounts(request.adminIdentity, body?.accountIds); }
+  @Post("connections/:id/disconnect") @RequireAdminPermissions("social.manage") disconnect(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.social.disconnect(request.adminIdentity, id); }
   @Get("products") products(@Query("search") search?: string) { return this.social.products(search); }
   @Get("marketing-drafts") marketingDrafts() { return this.social.marketingDrafts(); }
   @Get("posts") posts(@Query("status") status?: string, @Query("q") search?: string, @Query("limit") limit?: string, @Query("cursor") cursor?: string) { return this.social.listPosts(status, search, limit, cursor); }
   @Get("posts/calendar") calendar(@Query("from") from?: string, @Query("to") to?: string, @Query("status") status?: string) { return this.social.calendar(from, to, status); }
   @Get("posts/:id") getPost(@Param("id", new ParseUUIDPipe()) id: string) { return this.social.getPost(id); }
-  @Post("posts") createPost(@Req() request: AdminRequest, @Body() body: unknown) { return this.social.createPost(request.adminIdentity, body); }
-  @Patch("posts/:id") updatePost(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string, @Body() body: unknown) { return this.social.updatePost(request.adminIdentity, id, body); }
-  @Post("posts/:id/approve") approve(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string, @Body() body: unknown) { return this.social.approvePost(request.adminIdentity, id, body); }
-  @Post("posts/:id/publish-now") publishNow(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.social.publishNow(request.adminIdentity, id); }
-  @Post("posts/:id/retry-failed") retryFailed(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.social.retryFailed(request.adminIdentity, id); }
-  @Post("posts/:postId/targets/:targetId/verify") verifyTarget(@Req() request: AdminRequest, @Param("postId", new ParseUUIDPipe()) postId: string, @Param("targetId", new ParseUUIDPipe()) targetId: string) { return this.social.verifyUnknownTarget(request.adminIdentity, postId, targetId); }
-  @Post("posts/:postId/targets/:targetId/reconcile") reconcileTarget(@Req() request: AdminRequest, @Param("postId", new ParseUUIDPipe()) postId: string, @Param("targetId", new ParseUUIDPipe()) targetId: string, @Body() body: unknown) { return this.social.recordManualReconciliation(request.adminIdentity, postId, targetId, body); }
-  @Post("posts/:postId/targets/:targetId/retry-after-reconciliation") retryUnknown(@Req() request: AdminRequest, @Param("postId", new ParseUUIDPipe()) postId: string, @Param("targetId", new ParseUUIDPipe()) targetId: string, @Body() body: unknown) { return this.social.retryUnknownTarget(request.adminIdentity, postId, targetId, body); }
-  @Post("posts/:id/cancel") cancel(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.social.cancel(request.adminIdentity, id); }
-  @Post("posts/:id/reschedule") reschedule(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.social.reschedule(request.adminIdentity, id); }
+  @Post("posts") @RequireAdminPermissions("social.manage") createPost(@Req() request: AdminRequest, @Body() body: unknown) { return this.social.createPost(request.adminIdentity, body); }
+  @Patch("posts/:id") @RequireAdminPermissions("social.manage") updatePost(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string, @Body() body: unknown) { return this.social.updatePost(request.adminIdentity, id, body); }
+  @Post("posts/:id/approve") @RequireAdminPermissions("social.manage") approve(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string, @Body() body: unknown) { return this.social.approvePost(request.adminIdentity, id, body); }
+  @Post("posts/:id/publish-now") @RequireAdminPermissions("social.manage") publishNow(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.social.publishNow(request.adminIdentity, id); }
+  @Post("posts/:id/retry-failed") @RequireAdminPermissions("social.manage") retryFailed(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.social.retryFailed(request.adminIdentity, id); }
+  @Post("posts/:postId/targets/:targetId/verify") @RequireAdminPermissions("social.manage") verifyTarget(@Req() request: AdminRequest, @Param("postId", new ParseUUIDPipe()) postId: string, @Param("targetId", new ParseUUIDPipe()) targetId: string) { return this.social.verifyUnknownTarget(request.adminIdentity, postId, targetId); }
+  @Post("posts/:postId/targets/:targetId/reconcile") @RequireAdminPermissions("social.manage") reconcileTarget(@Req() request: AdminRequest, @Param("postId", new ParseUUIDPipe()) postId: string, @Param("targetId", new ParseUUIDPipe()) targetId: string, @Body() body: unknown) { return this.social.recordManualReconciliation(request.adminIdentity, postId, targetId, body); }
+  @Post("posts/:postId/targets/:targetId/retry-after-reconciliation") @RequireAdminPermissions("social.manage") retryUnknown(@Req() request: AdminRequest, @Param("postId", new ParseUUIDPipe()) postId: string, @Param("targetId", new ParseUUIDPipe()) targetId: string, @Body() body: unknown) { return this.social.retryUnknownTarget(request.adminIdentity, postId, targetId, body); }
+  @Post("posts/:id/cancel") @RequireAdminPermissions("social.manage") cancel(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.social.cancel(request.adminIdentity, id); }
+  @Post("posts/:id/reschedule") @RequireAdminPermissions("social.manage") reschedule(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.social.reschedule(request.adminIdentity, id); }
 }
 
 // Meta redirects here without the Admin cookie: the callback is authenticated

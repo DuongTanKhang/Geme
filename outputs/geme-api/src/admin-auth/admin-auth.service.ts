@@ -36,10 +36,6 @@ export class AdminAuthService {
       if (admin?.isActive) await this.recordFailedLogin(admin.id);
       throw new UnauthorizedException("Email hoặc mật khẩu không đúng.");
     }
-    if (admin.role === "CONTENT_EDITOR") {
-      throw new UnauthorizedException("Vai trò biên tập chưa được cấp quyền trong trang quản trị này.");
-    }
-
     const identity: AdminIdentity = { id: admin.id, email: admin.email, displayName: admin.displayName, role: admin.role };
     await this.prisma.adminUser.update({ where: { id: admin.id }, data: { lastLoginAt: new Date(), failedLoginAttempts: 0, lockedUntil: null } });
     return { accessToken: this.sign(identity), expiresIn: TOKEN_LIFETIME_SECONDS, admin: identity };

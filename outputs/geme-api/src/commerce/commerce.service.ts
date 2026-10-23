@@ -9,6 +9,7 @@ import { ensureCustomerForPaidOrder } from "./customer-profile.js";
 import { sanitizeBlogHtml } from "./blog-html.js";
 import { calculateCheckoutPrice, getCheckoutPromotionValue, loadActiveStorePromotions, type CheckoutPromotion } from "./checkout-pricing.js";
 import { canTransitionOrder } from "./order-state.js";
+import { getInventoryReservationExpiry } from "./reservation-expiry.js";
 
 type Input = Record<string, any>;
 const slugify = (value: string) => String(value || "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `item-${Date.now()}`;
@@ -182,6 +183,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   private promotionStatusTimer: ReturnType<typeof setInterval> | null = null;
   private orderEmailOutboxTimer: ReturnType<typeof setInterval> | null = null;
   private orderEmailOutboxRunning = false;
+  private reservationExpiryTimer: ReturnType<typeof setInterval> | null = null;
+  private reservationExpiryRunning = false;
   private categoryCache: { expiresAt: number; records: any[] } | null = null;
   private categoryLoad: Promise<any[]> | null = null;
   private categoryCacheVersion = 0;
@@ -218,6 +221,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     void this.hideExpiredSoldOutListings().catch((error) => this.logger.error("Không thể tự ẩn bài đăng hết hàng đã quá 3 ngày.", error));
     void this.syncPromotionStatuses().catch((error) => this.logger.error("Không thể đồng bộ trạng thái khuyến mãi theo thời gian.", error));
     void this.processOrderEmailOutbox().catch((error) => this.logger.error("Không thể xử lý hàng đợi email xác nhận đơn.", error));
+    void this.expireOrderReservations().catch((error) => this.logger.error("Không thể giải phóng tồn kho giữ quá hạn.", error));
     this.soldOutCleanupTimer = setInterval(() => {
       void this.hideExpiredSoldOutListings().catch((error) => this.logger.error("Không thể tự ẩn bài đăng hết hàng đã quá 3 ngày.", error));
     }, 5 * 60_000);
@@ -230,12 +234,17 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       void this.processOrderEmailOutbox().catch((error) => this.logger.error("Không thể xử lý hàng đợi email xác nhận đơn.", error));
     }, 5_000);
     this.orderEmailOutboxTimer.unref?.();
+    this.reservationExpiryTimer = setInterval(() => {
+      void this.expireOrderReservations().catch((error) => this.logger.error("Không thể giải phóng tồn kho giữ quá hạn.", error));
+    }, 30_000);
+    this.reservationExpiryTimer.unref?.();
   }
 
   onModuleDestroy() {
     if (this.soldOutCleanupTimer) clearInterval(this.soldOutCleanupTimer);
     if (this.promotionStatusTimer) clearInterval(this.promotionStatusTimer);
     if (this.orderEmailOutboxTimer) clearInterval(this.orderEmailOutboxTimer);
+    if (this.reservationExpiryTimer) clearInterval(this.reservationExpiryTimer);
   }
 
   private async persistDataImageReference(value: string, filename: string, alt?: string | null) {
@@ -1007,7 +1016,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const monthStart = new Date();
     monthStart.setDate(1);
     monthStart.setHours(0, 0, 0, 0);
-    const [products, soldItems, movements] = await Promise.all([
+    const [products, soldItems, movements, reservations] = await Promise.all([
       this.prisma.product.findMany({
         select: {
           id: true,
@@ -1033,13 +1042,34 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         _sum: { quantity: true },
       }),
       this.inventoryMovements("8"),
+      this.prisma.inventoryReservation.groupBy({
+        by: ["productId", "variantId"],
+        where: { status: "ACTIVE" },
+        _sum: { quantity: true },
+      }),
     ]);
     const soldByProduct = new Map<string, number>();
     for (const item of soldItems) if (item.productId) soldByProduct.set(item.productId, Number(item._sum.quantity) || 0);
+    const reservedByProduct = new Map<string, number>();
+    const reservedByVariant = new Map<string, number>();
+    for (const reservation of reservations) {
+      const quantity = Number(reservation._sum.quantity) || 0;
+      reservedByProduct.set(reservation.productId, (reservedByProduct.get(reservation.productId) || 0) + quantity);
+      if (reservation.variantId) reservedByVariant.set(reservation.variantId, quantity);
+    }
     return {
       products: products.map((product) => ({
         ...product,
         stock: product.variants.length ? product.variants.reduce((sum, variant) => sum + variant.stock, 0) : product.stock,
+        availableStock: product.variants.length ? product.variants.reduce((sum, variant) => sum + variant.stock, 0) : product.stock,
+        reservedStock: reservedByProduct.get(product.id) || 0,
+        onHandStock: (product.variants.length ? product.variants.reduce((sum, variant) => sum + variant.stock, 0) : product.stock) + (reservedByProduct.get(product.id) || 0),
+        variants: product.variants.map((variant) => ({
+          ...variant,
+          availableStock: variant.stock,
+          reservedStock: reservedByVariant.get(variant.id) || 0,
+          onHandStock: variant.stock + (reservedByVariant.get(variant.id) || 0),
+        })),
         soldThisMonth: soldByProduct.get(product.id) || 0,
       })),
       recentMovements: movements,
@@ -2053,7 +2083,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.order.findMany({ select: selectAdminOrder, orderBy: { placedAt: "desc" }, take });
   }
 
-  private async releaseOrderReservation(tx: any, order: Input, changedProductIds: Set<string>) {
+  private async releaseOrderReservation(tx: any, order: Input, changedProductIds: Set<string>, reason = "ORDER_CANCELLED") {
     for (const item of order.items as any[]) {
       if (!item.productId) continue;
       if (item.variantId) {
@@ -2081,6 +2111,69 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         } });
       }
       changedProductIds.add(item.productId);
+    }
+    await tx.inventoryReservation.updateMany({
+      where: { orderId: order.id, status: "ACTIVE" },
+      data: { status: reason === "RESERVATION_EXPIRED" ? "EXPIRED" : "RELEASED", releasedAt: new Date(), releaseReason: reason, expiresAt: null },
+    });
+  }
+
+  private async expireOrderReservations() {
+    if (this.reservationExpiryRunning) return;
+    this.reservationExpiryRunning = true;
+    try {
+      const now = new Date();
+      const expired = await this.prisma.order.findMany({
+        where: {
+          status: "PENDING_CONFIRMATION",
+          inventoryReservedAt: { not: null },
+          inventoryCommittedAt: null,
+          inventoryReleasedAt: null,
+          inventoryReservationExpiresAt: { lte: now },
+          payments: { none: { status: "PAID" } },
+        },
+        include: { items: true },
+        orderBy: { inventoryReservationExpiresAt: "asc" },
+        take: 100,
+      });
+      for (const candidate of expired) {
+        const changedProductIds = new Set<string>();
+        try {
+          const released = await this.prisma.$transaction(async (tx) => {
+            const claimed = await tx.order.updateMany({
+              where: {
+                id: candidate.id,
+                status: "PENDING_CONFIRMATION",
+                inventoryReservedAt: { not: null },
+                inventoryCommittedAt: null,
+                inventoryReleasedAt: null,
+                inventoryReservationExpiresAt: { lte: now },
+                payments: { none: { status: "PAID" } },
+              },
+              data: { status: "CANCELLED", inventoryReleasedAt: now, inventoryReservationExpiresAt: null },
+            });
+            if (claimed.count !== 1) return false;
+            await this.releaseOrderReservation(tx, candidate, changedProductIds, "RESERVATION_EXPIRED");
+            await this.queueProductStockSync(tx, changedProductIds);
+            await tx.auditLog.create({ data: {
+              action: "ORDER_RESERVATION_EXPIRED",
+              entityType: "ORDER",
+              entityId: candidate.id,
+              before: { status: candidate.status, reservationExpiresAt: candidate.inventoryReservationExpiresAt?.toISOString() },
+              after: { status: "CANCELLED", releasedAt: now.toISOString() },
+            } });
+            return true;
+          });
+          if (released) {
+            for (const productId of changedProductIds) this.publishCatalogChange("product", "updated", productId);
+            if (this.pos365.isSyncEnabled()) void this.pos365.queueOrderSync(candidate.id).catch(() => undefined);
+          }
+        } catch (error) {
+          this.logger.warn(`Không thể giải phóng reservation của đơn ${candidate.code}.`, error);
+        }
+      }
+    } finally {
+      this.reservationExpiryRunning = false;
     }
   }
 
@@ -2128,10 +2221,19 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             status: status as any,
             ...(inventoryReleasedAt ? { inventoryReleasedAt } : {}),
             ...(inventoryCommittedAt ? { inventoryCommittedAt } : {}),
+            ...(inventoryReleasedAt || inventoryCommittedAt || status === "PROCESSING" ? { inventoryReservationExpiresAt: null } : {}),
             ...(this.pos365.isSyncEnabled() ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: new Date(), pos365SyncError: null } : {}),
           },
         });
         if (updated.count !== 1) throw new ConflictException("Đơn vừa được cập nhật bởi người khác. Tải lại thông tin rồi thử lại.");
+        if (inventoryCommittedAt) await tx.inventoryReservation.updateMany({
+          where: { orderId: id, status: "ACTIVE" },
+          data: { status: "COMMITTED", committedAt: inventoryCommittedAt, expiresAt: null },
+        });
+        if (status === "PROCESSING") await tx.inventoryReservation.updateMany({
+          where: { orderId: id, status: "ACTIVE" },
+          data: { expiresAt: null },
+        });
         const updatedOrder = await tx.order.findUnique({ where: { id }, include: { items: true, payments: true, customer: true } });
         if (!updatedOrder) throw new NotFoundException("Không tìm thấy đơn hàng sau khi cập nhật.");
         return updatedOrder;
@@ -2151,6 +2253,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (String(statusInput || "").toUpperCase() !== "PAID") throw new BadRequestException("Chỉ được ghi nhận trạng thái đã thanh toán.");
     try {
       const order = await this.prisma.$transaction(async (tx) => {
+        // Serialize payment confirmation against the reservation expiry worker.
+        await tx.$queryRaw`SELECT "id" FROM "orders" WHERE "id" = ${id}::uuid FOR UPDATE`;
         const current = await tx.order.findUnique({ where: { id }, include: { payments: true } });
         if (!current) throw new NotFoundException("Không tìm thấy đơn hàng.");
         const payment = current.payments[0];
@@ -2159,6 +2263,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         if (current.status === "CANCELLED") throw new BadRequestException("Không thể ghi nhận thanh toán cho đơn đã hủy.");
         if (payment.method === "COD" && current.status !== "DELIVERED") throw new BadRequestException("Đơn COD chỉ được ghi nhận tiền đã thu sau khi giao thành công.");
         if (payment.status !== "PAID") await tx.payment.update({ where: { id: payment.id }, data: { status: "PAID", paidAt: new Date() } });
+        await tx.order.update({ where: { id }, data: { inventoryReservationExpiresAt: null } });
+        await tx.inventoryReservation.updateMany({ where: { orderId: id, status: "ACTIVE" }, data: { expiresAt: null } });
         const customer = await ensureCustomerForPaidOrder(tx, current);
         return tx.order.update({
           where: { id },
@@ -2245,6 +2351,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const storeSale = trustedStoreSale && (input.salesChannel === "STORE" || input.channel === "STORE");
     const method = enumValue(input.paymentMethod, ["COD", "BANK_TRANSFER", "MOMO", "CREDIT_CARD", "OTHER"], "COD");
     const paid = storeSale && (input.paid === true || method === "COD");
+    const inventoryReservationExpiresAt = getInventoryReservationExpiry(method, paid);
     const code = `GME-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 5).toUpperCase()}`;
     const customerId = String(authenticatedCustomerId || input.customerId || "");
     const idempotencyKey = String(idempotencyKeyInput || "").trim();
@@ -2414,12 +2521,26 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         note: input.note || null, subtotal, discountAmount, shippingFee, totalAmount,
         status: paid ? "DELIVERED" as any : "PENDING_CONFIRMATION" as any,
         ...(!paid ? { inventoryReservedAt: new Date() } : {}),
+        ...(!paid && inventoryReservationExpiresAt ? { inventoryReservationExpiresAt } : {}),
         ...(paid ? { inventoryCommittedAt: new Date() } : {}),
         ...(this.pos365.isSyncEnabled() ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: new Date() } : {}),
         ...(orderCustomer ? { customer: { connect: { id: orderCustomer.id } } } : {}),
         items: { create: placedItems },
         payments: { create: { method: method as any, amount: totalAmount, status: paid ? "PAID" as any : "PENDING" as any, ...(paid ? { paidAt: new Date() } : {}) } },
       }, include: { items: true, payments: true, customer: true } });
+      if (!paid) {
+        await tx.inventoryReservation.createMany({
+          data: savedOrder.items.filter((item: any) => item.productId).map((item: any) => ({
+            orderId: savedOrder.id,
+            orderItemId: item.id,
+            productId: item.productId,
+            variantId: item.variantId,
+            quantity: item.quantity,
+            status: "ACTIVE",
+            expiresAt: inventoryReservationExpiresAt,
+          })),
+        });
+      }
       if (!storeSale && savedOrder.customerEmail) {
         await tx.orderEmailOutbox.create({ data: {
           orderId: savedOrder.id,
@@ -2555,6 +2676,30 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const entry = await this.prisma.orderEmailOutbox.findUnique({ where: { orderId_eventType: { orderId, eventType: "ORDER_CONFIRMATION" } } });
     if (!entry) throw new NotFoundException("Không có email xác nhận đã lưu cho đơn này.");
     if (entry.status === "ACCEPTED") return entry;
+    if (entry.status === "UNKNOWN") {
+      const apiKey = process.env.GEME_ORDER_EMAIL_API_KEY?.trim();
+      const baseUrl = (process.env.AEGIS_ORDER_EMAIL_URL || process.env.AEGIS_AUTH_API_URL || "http://127.0.0.1:5130").trim().replace(/\/+$/, "");
+      if (!apiKey) throw new ConflictException("Chưa cấu hình khóa để kiểm tra trạng thái email tại Aegis; chưa gửi lại để tránh email trùng.");
+      let response: Response;
+      try {
+        response = await fetch(`${baseUrl}/internal/email/order-confirmation/${encodeURIComponent(entry.idempotencyKey)}`, {
+          headers: { "X-GEME-Internal-Key": apiKey },
+          signal: AbortSignal.timeout(5_000),
+        });
+      } catch {
+        throw new ConflictException("Chưa kiểm tra được trạng thái tại Aegis. Email chưa được gửi lại để tránh tạo bản trùng.");
+      }
+      if (response.ok) {
+        const result = await response.json() as { status?: string };
+        if (result.status === "SENT") {
+          await this.prisma.orderEmailOutbox.updateMany({ where: { id: entry.id, status: "UNKNOWN" }, data: { status: "ACCEPTED", acceptedAt: new Date(), lastError: null } });
+          return this.prisma.orderEmailOutbox.findUnique({ where: { id: entry.id } });
+        }
+        if (result.status === "UNKNOWN") throw new ConflictException("Aegis cũng đang ghi nhận kết quả chưa rõ. Cần kiểm tra trạng thái gửi ở máy chủ email trước khi thử lại.");
+        throw new ConflictException("Aegis đang xử lý yêu cầu này. Email chưa được gửi lại để tránh tạo bản trùng.");
+      }
+      if (response.status !== 404) throw new ConflictException(`Aegis chưa xác nhận email chưa gửi (HTTP ${response.status}); chưa thử gửi lại.`);
+    }
     await this.prisma.orderEmailOutbox.updateMany({ where: { id: entry.id, status: { in: ["FAILED", "PENDING", "UNKNOWN"] } }, data: { status: "PENDING", nextAttemptAt: new Date(), lastError: null } });
     void this.processOrderEmailOutbox();
     return this.prisma.orderEmailOutbox.findUnique({ where: { id: entry.id } });

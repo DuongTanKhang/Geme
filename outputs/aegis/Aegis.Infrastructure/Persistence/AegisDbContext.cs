@@ -36,6 +36,7 @@ namespace Aegis.Infrastructure.Persistence
         public DbSet<SecurityAudit> SecurityAudits => Set<SecurityAudit>();
         public DbSet<Session> Sessions => Set<Session>();
         public DbSet<TrustedDevice> TrustedDevices => Set<TrustedDevice>();
+        public DbSet<InternalEmailDelivery> InternalEmailDeliveries => Set<InternalEmailDelivery>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

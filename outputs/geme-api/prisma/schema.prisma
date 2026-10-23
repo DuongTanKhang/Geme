@@ -379,8 +379,25 @@ model AdminUser {
   socialReconciliationClaims SocialPostTarget[] @relation("SocialTargetReconciliationClaim")
   shopeeOAuthStates ShopeeOAuthState[] @relation("ShopeeOAuthStateAdmin")
   shopeeConnectionsCreated ShopeeConnection[] @relation("ShopeeConnectionCreator")
+  permissionGrants AdminPermissionGrant[] @relation("PermissionSubject")
+  permissionsGranted AdminPermissionGrant[] @relation("PermissionGrantedBy")
 
   @@map("admin_users")
+}
+
+model AdminPermissionGrant {
+  adminId          String    @map("admin_id") @db.Uuid
+  permission       String    @db.VarChar(80)
+  effect           String    @default("ALLOW") @db.VarChar(8)
+  grantedByAdminId String?   @map("granted_by_admin_id") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  admin            AdminUser @relation("PermissionSubject", fields: [adminId], references: [id], onDelete: Cascade)
+  grantedBy        AdminUser? @relation("PermissionGrantedBy", fields: [grantedByAdminId], references: [id], onDelete: SetNull)
+
+  @@id([adminId, permission])
+  @@index([permission, effect])
+  @@map("admin_permission_grants")
 }
 
 model Customer {
@@ -513,6 +530,8 @@ model Product {
   inventoryMovements    InventoryMovement[]
   inventoryReceiptItems InventoryReceiptItem[]
   inventoryIssueItems   InventoryIssueItem[]
+  inventoryReservations InventoryReservation[]
+  returnItems            OrderReturnItem[]
   aiTechnicalImageBatches AiImageBatch[]      @relation("AiTechnicalImageTarget")
   mediaAssets           ProductMediaAsset[]
   socialPostSources     SocialPost[]
@@ -589,6 +608,8 @@ model ProductPriceVariant {
   inventoryMovements    InventoryMovement[]
   inventoryReceiptItems InventoryReceiptItem[]
   inventoryIssueItems   InventoryIssueItem[]
+  inventoryReservations InventoryReservation[]
+  returnItems            OrderReturnItem[]
   socialPostSources     SocialPost[]
   shopeeMappings        ShopeeItemMapping[] @relation("ShopeeMappingVariant")
   shopeeImportedItems   ShopeeImportedOrderItem[] @relation("ShopeeImportedMappedVariant")
@@ -659,6 +680,7 @@ model Order {
   inventoryReservedAt DateTime?   @map("inventory_reserved_at") @db.Timestamptz(3)
   inventoryCommittedAt DateTime?  @map("inventory_committed_at") @db.Timestamptz(3)
   inventoryReleasedAt DateTime?   @map("inventory_released_at") @db.Timestamptz(3)
+  inventoryReservationExpiresAt DateTime? @map("inventory_reservation_expires_at") @db.Timestamptz(3)
   shippingFee     Decimal         @default(0) @map("shipping_fee") @db.Decimal(14, 0)
   totalAmount     Decimal         @map("total_amount") @db.Decimal(14, 0)
   note            String?         @db.Text
@@ -677,6 +699,9 @@ model Order {
   items           OrderItem[]
   payments        Payment[]
   emailOutbox     OrderEmailOutbox[]
+  inventoryReservations InventoryReservation[]
+  returns         OrderReturn[]
+  codReconciliationItem CodReconciliationItem?
   promotionUsage  PromotionUsage?
 
   @@index([status, placedAt(sort: Desc)])
@@ -687,6 +712,7 @@ model Order {
   @@index([pos365SyncStatus, pos365SyncNextAttemptAt])
   @@index([trackingCode])
   @@index([inventoryReservedAt, inventoryCommittedAt, inventoryReleasedAt])
+  @@index([status, inventoryReservationExpiresAt])
   @@map("orders")
 }
 
@@ -708,6 +734,8 @@ model OrderItem {
   order       Order                @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product     Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
   variant     ProductPriceVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  inventoryReservation InventoryReservation?
+  returnItems OrderReturnItem[]
 
   @@index([orderId])
   @@index([productId])
@@ -726,6 +754,7 @@ model Payment {
   createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
   order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  refunds     PaymentRefund[]
 
   @@index([orderId, status])
   @@index([status, paidAt(sort: Desc)])
@@ -751,6 +780,136 @@ model OrderEmailOutbox {
   @@unique([orderId, eventType])
   @@index([status, nextAttemptAt])
   @@map("order_email_outbox")
+}
+
+model InventoryReservation {
+  id            String    @id @default(uuid()) @db.Uuid
+  orderId       String    @map("order_id") @db.Uuid
+  orderItemId   String    @unique @map("order_item_id") @db.Uuid
+  productId     String    @map("product_id") @db.Uuid
+  variantId     String?   @map("variant_id") @db.Uuid
+  quantity      Int
+  status        String    @default("ACTIVE") @db.VarChar(16)
+  expiresAt     DateTime? @map("expires_at") @db.Timestamptz(3)
+  committedAt   DateTime? @map("committed_at") @db.Timestamptz(3)
+  releasedAt    DateTime? @map("released_at") @db.Timestamptz(3)
+  releaseReason String?   @map("release_reason") @db.VarChar(40)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem     OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  product       Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant       ProductPriceVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([status, expiresAt])
+  @@index([productId, variantId, status])
+  @@index([orderId, status])
+  @@map("inventory_reservations")
+}
+
+model OrderReturn {
+  id               String            @id @default(uuid()) @db.Uuid
+  code             String            @unique @db.VarChar(48)
+  orderId          String            @map("order_id") @db.Uuid
+  status           String            @default("REQUESTED") @db.VarChar(20)
+  refundStatus     String            @default("NONE") @map("refund_status") @db.VarChar(20)
+  reason           String            @db.Text
+  idempotencyKey   String?           @unique @map("idempotency_key") @db.VarChar(128)
+  requestHash      String?           @map("request_hash") @db.VarChar(64)
+  decisionNote     String?           @map("decision_note") @db.Text
+  createdByAdminId String?           @map("created_by_admin_id") @db.Uuid
+  receivedAt       DateTime?         @map("received_at") @db.Timestamptz(3)
+  closedAt         DateTime?         @map("closed_at") @db.Timestamptz(3)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  order            Order             @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  items            OrderReturnItem[]
+  refunds          PaymentRefund[]
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([orderId, createdAt(sort: Desc)])
+  @@map("order_returns")
+}
+
+model OrderReturnItem {
+  id            String               @id @default(uuid()) @db.Uuid
+  returnId      String               @map("return_id") @db.Uuid
+  orderItemId   String               @map("order_item_id") @db.Uuid
+  productId     String?              @map("product_id") @db.Uuid
+  variantId     String?              @map("variant_id") @db.Uuid
+  productName   String               @map("product_name") @db.VarChar(180)
+  productSku    String               @map("product_sku") @db.VarChar(64)
+  quantity      Int
+  restock       Boolean              @default(false)
+  conditionNote String?              @map("condition_note") @db.Text
+  restockedAt   DateTime?            @map("restocked_at") @db.Timestamptz(3)
+  createdAt     DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  returnCase    OrderReturn          @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  orderItem     OrderItem            @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  product       Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant       ProductPriceVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@unique([returnId, orderItemId])
+  @@index([orderItemId])
+  @@map("order_return_items")
+}
+
+model PaymentRefund {
+  id               String      @id @default(uuid()) @db.Uuid
+  returnId         String      @map("return_id") @db.Uuid
+  paymentId        String      @map("payment_id") @db.Uuid
+  idempotencyKey   String      @unique @map("idempotency_key") @db.VarChar(128)
+  amount           Decimal     @db.Decimal(14, 0)
+  note             String      @db.Text
+  createdByAdminId String      @map("created_by_admin_id") @db.Uuid
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  returnCase       OrderReturn @relation(fields: [returnId], references: [id], onDelete: Restrict)
+  payment          Payment     @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId, createdAt])
+  @@index([returnId, createdAt])
+  @@map("payment_refunds")
+}
+
+model CodReconciliationBatch {
+  id                String   @id @default(uuid()) @db.Uuid
+  externalReference String   @unique @map("external_reference") @db.VarChar(120)
+  requestHash       String   @map("request_hash") @db.VarChar(64)
+  carrier           String   @default("VIETTEL_POST") @db.VarChar(32)
+  statementDate     DateTime @map("statement_date") @db.Date
+  expectedTotal     Decimal  @default(0) @map("expected_total") @db.Decimal(14, 0)
+  receivedTotal     Decimal  @default(0) @map("received_total") @db.Decimal(14, 0)
+  feeTotal          Decimal  @default(0) @map("fee_total") @db.Decimal(14, 0)
+  status            String   @default("OPEN") @db.VarChar(16)
+  decisionNote      String?  @map("decision_note") @db.Text
+  createdByAdminId  String   @map("created_by_admin_id") @db.Uuid
+  reconciledAt      DateTime? @map("reconciled_at") @db.Timestamptz(3)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  items             CodReconciliationItem[]
+
+  @@index([status, statementDate(sort: Desc)])
+  @@index([carrier, statementDate(sort: Desc)])
+  @@map("cod_reconciliation_batches")
+}
+
+model CodReconciliationItem {
+  id             String   @id @default(uuid()) @db.Uuid
+  batchId        String   @map("batch_id") @db.Uuid
+  orderId        String   @unique @map("order_id") @db.Uuid
+  expectedAmount Decimal  @map("expected_amount") @db.Decimal(14, 0)
+  receivedAmount Decimal  @map("received_amount") @db.Decimal(14, 0)
+  carrierFee    Decimal  @default(0) @map("carrier_fee") @db.Decimal(14, 0)
+  varianceAmount Decimal  @map("variance_amount") @db.Decimal(14, 0)
+  status         String   @db.VarChar(16)
+  note           String?  @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  batch          CodReconciliationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  order          Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@unique([batchId, orderId])
+  @@index([batchId, status])
+  @@map("cod_reconciliation_items")
 }
 
 model Promotion {

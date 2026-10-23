@@ -54,7 +54,6 @@ builder.Services
     .AddApplication()
     .AddInfrastructure(configuration);
 builder.Services.AddHostedService<OtpEmailWorker>();
-builder.Services.AddSingleton<OrderConfirmationEmailQueue>();
 builder.Services.AddHostedService<OrderConfirmationEmailWorker>();
 builder.Services.AddHostedService<AuthenticationWarmupService>();
 builder.Services.AddHostedService<AuthenticationEndpointWarmupService>();

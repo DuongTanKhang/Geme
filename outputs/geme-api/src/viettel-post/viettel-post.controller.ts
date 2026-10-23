@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
 import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { AdminAuthGuard } from "../admin-auth/admin-auth.guard.js";
+import { RequireAdminPermissions } from "../admin-auth/admin-permissions.js";
 import { ViettelPostService } from "./viettel-post.service.js";
 
 @ApiTags("integrations")
@@ -10,11 +11,13 @@ export class ViettelPostController {
 
   @Get("status")
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions("shipping.read")
   @ApiOperation({ summary: "Xem Viettel Post đã được cấu hình ở backend chưa" })
   status() { return this.viettelPost.status(); }
 
   @Post("orders/:id/services")
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions("shipping.read")
   @ApiOperation({ summary: "Lấy dịch vụ và cước dự kiến cho đơn hàng" })
   services(@Param("id") id: string, @Body() body: Record<string, unknown>) {
     return this.viettelPost.servicesForOrder(id, body);
@@ -22,6 +25,7 @@ export class ViettelPostController {
 
   @Post("orders/:id/shipment")
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions("shipping.manage")
   @ApiOperation({ summary: "Tạo vận đơn Viettel Post cho đơn hàng" })
   createShipment(@Param("id") id: string, @Body() body: Record<string, unknown>) {
     return this.viettelPost.createShipment(id, body);
@@ -29,6 +33,7 @@ export class ViettelPostController {
 
   @Post("orders/:id/print-url")
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions("shipping.read")
   @ApiOperation({ summary: "Tạo link in nhãn vận đơn Viettel Post" })
   printUrl(@Param("id") id: string) {
     return this.viettelPost.printUrl(id);
