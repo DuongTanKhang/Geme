@@ -2,6 +2,9 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "../generated/prisma/client.js";
 import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
+import { CommerceService } from "../commerce/commerce.service.js";
+import { sanitizeBlogHtml } from "../commerce/blog-html.js";
+import { MediaAssetsService } from "../media/media-assets.service.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { AiStudioQueue } from "./ai-studio.queue.js";
 
@@ -22,6 +25,25 @@ const editableFields = {
 
 export type ProductDraftSubmission = { imageItemIds: string[]; idempotencyKey: string; manifestHash: string };
 type VerifiedLegacyProduct = { sku: string; productId: string };
+type DirectProductImage = { buffer: Buffer; originalname: string; mimetype: string; size: number };
+
+const directImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+const directMaxImageBytes = 8 * 1024 * 1024;
+const directMaxBatchBytes = 40 * 1024 * 1024;
+
+function isSupportedDirectImage(file: DirectProductImage) {
+  const mime = file.mimetype.toLowerCase();
+  if (!directImageTypes.has(mime)) return false;
+  if (mime === "image/png") return file.buffer.length >= 8 && file.buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  if (mime === "image/jpeg") return file.buffer.length >= 3 && file.buffer[0] === 0xff && file.buffer[1] === 0xd8 && file.buffer[2] === 0xff;
+  return file.buffer.length >= 12 && file.buffer.toString("ascii", 0, 4) === "RIFF" && file.buffer.toString("ascii", 8, 12) === "WEBP";
+}
+
+function safeDirectFilename(value: string) {
+  const name = value.replace(/\\/g, "/").split("/").at(-1)?.replace(/[\0-\x1f\x7f]/g, "").trim().slice(0, 240) || "product-image";
+  if (name === "." || name === "..") throw new BadRequestException("Tên ảnh tải lên không hợp lệ.");
+  return name;
+}
 
 export function verifiedLegacyProduct(report: Prisma.JsonValue | null): VerifiedLegacyProduct | null {
   if (!report || typeof report !== "object" || Array.isArray(report)) return null;
@@ -92,7 +114,7 @@ export function normalizeProductDraftPatch(value: unknown) {
 export class AiProductAgentService {
   private readonly logger = new Logger(AiProductAgentService.name);
 
-  constructor(private readonly prisma: PrismaService, private readonly queue: AiStudioQueue) {}
+  constructor(private readonly prisma: PrismaService, private readonly queue: AiStudioQueue, private readonly media: MediaAssetsService, private readonly commerce: CommerceService) {}
 
   status() {
     return {
@@ -100,7 +122,9 @@ export class AiProductAgentService {
       configured: process.env.OPENAI_CONFIGURED?.trim() === "true",
       maxFilesPerBatch: 5,
       maxImageBytes: 8 * 1024 * 1024,
-      sideEffects: "draft_only_no_commerce_mutation",
+      maxDirectUploadBytes: directMaxBatchBytes,
+      directUpload: true,
+      sideEffects: "no_product_update_until_admin_approval_and_valid_sku_attachment",
     };
   }
 
@@ -112,7 +136,7 @@ export class AiProductAgentService {
       status: "APPROVED" as const,
       outputAssetId: { not: null },
       outputAsset: { is: { isPrivate: true } },
-      batch: { purpose: "PRODUCT_PHOTO" as const },
+      batch: { purpose: "PRODUCT_PHOTO" as const, isProductAgentDirectUpload: false },
     };
     const [items, total] = await Promise.all([this.prisma.aiImageItem.findMany({
       where: { ...approvedWhere, ...(cursor ? { OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] } : {}) },
@@ -143,6 +167,98 @@ export class AiProductAgentService {
       hasMore,
       total,
     };
+  }
+
+  async uploadDirectImages(actor: AdminIdentity, filesInput: DirectProductImage[] | undefined, idempotencyHeader: unknown) {
+    const files = Array.isArray(filesInput) ? filesInput : [];
+    if (files.length < 1 || files.length > 5) throw new BadRequestException("Tải từ 1 đến 5 ảnh cho mỗi lô Product Agent.");
+    const key = typeof idempotencyHeader === "string" ? idempotencyHeader.trim() : "";
+    if (!/^[A-Za-z0-9._:-]{8,128}$/.test(key)) throw new BadRequestException("Thiếu khóa Idempotency-Key hợp lệ.");
+
+    let totalBytes = 0;
+    const manifest = files.map((file) => {
+      if (!file?.buffer?.length || file.size !== file.buffer.length) throw new BadRequestException("Có ảnh tải lên không hợp lệ hoặc bị rỗng.");
+      if (file.size > directMaxImageBytes) throw new BadRequestException("Mỗi ảnh phải nhỏ hơn hoặc bằng 8 MB.");
+      if (!isSupportedDirectImage(file)) throw new BadRequestException("Chỉ nhận ảnh JPEG, PNG hoặc WebP đúng định dạng.");
+      totalBytes += file.size;
+      return { filename: safeDirectFilename(file.originalname), mimeType: file.mimetype.toLowerCase(), size: file.size, sha256: createHash("sha256").update(file.buffer).digest("hex") };
+    });
+    if (totalBytes > directMaxBatchBytes) throw new BadRequestException("Tổng dung lượng một lô không được vượt quá 40 MB.");
+
+    const manifestHash = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
+    const keyHash = createHash("sha256").update(`${actor.id}:${key}`).digest("hex");
+    const imageBatchKey = `pa-upload:${keyHash}`;
+    const draftBatchKey = `pa-draft:${keyHash}`;
+    const existing = await this.prisma.aiImageBatch.findUnique({ where: { idempotencyKey: imageBatchKey }, include: { items: { select: { id: true }, orderBy: { createdAt: "asc" } } } });
+    if (existing) {
+      if (existing.createdByAdminId !== actor.id || existing.manifestHash !== manifestHash || !existing.isProductAgentDirectUpload) {
+        throw new ConflictException("Khóa tải ảnh đã được sử dụng cho một bộ ảnh khác.");
+      }
+      return this.createBatch(actor, { imageItemIds: existing.items.map(({ id }) => id) }, draftBatchKey);
+    }
+
+    const stored: { id: string }[] = [];
+    try {
+      for (const [index, file] of files.entries()) {
+        const name = manifest[index].filename;
+        const sourceDigest = createHash("sha256").update(`${keyHash}:${index}:${manifest[index].sha256}`).digest("hex");
+        const asset = await this.media.save({
+          filename: name,
+          mimeType: manifest[index].mimeType,
+          bytes: file.buffer,
+          sourceKey: `private-media/ai-product-agent/${actor.id}/${sourceDigest}`,
+          isPrivate: true,
+          alt: `Ảnh nguồn Product Agent · ${name}`.slice(0, 240),
+          updateExisting: true,
+        });
+        stored.push({ id: asset.id });
+      }
+
+      let imageBatch;
+      try {
+        imageBatch = await this.prisma.aiImageBatch.create({
+          data: {
+            idempotencyKey: imageBatchKey,
+            manifestHash,
+            createdByAdminId: actor.id,
+            name: `Product Agent trực tiếp · ${new Date().toLocaleDateString("vi-VN")}`,
+            preset: "STONE_GREY",
+            purpose: "PRODUCT_PHOTO",
+            isProductAgentDirectUpload: true,
+            status: "COMPLETE",
+            totalBytes: BigInt(totalBytes),
+            items: {
+              create: files.map((_, index) => ({
+                originalFilename: manifest[index].filename,
+                mimeType: manifest[index].mimeType,
+                expectedSize: manifest[index].size,
+                sourceSha256: manifest[index].sha256,
+                status: "APPROVED" as const,
+                qcStatus: "REVIEW" as const,
+                qcFlags: ["DIRECT_PRODUCT_AGENT_UPLOAD", "IMAGE_STUDIO_QC_SKIPPED"],
+                classification: { source: "DIRECT_PRODUCT_AGENT_UPLOAD", visualEditing: "SKIPPED" },
+                qcReport: { source: "DIRECT_PRODUCT_AGENT_UPLOAD", requiresVisualReview: true, imageStudioQc: "SKIPPED" },
+                outputAsset: { connect: { id: stored[index].id } },
+              })),
+            },
+          },
+          include: { items: { select: { id: true }, orderBy: { createdAt: "asc" } } },
+        });
+      } catch (error) {
+        const raced = await this.prisma.aiImageBatch.findUnique({ where: { idempotencyKey: imageBatchKey }, include: { items: { select: { id: true }, orderBy: { createdAt: "asc" } } } });
+        if (!raced) throw error;
+        if (raced.createdByAdminId !== actor.id || raced.manifestHash !== manifestHash || !raced.isProductAgentDirectUpload) {
+          throw new ConflictException("Khóa tải ảnh đã được sử dụng cho một bộ ảnh khác.");
+        }
+        imageBatch = raced;
+      }
+
+      this.log("ai.product_agent.direct_upload_stored", actor.id, imageBatch.id, { count: imageBatch.items.length, totalBytes });
+      return this.createBatch(actor, { imageItemIds: imageBatch.items.map(({ id }) => id) }, draftBatchKey);
+    } catch (error) {
+      for (const asset of stored) await this.media.removeUnreferencedAsset(asset.id).catch(() => false);
+      throw error;
+    }
   }
 
   async createBatch(actor: AdminIdentity, value: unknown, idempotencyHeader: unknown) {
@@ -289,7 +405,7 @@ export class AiProductAgentService {
       include: {
         batch: { select: { id: true, status: true, createdAt: true } },
         task: { select: { id: true, status: true, errorCode: true, errorMessage: true, attemptCount: true } },
-        sourceImageItem: { select: { id: true, originalFilename: true, batch: { select: { id: true, name: true } } } },
+        sourceImageItem: { select: { id: true, originalFilename: true, attachedProduct: { select: { id: true, sku: true, name: true } }, batch: { select: { id: true, name: true } } } },
         reviewedBy: { select: { id: true, displayName: true } },
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: take + 1,
@@ -357,7 +473,7 @@ export class AiProductAgentService {
       include: {
         batch: { select: { id: true, status: true } },
         task: { select: { id: true, status: true, errorCode: true, errorMessage: true, attemptCount: true } },
-        sourceImageItem: { select: { id: true, originalFilename: true, batch: { select: { id: true, name: true } } } },
+        sourceImageItem: { select: { id: true, originalFilename: true, attachedProduct: { select: { id: true, sku: true, name: true } }, batch: { select: { id: true, name: true } } } },
         reviewedBy: { select: { id: true, displayName: true } },
       },
     });
@@ -367,8 +483,9 @@ export class AiProductAgentService {
 
   async updateDraft(actor: AdminIdentity, id: string, value: unknown) {
     const data = normalizeProductDraftPatch(value);
-    const current = await this.prisma.aiProductDraft.findUnique({ where: { id }, select: { id: true, batchId: true, status: true } });
+    const current = await this.prisma.aiProductDraft.findUnique({ where: { id }, select: { id: true, batchId: true, status: true, sourceImageItem: { select: { attachedProduct: { select: { sku: true } } } } } });
     if (!current) throw new NotFoundException("Không tìm thấy bản nháp sản phẩm.");
+    if (current.sourceImageItem.attachedProduct) throw new ConflictException(`Bản nháp đã được gắn vào SKU ${current.sourceImageItem.attachedProduct.sku}; hãy sửa nội dung trong hồ sơ sản phẩm.`);
     if (["QUEUED", "RUNNING", "FAILED", "CANCELLED", "REJECTED"].includes(current.status)) throw new ConflictException("Bản nháp này chưa sẵn sàng để chỉnh sửa.");
     const updated = await this.prisma.aiProductDraft.update({
       where: { id },
@@ -382,8 +499,9 @@ export class AiProductAgentService {
 
   async decideDraft(actor: AdminIdentity, id: string, decision: "APPROVED" | "REJECTED", noteInput?: unknown) {
     const note = typeof noteInput === "string" ? noteInput.trim().slice(0, 1000) : "";
-    const current = await this.prisma.aiProductDraft.findUnique({ where: { id }, select: { id: true, batchId: true, status: true, productName: true } });
+    const current = await this.prisma.aiProductDraft.findUnique({ where: { id }, select: { id: true, batchId: true, status: true, productName: true, sourceImageItem: { select: { attachedProduct: { select: { sku: true } } } } } });
     if (!current) throw new NotFoundException("Không tìm thấy bản nháp sản phẩm.");
+    if (current.sourceImageItem.attachedProduct && decision === "REJECTED") throw new ConflictException(`Bản nháp đã được gắn vào SKU ${current.sourceImageItem.attachedProduct.sku}; không thể từ chối sau khi áp dụng vào sản phẩm.`);
     if (!["NEEDS_REVIEW", "READY_FOR_REVIEW", "APPROVED", "REJECTED"].includes(current.status)) throw new ConflictException("Bản nháp chưa sẵn sàng để quyết định.");
     await this.prisma.$transaction(async (transaction) => {
       const updated = await transaction.aiProductDraft.updateMany({
@@ -395,6 +513,117 @@ export class AiProductAgentService {
     await this.refreshBatchState(current.batchId);
     this.log(`ai.product_draft.${decision.toLowerCase()}`, actor.id, id, { note: note || undefined });
     return this.getDraft(current.id);
+  }
+
+  async attachApprovedDraftToProduct(actor: AdminIdentity, id: string, value: unknown) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new BadRequestException("Yêu cầu gắn sản phẩm không hợp lệ.");
+    const body = value as Record<string, unknown>;
+    if (Object.keys(body).some((key) => key !== "sku")) throw new BadRequestException("Yêu cầu chỉ nhận SKU sản phẩm.");
+    const skuInput = typeof body.sku === "string" ? body.sku.trim() : "";
+    if (!skuInput || skuInput.length > 64) throw new BadRequestException("Hãy nhập SKU sản phẩm hợp lệ (tối đa 64 ký tự).");
+
+    const draft = await this.prisma.aiProductDraft.findUnique({
+      where: { id },
+      include: { sourceImageItem: { include: { batch: true, outputAsset: true, attachedProduct: { select: { id: true, sku: true, name: true } } } } },
+    });
+    if (!draft) throw new NotFoundException("Không tìm thấy bản nháp sản phẩm.");
+    if (draft.status !== "APPROVED") throw new ConflictException("Chỉ có thể gắn bản nháp sau khi admin đã duyệt nội dung.");
+    if (!draft.productName.trim() || !draft.shortDescription.trim() || !draft.detailedDescription.trim()) {
+      throw new ConflictException("Bản nháp cần có tên, mô tả ngắn và mô tả chi tiết trước khi gắn vào sản phẩm.");
+    }
+    const sku = skuInput.toLocaleUpperCase("en");
+    const product = await this.prisma.product.findFirst({
+      where: { sku: { equals: sku, mode: "insensitive" } },
+      select: { id: true, sku: true, name: true },
+    });
+    if (!product) throw new NotFoundException(`Không tìm thấy sản phẩm có SKU “${skuInput}”. Chưa gắn ảnh hoặc cập nhật thông tin.`);
+
+    const item = draft.sourceImageItem;
+    if (item.batch.purpose !== "PRODUCT_PHOTO" || item.status !== "APPROVED" || !item.outputAsset || !item.outputAsset.isPrivate) {
+      throw new ConflictException("Ảnh nguồn không còn hợp lệ hoặc chưa được duyệt để gắn vào sản phẩm.");
+    }
+    const output = item.outputAsset;
+    if (item.attachedProductId && item.attachedProductId !== product.id) {
+      throw new ConflictException(`Ảnh này đã được gắn vào SKU ${item.attachedProduct?.sku || "khác"}.`);
+    }
+
+    let publicAsset: { id: string; url: string };
+    let createdPublicAssetId: string | null = null;
+    if (item.attachedProductId === product.id) {
+      if (!item.publishedAssetId) throw new ConflictException("Ảnh đã được gắn vào SKU này nhưng thiếu đường dẫn ảnh đã xuất bản. Kiểm tra thư viện ảnh sản phẩm.");
+      const existing = await this.media.findById(item.publishedAssetId);
+      if (existing.isPrivate) throw new ConflictException("Ảnh đã gắn chưa được chuyển sang thư viện ảnh công khai.");
+      publicAsset = { id: existing.id, url: this.media.urlFor(existing) };
+    } else {
+      const extension = output.mimeType === "image/jpeg" ? "jpg" : output.mimeType === "image/png" ? "png" : output.mimeType === "image/webp" ? "webp" : null;
+      if (!extension) throw new ConflictException("Định dạng ảnh nguồn không được hỗ trợ để đưa vào thư viện sản phẩm.");
+      const bytes = await this.media.read(output);
+      const published = await this.media.save({
+        filename: `geme-${product.sku}-${draft.id.slice(0, 8)}.${extension}`,
+        mimeType: output.mimeType,
+        bytes,
+        sourceKey: `ai-product-agent/published/${item.id}`,
+        isPrivate: false,
+        updateExisting: true,
+        alt: draft.altText.trim().slice(0, 240) || draft.productName,
+      });
+      publicAsset = { id: published.id, url: published.url };
+      createdPublicAssetId = published.id;
+    }
+
+    try {
+      const result = await this.prisma.$transaction(async (transaction) => {
+        const currentDraft = await transaction.aiProductDraft.findUnique({ where: { id }, select: { status: true } });
+        if (currentDraft?.status !== "APPROVED") throw new ConflictException("Bản nháp không còn ở trạng thái đã duyệt. Tải lại danh sách rồi thử lại.");
+
+        if (!item.attachedProductId) {
+          const imageClaim = await transaction.aiImageItem.updateMany({
+            where: { id: item.id, status: "APPROVED", attachedProductId: null, publishedAssetId: null },
+            data: { attachedProductId: product.id, publishedAssetId: publicAsset.id },
+          });
+          if (imageClaim.count !== 1) return { attached: false };
+        }
+
+        const currentProduct = await transaction.product.findFirst({ where: { id: product.id, sku: product.sku }, select: { id: true, name: true } });
+        if (!currentProduct) throw new NotFoundException(`SKU “${skuInput}” không còn khớp sản phẩm. Chưa áp dụng nội dung.`);
+        const alreadyInGallery = await transaction.productImage.findFirst({ where: { productId: product.id, url: publicAsset.url }, select: { id: true } });
+        await transaction.product.update({
+          where: { id: product.id },
+          data: {
+            name: draft.productName.trim(),
+            description: draft.shortDescription.trim(),
+            fullDescription: sanitizeBlogHtml(draft.detailedDescription.trim()) || null,
+            seoTitle: draft.seoTitle.trim() || null,
+            seoDescription: draft.seoMetaDescription.trim() || null,
+          },
+        });
+        if (!alreadyInGallery) {
+          const galleryTail = await transaction.productImage.findFirst({ where: { productId: product.id }, select: { sortOrder: true }, orderBy: { sortOrder: "desc" } });
+          await transaction.productImage.create({
+            data: {
+              productId: product.id,
+              url: publicAsset.url,
+              alt: draft.altText.trim().slice(0, 240) || draft.productName.trim(),
+              sortOrder: (galleryTail?.sortOrder ?? -1) + 1,
+              isPrimary: !galleryTail,
+            },
+          });
+        }
+        return { attached: true };
+      });
+
+      if (!result.attached) {
+        const latest = await this.prisma.aiImageItem.findUnique({ where: { id: item.id }, select: { attachedProductId: true, publishedAssetId: true, attachedProduct: { select: { sku: true } } } });
+        if (latest?.attachedProductId === product.id && latest.publishedAssetId) return this.getDraft(id);
+        throw new ConflictException(`Ảnh vừa được gắn vào SKU ${latest?.attachedProduct?.sku || "khác"}.`);
+      }
+      this.commerce.notifyProductImagesUpdated(product.id);
+      this.log("ai.product_draft.attached_to_product", actor.id, id, { productId: product.id, sku: product.sku, publishedAssetId: publicAsset.id, fields: ["name", "description", "fullDescription", "seoTitle", "seoDescription", "gallery"] });
+      return this.getDraft(id);
+    } catch (error) {
+      if (createdPublicAssetId) await this.media.removeUnreferencedAsset(createdPublicAssetId).catch(() => false);
+      throw error;
+    }
   }
 
   async cancelDraft(actor: AdminIdentity, id: string) {

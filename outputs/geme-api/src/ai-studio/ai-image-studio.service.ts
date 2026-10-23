@@ -273,6 +273,7 @@ export class AiImageStudioService {
     const parsed = Number(limitInput || 12);
     const take = Number.isInteger(parsed) ? Math.min(30, Math.max(1, parsed)) : 12;
     const batches = await this.prisma.aiImageBatch.findMany({
+      where: { isProductAgentDirectUpload: false },
       orderBy: { createdAt: "desc" },
       take,
       include: { targetProduct: { select: { sku: true, name: true } }, items: { select: { id: true, status: true, qcStatus: true, qcFlags: true, originalFilename: true, relativePath: true, taskId: true, createdAt: true }, orderBy: { createdAt: "asc" } } },
@@ -281,8 +282,8 @@ export class AiImageStudioService {
   }
 
   async getBatch(id: string) {
-    const batch = await this.prisma.aiImageBatch.findUnique({
-      where: { id },
+    const batch = await this.prisma.aiImageBatch.findFirst({
+      where: { id, isProductAgentDirectUpload: false },
       include: {
         targetProduct: { select: { id: true, sku: true, name: true, status: true, technicalImageUrl: true } },
         items: {

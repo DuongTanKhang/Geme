@@ -31,7 +31,7 @@ type ProductDraft = {
   previewUrl?: string;
   task: { status: string; errorCode?: string | null; errorMessage?: string | null; attemptCount?: number };
   batch: { id: string; status: string; createdAt?: string };
-  sourceImageItem: { id: string; originalFilename: string; batch?: { id: string; name: string } };
+  sourceImageItem: { id: string; originalFilename: string; attachedProduct?: { id: string; sku: string; name: string } | null; batch?: { id: string; name: string } };
   reviewedBy?: { displayName: string } | null;
 };
 type ApprovedImage = {
@@ -48,6 +48,7 @@ type CursorPage<T> = { items: T[]; nextCursor: string | null; hasMore: boolean; 
 type DraftBatch = { id: string; status: string; createdAt: string; drafts: ProductDraft[] };
 type ProductAgentStatus = { provider: string; configured: boolean; maxFilesPerBatch: number; maxImageBytes: number; sideEffects: string };
 type DraftFields = Pick<ProductDraft, "productName" | "shortDescription" | "detailedDescription" | "categorySuggestion" | "materialSuggestion" | "gemstoneSuggestion" | "seoTitle" | "seoMetaDescription" | "altText">;
+type DirectFile = { id: string; file: File; preview: string };
 
 const statusLabels: Record<ProductDraftStatus, string> = {
   QUEUED: "Đang chờ",
@@ -77,7 +78,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     cache: "no-store",
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...init.headers },
+    headers: { ...(typeof init.body === "string" ? { "Content-Type": "application/json" } : {}), ...init.headers },
   });
   const body = await response.json().catch(() => ({})) as { message?: string | string[]; detail?: string };
   if (!response.ok) throw new Error(Array.isArray(body.message) ? body.message.join(" ") : body.message || body.detail || `API trả về lỗi ${response.status}.`);
@@ -104,8 +105,12 @@ export default function AiProductAgentWorkspace() {
   const [draftSearchQuery, setDraftSearchQuery] = useState("");
   const [selectedDrafts, setSelectedDrafts] = useState<string[]>([]);
   const [expandedDrafts, setExpandedDrafts] = useState<string[]>([]);
+  const [attachSkus, setAttachSkus] = useState<Record<string, string>>({});
+  const [attachErrors, setAttachErrors] = useState<Record<string, string>>({});
   const [providerStatus, setProviderStatus] = useState<ProductAgentStatus | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
+  const [directFiles, setDirectFiles] = useState<DirectFile[]>([]);
+  const [dropActive, setDropActive] = useState(false);
   const [edits, setEdits] = useState<Record<string, DraftFields>>({});
   const [busy, setBusy] = useState("");
   const [loading, setLoading] = useState(true);
@@ -113,6 +118,11 @@ export default function AiProductAgentWorkspace() {
   const [notice, setNotice] = useState("");
   const idempotency = useRef<{ manifest: string; key: string } | null>(null);
   const requestInFlight = useRef(false);
+  const directUploadKey = useRef<{ manifest: string; key: string } | null>(null);
+  const directFilesRef = useRef<DirectFile[]>([]);
+
+  useEffect(() => { directFilesRef.current = directFiles; }, [directFiles]);
+  useEffect(() => () => { for (const item of directFilesRef.current) URL.revokeObjectURL(item.preview); }, []);
 
   const refresh = useCallback(async (silent = false) => {
     if (requestInFlight.current) return;
@@ -252,6 +262,63 @@ export default function AiProductAgentWorkspace() {
     } finally { setBusy(""); }
   }
 
+  function addDirectFiles(fileList: FileList | File[]) {
+    const incoming = Array.from(fileList);
+    setError("");
+    const combined = [...directFiles];
+    let validationError = "";
+    for (const file of incoming) {
+      if (!/[.]\s*(jpe?g|png|webp)$/i.test(file.name) || !["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+        validationError = `${file.name}: chỉ nhận ảnh JPEG, PNG hoặc WebP.`;
+        continue;
+      }
+      if (!file.size || file.size > 8 * 1024 * 1024) {
+        validationError = `${file.name}: mỗi ảnh phải có dung lượng từ 1 byte đến 8 MB.`;
+        continue;
+      }
+      if (combined.some((item) => item.file.name === file.name && item.file.size === file.size && item.file.lastModified === file.lastModified)) continue;
+      if (combined.length >= 5) { validationError = "Mỗi lần tải trực tiếp tối đa 5 ảnh."; break; }
+      combined.push({ id: window.crypto.randomUUID(), file, preview: URL.createObjectURL(file) });
+    }
+    directUploadKey.current = null;
+    setDirectFiles(combined);
+    if (validationError) setError(validationError);
+  }
+
+  function removeDirectFile(id: string) {
+    const item = directFiles.find((entry) => entry.id === id);
+    if (item) URL.revokeObjectURL(item.preview);
+    setDirectFiles(directFiles.filter((entry) => entry.id !== id));
+    directUploadKey.current = null;
+  }
+
+  async function createDirectDraftBatch() {
+    if (!directFiles.length || busy) return;
+    if (providerStatus && !providerStatus.configured) {
+      setError("Chưa cấu hình GEME_OPENAI_API_KEY trong .env.docker; Product Agent chưa thể tạo nội dung.");
+      return;
+    }
+    setBusy("direct-upload"); setError(""); setNotice("");
+    const manifest = directFiles.map(({ file }) => `${file.name}:${file.size}:${file.lastModified}`).join("|");
+    if (!directUploadKey.current || directUploadKey.current.manifest !== manifest) directUploadKey.current = { manifest, key: window.crypto.randomUUID() };
+    const formData = new FormData();
+    for (const { file } of directFiles) formData.append("image_files", file, file.name);
+    try {
+      const batch = await request<DraftBatch>("product-agent/direct-upload", {
+        method: "POST",
+        headers: { "Idempotency-Key": directUploadKey.current.key },
+        body: formData,
+      });
+      for (const item of directFiles) URL.revokeObjectURL(item.preview);
+      directUploadKey.current = null;
+      setDirectFiles([]);
+      setNotice(`Đã tải và gửi ${batch.drafts.length} ảnh trực tiếp vào Product Agent. Ảnh không qua xử lý nền của Image Studio; bản nháp vẫn cần admin rà soát.`);
+      await refresh(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Không tải được ảnh trực tiếp vào Product Agent.");
+    } finally { setBusy(""); }
+  }
+
   function editValue(draft: ProductDraft, key: keyof DraftFields, value: string) {
     setEdits((current) => ({
       ...current,
@@ -284,7 +351,7 @@ export default function AiProductAgentWorkspace() {
         const path = action === "approve" ? "approve" : action === "reject" ? "reject" : action;
         const changed = await request<ProductDraft>(`product-agent/drafts/${draft.id}/${path}`, { method: "POST", body: "{}" });
         setDrafts((current) => current.map((item) => item.id === changed.id ? { ...item, ...changed } : item));
-        setNotice(action === "approve" ? "Đã duyệt bản nháp nội dung. Sản phẩm chưa được xuất bản." : action === "reject" ? "Đã từ chối bản nháp." : action === "cancel" ? "Đã hủy tác vụ." : "Đã đưa bản nháp thất bại vào hàng đợi thử lại.");
+        setNotice(action === "approve" ? "Đã duyệt bản nháp nội dung. Nhập SKU bên dưới để gắn ảnh và thông tin vào sản phẩm." : action === "reject" ? "Đã từ chối bản nháp." : action === "cancel" ? "Đã hủy tác vụ." : "Đã đưa bản nháp thất bại vào hàng đợi thử lại.");
       }
       await refresh(true);
     } catch (reason) {
@@ -292,16 +359,46 @@ export default function AiProductAgentWorkspace() {
     } finally { setBusy(""); }
   }
 
+  async function attachApprovedDraft(draft: ProductDraft) {
+    const sku = (attachSkus[draft.id] || "").trim();
+    if (!sku) {
+      setAttachErrors((current) => ({ ...current, [draft.id]: "Nhập SKU sản phẩm trước khi gắn." }));
+      return;
+    }
+    setBusy(draft.id);
+    setAttachErrors((current) => { const next = { ...current }; delete next[draft.id]; return next; });
+    setError(""); setNotice("");
+    try {
+      const attached = await request<ProductDraft>(`product-agent/drafts/${draft.id}/attach`, { method: "POST", body: JSON.stringify({ sku }) });
+      setDrafts((current) => current.map((item) => item.id === attached.id ? { ...item, ...attached } : item));
+      setNotice(`Đã gắn ảnh và nội dung vào SKU ${attached.sourceImageItem.attachedProduct?.sku || sku}. Giá, tồn kho và trạng thái bán được giữ nguyên; nếu sản phẩm đang hoạt động, thay đổi sẽ hiển thị trên web.`);
+    } catch (reason) {
+      setAttachErrors((current) => ({ ...current, [draft.id]: reason instanceof Error ? reason.message : "Không thể gắn vào sản phẩm." }));
+    } finally { setBusy(""); }
+  }
+
   return <section className="ai-product-agent">
     <header className="ai-product-hero">
-      <div><span className="ai-section-kicker">GEME INTELLIGENCE · PHASE 3</span><h3>Product Agent</h3><p>Chuyển ảnh sản phẩm đã duyệt thành bản nháp nội dung có cấu trúc để admin rà soát.</p></div>
+      <div><span className="ai-section-kicker">GEME INTELLIGENCE · PHASE 3</span><h3>Product Agent</h3><p>Tạo nội dung từ ảnh, duyệt rồi gắn ảnh và thông tin vào sản phẩm bằng SKU.</p></div>
       <div className="ai-product-hero-side"><span className={`ai-product-provider ${providerStatus?.configured ? "is-ready" : "is-offline"}`}><i/>{providerStatus?.configured ? "AI đã cấu hình" : providerStatus ? "Cần cấu hình AI key" : "Đang kiểm tra AI"}</span><div className="ai-product-hero-mark" aria-hidden="true"><span>G</span><i>✧</i></div></div>
     </header>
 
-    <div className="ai-product-safeguard"><span>◇</span><p><strong>Chỉ tạo bản nháp nội dung.</strong> Agent không tạo sản phẩm đang bán, không sửa giá hoặc tồn kho và không thể xuất bản. Ảnh không xác minh được chất liệu hay loại đá; các trường đó sẽ để trống cho đến khi admin bổ sung dữ liệu đáng tin cậy.</p></div>
+    <div className="ai-product-safeguard"><span>◇</span><p><strong>Chỉ áp dụng sau khi admin duyệt và nhập đúng SKU.</strong> Hệ thống thêm ảnh, cập nhật tên, mô tả và SEO cho sản phẩm tìm thấy; nếu SKU sai thì không ghi dữ liệu. Giá, tồn kho, danh mục, chất liệu, loại đá và trạng thái bán được giữ nguyên. Nếu sản phẩm đang hoạt động, nội dung và ảnh mới sẽ hiển thị trên web sau khi gắn.</p></div>
 
     {error && <div className="ai-studio-alert ai-studio-alert-error" role="alert"><span>!</span><p>{error}</p><button type="button" onClick={() => setError("")}>Đóng</button></div>}
     {notice && <div className="ai-studio-alert ai-studio-alert-success" role="status"><span>✓</span><p>{notice}</p><button type="button" onClick={() => setNotice("")}>Đóng</button></div>}
+
+    <section className="ai-product-direct-panel">
+      <div className="ai-product-section-head"><div><span className="ai-section-kicker">DIRECT PRODUCT INPUT</span><h4>Tải ảnh thẳng vào Product Agent</h4><p>Nếu đã chỉnh ảnh ở ngoài, tải bản hoàn chỉnh tại đây. Ảnh không qua AI Image; Product Agent chỉ phân tích ảnh và viết bản nháp nội dung.</p></div><span className="ai-product-direct-limit">Tối đa 5 ảnh · 8 MB/ảnh</span></div>
+      <label className={`ai-product-dropzone ${dropActive ? "is-active" : ""}`} onDragOver={(event) => { event.preventDefault(); setDropActive(true); }} onDragLeave={() => setDropActive(false)} onDrop={(event) => { event.preventDefault(); setDropActive(false); addDirectFiles(event.dataTransfer.files); }}>
+        <input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={Boolean(busy)} onChange={(event) => { if (event.currentTarget.files) addDirectFiles(event.currentTarget.files); event.currentTarget.value = ""; }} />
+        <span className="ai-product-drop-icon">＋</span><strong>Kéo ảnh vào đây hoặc chọn từ thiết bị</strong><small>JPEG, PNG, WebP · tối đa 5 ảnh/lần · không đưa ảnh qua Image Studio</small>
+      </label>
+      {directFiles.length > 0 && <>
+        <div className="ai-product-direct-files">{directFiles.map((item) => <div className="ai-product-direct-file" key={item.id}><img src={item.preview} alt={`Xem trước ${item.file.name}`} /><span><strong>{item.file.name}</strong><small>{(item.file.size / 1024 / 1024).toFixed(2)} MB · ảnh gốc, chưa chỉnh sửa</small></span><button type="button" onClick={() => removeDirectFile(item.id)} disabled={Boolean(busy)} aria-label={`Bỏ ${item.file.name}`}>×</button></div>)}</div>
+        <div className="ai-product-source-footer"><span>{directFiles.length}/5 ảnh · {(directFiles.reduce((sum, item) => sum + item.file.size, 0) / 1024 / 1024).toFixed(2)} MB</span><button type="button" className="ai-submit-button" disabled={Boolean(busy) || providerStatus?.configured === false} onClick={() => void createDirectDraftBatch()}><span>{busy === "direct-upload" ? "Đang tải ảnh và đưa vào hàng đợi…" : `Tạo ${directFiles.length} bản nháp trực tiếp`}</span><b>→</b></button></div>
+      </>}
+    </section>
 
     <section className="ai-product-source-panel">
       <div className="ai-product-section-head"><div><span className="ai-section-kicker">APPROVED VISUALS</span><h4>Chọn ảnh đã duyệt</h4><p>Chỉ hiện ảnh sản phẩm đã duyệt trong Phase 2; bản vẽ kỹ thuật và ảnh đang chờ duyệt bị loại.</p></div><button type="button" className="ai-image-refresh" onClick={() => void refresh()} disabled={loading} aria-label="Làm mới ảnh">↻</button></div>
@@ -391,6 +488,11 @@ export default function AiProductAgentWorkspace() {
                     {Object.hasOwn(edits, draft.id) && <button type="button" className="is-secondary" disabled={busy === draft.id} onClick={() => void runDraftAction(draft, "save")}>{busy === draft.id ? "Đang lưu…" : "Lưu chỉnh sửa"}</button>}
                     {canReview ? <><button type="button" className="is-reject" disabled={busy === draft.id} onClick={() => void runDraftAction(draft, "reject")}>Từ chối</button><button type="button" disabled={busy === draft.id} onClick={() => void runDraftAction(draft, "approve")}>Duyệt bản nháp</button></> : draft.status === "APPROVED" ? <span>Đã duyệt bởi {draft.reviewedBy?.displayName || "admin"} · {draft.reviewedAt ? new Intl.DateTimeFormat("vi-VN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(draft.reviewedAt)) : ""}</span> : null}
                   </div>
+                  {draft.status === "APPROVED" && (draft.sourceImageItem.attachedProduct ? <div className="ai-product-attach-result" role="status"><strong>Đã gắn vào {draft.sourceImageItem.attachedProduct.name}</strong><span>SKU: {draft.sourceImageItem.attachedProduct.sku}</span></div> : <div className="ai-product-attach-panel">
+                    <div><strong>Gắn vào sản phẩm theo SKU</strong><p>Sẽ thêm ảnh vào thư viện và cập nhật tên, mô tả, SEO từ bản nháp đã duyệt. Giá, tồn kho, danh mục, chất liệu, loại đá và trạng thái bán được giữ nguyên. Sản phẩm đang hoạt động sẽ nhận nội dung mới trên web ngay sau khi gắn.</p></div>
+                    <div className="ai-product-attach-controls"><label><span>SKU sản phẩm</span><input value={attachSkus[draft.id] || ""} maxLength={64} placeholder="Nhập đúng SKU sản phẩm" disabled={busy === draft.id} aria-invalid={Boolean(attachErrors[draft.id])} onChange={(event) => { setAttachSkus((current) => ({ ...current, [draft.id]: event.target.value })); setAttachErrors((current) => { const next = { ...current }; delete next[draft.id]; return next; }); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void attachApprovedDraft(draft); } }} /><small>SKU không tồn tại hoặc không khớp thì ảnh và nội dung sẽ không được gắn.</small></label><button type="button" disabled={busy === draft.id} onClick={() => void attachApprovedDraft(draft)}>{busy === draft.id ? "Đang gắn…" : "Gắn ảnh + thông tin"}</button></div>
+                    {attachErrors[draft.id] && <p className="ai-product-attach-error" role="alert">{attachErrors[draft.id]}</p>}
+                  </div>)}
                 </>}
                 {draft.status === "REJECTED" && <p className="ai-product-rejected">Bản nháp đã bị từ chối. Có thể chỉnh sửa hoặc tạo lại từ ảnh sau khi xử lý bản hiện tại.</p>}
                 {draft.status === "CANCELLED" && <p className="ai-product-rejected">Tác vụ đã hủy.</p>}

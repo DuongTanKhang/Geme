@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Headers, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors } from "@nestjs/common";
-import { FileInterceptor } from "@nestjs/platform-express";
+import { Body, Controller, Get, Headers, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res, UploadedFile, UploadedFiles, UseGuards, UseInterceptors } from "@nestjs/common";
+import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
 import { AdminAuthGuard } from "../admin-auth/admin-auth.guard.js";
 import { RequireAdminPermissions } from "../admin-auth/admin-permissions.js";
 import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
@@ -10,6 +10,7 @@ import { AiStudioService } from "./ai-studio.service.js";
 
 type AdminRequest = { adminIdentity: AdminIdentity };
 type ImageUpload = { buffer: Buffer; originalname: string; mimetype: string; size: number };
+type ProductAgentUpload = ImageUpload;
 type ImageResponse = { setHeader(name: string, value: string): unknown; status(code: number): ImageResponse; end(body?: Buffer): unknown };
 
 @Controller("admin/ai-studio")
@@ -84,6 +85,12 @@ export class AiStudioController {
   @Get("product-agent/status") productAgentStatus() {
     return this.productAgent.status();
   }
+  @Post("product-agent/direct-upload")
+  @RequireAdminPermissions("ai-studio.manage")
+  @UseInterceptors(FilesInterceptor("image_files", 5, { limits: { fileSize: 8 * 1024 * 1024, files: 5, fields: 0, parts: 5 } }))
+  uploadProductAgentImages(@Req() request: AdminRequest, @UploadedFiles() files: ProductAgentUpload[] | undefined, @Headers("idempotency-key") key?: string) {
+    return this.productAgent.uploadDirectImages(request.adminIdentity, files, key);
+  }
   @Get("product-agent/batches") productDraftBatches(@Query("limit") limit?: string) {
     return this.productAgent.listBatches(limit);
   }
@@ -107,6 +114,9 @@ export class AiStudioController {
   }
   @Post("product-agent/drafts/:draftId/approve") @RequireAdminPermissions("ai-studio.manage") approveProductDraft(@Req() request: AdminRequest, @Param("draftId", new ParseUUIDPipe()) id: string, @Body() body: Record<string, unknown>) {
     return this.productAgent.decideDraft(request.adminIdentity, id, "APPROVED", body?.note);
+  }
+  @Post("product-agent/drafts/:draftId/attach") @RequireAdminPermissions("ai-studio.manage") attachProductDraft(@Req() request: AdminRequest, @Param("draftId", new ParseUUIDPipe()) id: string, @Body() body: unknown) {
+    return this.productAgent.attachApprovedDraftToProduct(request.adminIdentity, id, body);
   }
   @Post("product-agent/drafts/:draftId/reject") @RequireAdminPermissions("ai-studio.manage") rejectProductDraft(@Req() request: AdminRequest, @Param("draftId", new ParseUUIDPipe()) id: string, @Body() body: Record<string, unknown>) {
     return this.productAgent.decideDraft(request.adminIdentity, id, "REJECTED", body?.note);

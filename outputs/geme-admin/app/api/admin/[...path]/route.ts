@@ -80,7 +80,7 @@ async function proxy(request: NextRequest, context: RouteContext) {
     const init = await prepareAdminProxyRequest(request, token);
     const upstream = await fetch(targetUrl, {
       ...init,
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(path.join("/") === "ai-studio/product-agent/direct-upload" ? 120_000 : 30_000),
     });
     const responseHeaders = new Headers({ "Cache-Control": "no-store" });
     for (const name of ["content-type", "content-disposition", "retry-after", "etag", "last-modified"]) {

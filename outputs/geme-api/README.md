@@ -62,6 +62,14 @@ Migration `20261017000000_media_object_storage` giữ nguyên dữ liệu cũ v�
 
 Admin dùng `NEXT_PUBLIC_API_BASE_URL=http://localhost:4000/api/v1` để đọc và ghi các danh sách nghiệp vụ. Riêng chất liệu/loại đá hỗ trợ tạo, sửa, ẩn và xóa qua `/api/v1/materials`; danh sách cũng được phát qua `/api/v1/materials/events` để cập nhật giao diện đang mở. Secret và thông tin Kiot Việt chỉ được lưu ở backend.
 
+## Product Agent tải ảnh trực tiếp
+
+Trong Admin → AI Studio → Product Agent, quản trị viên có thể tải trực tiếp tối đa 5 ảnh JPEG/PNG/WebP mỗi lần (8 MB/ảnh, 40 MB/lô). API kiểm tra chữ ký tệp, lưu ảnh riêng tư và đưa tác vụ viết bản nháp vào hàng đợi hiện có; ảnh này không chạy qua Image Studio, không gọi Photoroom và không bị chỉnh sửa nền. Kết quả cần admin rà soát. Sau khi duyệt và gắn SKU hợp lệ, hệ thống có thể cập nhật nội dung sản phẩm và thư viện ảnh; không đổi giá/tồn kho/trạng thái bán.
+
+API dùng `POST /api/v1/admin/ai-studio/product-agent/direct-upload` với multipart field `image_files` và header `Idempotency-Key`; endpoint yêu cầu quyền `ai-studio.manage`. Migration `20261102000000_ai_product_agent_direct_upload` thêm cờ phân biệt nguồn trực tiếp để lô này không xuất hiện như lô đã xử lý trong Image Studio. Chạy `pnpm db:deploy` khi triển khai migration.
+
+Sau khi admin duyệt nội dung Product Draft, dùng `POST /api/v1/admin/ai-studio/product-agent/drafts/:draftId/attach` với JSON `{ "sku": "..." }` để thêm ảnh vào thư viện và cập nhật tên, mô tả ngắn/dài cùng SEO cho sản phẩm có SKU đó. SKU được xác thực trước khi ghi; SKU không tồn tại sẽ trả lỗi và không thay đổi sản phẩm. Luồng này giữ nguyên giá, tồn kho, trạng thái bán, danh mục, chất liệu và loại đá; không tự tạo hoặc xuất bản sản phẩm.
+
 ## Mạng xã hội
 
 Thiết lập Meta OAuth, quyền App Review, CDN ảnh và luồng duyệt/xuất bản nằm trong [SOCIAL_SETUP.md](./SOCIAL_SETUP.md).

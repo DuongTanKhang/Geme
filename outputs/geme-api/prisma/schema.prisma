@@ -1238,6 +1238,7 @@ model AiImageBatch {
   name               String              @db.VarChar(120)
   preset             AiImagePreset
   purpose            AiImagePurpose      @default(PRODUCT_PHOTO)
+  isProductAgentDirectUpload Boolean      @default(false) @map("is_product_agent_direct_upload")
   visualPrompt       String              @default("") @map("visual_prompt") @db.VarChar(1200)
   targetProductId    String?             @map("target_product_id") @db.Uuid
   status             AiImageBatchStatus  @default(UPLOADING)
