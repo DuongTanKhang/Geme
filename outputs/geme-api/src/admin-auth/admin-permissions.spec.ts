@@ -26,15 +26,43 @@ function mockPrisma(users: Array<Record<string, any>>, initial: Record<string, A
   return { prisma, writes: () => writes, grants };
 }
 
-test("admin defaults keep access and audit restricted; content editors cannot change price or publish", () => {
+test("admins have all permissions while content editors cannot change price or publish", () => {
   assert.ok(ADMIN_PERMISSION_DEFAULTS.ADMIN.includes("catalog.write"));
-  assert.ok(!ADMIN_PERMISSION_DEFAULTS.ADMIN.includes("access.manage"));
-  assert.ok(!ADMIN_PERMISSION_DEFAULTS.ADMIN.includes("audit.read"));
+  assert.ok(ADMIN_PERMISSION_DEFAULTS.ADMIN.includes("access.manage"));
+  assert.ok(ADMIN_PERMISSION_DEFAULTS.ADMIN.includes("audit.read"));
+  assert.deepEqual(ADMIN_PERMISSION_DEFAULTS.ADMIN, ADMIN_PERMISSION_CATALOG);
   assert.ok(ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("catalog.content.write"));
   assert.ok(!ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("catalog.write"));
   assert.ok(!ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("catalog.price.write"));
   assert.ok(!ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("catalog.publish"));
+  assert.ok(ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("social.draft"));
+  assert.ok(!ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("social.approve"));
+  assert.ok(!ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("social.publish"));
+  assert.ok(!ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("social.connect"));
+  assert.ok(ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("ai-studio.draft"));
+  assert.ok(!ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("ai-studio.approve"));
   assert.deepEqual(ADMIN_PERMISSION_DEFAULTS.SUPER_ADMIN, ADMIN_PERMISSION_CATALOG);
+});
+
+test("legacy manage grants imply granular actions but an explicit deny wins", async () => {
+  const store = mockPrisma([
+    { id: "legacy", email: "legacy@geme.test", displayName: "Legacy", role: "CONTENT_EDITOR" },
+    { id: "restricted", email: "restricted@geme.test", displayName: "Restricted", role: "CONTENT_EDITOR" },
+  ], {
+    legacy: [{ permission: "social.manage", effect: "ALLOW" }, { permission: "ai-studio.manage", effect: "ALLOW" }],
+    restricted: [{ permission: "social.manage", effect: "ALLOW" }, { permission: "social.publish", effect: "DENY" }],
+  });
+  const service = new AdminPermissionService(store.prisma as any);
+  const legacy = new Set(await service.getEffectivePermissions(identity("legacy", "CONTENT_EDITOR")));
+  assert.ok(legacy.has("social.draft"));
+  assert.ok(legacy.has("social.approve"));
+  assert.ok(legacy.has("social.publish"));
+  assert.ok(legacy.has("social.connect"));
+  assert.ok(legacy.has("ai-studio.draft"));
+  assert.ok(legacy.has("ai-studio.approve"));
+  const restricted = new Set(await service.getEffectivePermissions(identity("restricted", "CONTENT_EDITOR")));
+  assert.ok(restricted.has("social.approve"));
+  assert.ok(!restricted.has("social.publish"));
 });
 
 test("effective permission changes are visible immediately after a grant update", async () => {

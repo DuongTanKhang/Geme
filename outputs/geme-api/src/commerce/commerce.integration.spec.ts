@@ -228,7 +228,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     assert.deepEqual(calls, ["id"]);
   });
 
-  await t.test("full bangle edit without variant photos preserves SKU, stock, order links, shape and product gallery", async () => {
+  await t.test("full bangle edit shares media by shape and quality while preserving omitted fields and inventory links", async () => {
     let category = await prisma!.category.findUnique({ where: { slug: "vong-kieng" } });
     if (!category) {
       category = await prisma!.category.create({ data: {
@@ -241,39 +241,65 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     const sku = `CI-BANGLE-${id.replaceAll("-", "").slice(0, 12)}`;
     const variantSku = `${sku}R02S54`;
     const product = await prisma!.product.create({ data: {
-      id, sku, name: "Kiềng Aquamarine trước sửa", slug: `ci-bangle-${id}`,
+      id, sku, name: "Kiềng Aquamarine trước sửa", slug: `ci-bangle-${id}`, fullDescription: "<p>Thông tin đầy đủ đã có</p>", seoTitle: "Tiêu đề cũ",
       kind: "JEWELRY", status: "HIDDEN", categoryId: category.id, price: 2_000_000, stock: 2,
       images: { create: [{ url: "https://cdn.example.test/bangle-original.webp", alt: "Kiềng", isPrimary: true }] },
-      variants: { create: [{
-        optionKey: "BANGLE::ROUND::2A::54", quality: "2A", shape: "ROUND", beadSize: "54", sku: variantSku,
-        price: 2_000_000, stock: 2, imageUrls: [],
-      }] },
+      variants: { create: [
+        { optionKey: "BANGLE::ROUND::2A::54", quality: "2A", shape: "ROUND", beadSize: "54", sku: variantSku, price: 2_000_000, stock: 2, imageUrls: ["https://cdn.example.test/bangle-2a.webp"] },
+        { optionKey: "BANGLE::ROUND::2A::56", quality: "2A", shape: "ROUND", beadSize: "56", sku: `${sku}R02S56`, price: 2_000_000, stock: 3, imageUrls: [] },
+        { optionKey: "BANGLE::ROUND::3A::54", quality: "3A", shape: "ROUND", beadSize: "54", sku: `${sku}R03S54`, price: 2_200_000, stock: 1, imageUrls: ["https://cdn.example.test/bangle-3a.webp"] },
+      ] },
     } });
     productIds.push(product.id);
     const variant = await prisma!.productPriceVariant.findUniqueOrThrow({ where: { sku: variantSku } });
+    const sameQualitySize = await prisma!.productPriceVariant.findUniqueOrThrow({ where: { sku: `${sku}R02S56` } });
     const order = await createOrder({ total: 2_000_000, items: [{ productId: product.id, productSku: variantSku, variantId: variant.id, quantity: 1, unitPrice: 2_000_000, lineTotal: 2_000_000 }] });
     const commerce = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any);
 
     const saved = await commerce.saveProduct({
       sku, name: "Kiềng Aquamarine đã sửa", kind: "JEWELRY", categoryId: category.id, status: "HIDDEN",
-      price: 2_100_000, description: "Mô tả đã cập nhật", gallery: ["https://cdn.example.test/bangle-updated.webp"],
-      priceVariants: [{ id: variant.id, sku: variantSku, shape: "ROUND", quality: "2A", beadSize: "54", price: 2_100_000, stock: 2, imageUrls: [], videoUrl: null }],
+      price: 2_100_000, description: "Mô tả đã cập nhật",
+      priceVariants: [
+        { id: variant.id, sku: variantSku, shape: "ROUND", quality: "2A", beadSize: "54", price: 2_100_000, stock: 2, imageUrls: ["https://cdn.example.test/bangle-2a.webp"], videoUrl: null },
+        { id: sameQualitySize.id, sku: `${sku}R02S56`, shape: "ROUND", quality: "2A", beadSize: "56", price: 2_100_000, stock: 3, imageUrls: [], videoUrl: null },
+      ],
     }, product.id);
     const updatedVariant = await prisma!.productPriceVariant.findUniqueOrThrow({ where: { id: variant.id } });
+    const updatedSameQualitySize = await prisma!.productPriceVariant.findUniqueOrThrow({ where: { id: sameQualitySize.id } });
+    const differentQuality = await prisma!.productPriceVariant.findUniqueOrThrow({ where: { sku: `${sku}R03S54` } });
     const orderItem = await prisma!.orderItem.findFirstOrThrow({ where: { orderId: order.id } });
 
     assert.equal(saved.name, "Kiềng Aquamarine đã sửa");
     assert.equal(saved.description, "Mô tả đã cập nhật");
     assert.equal(Number(saved.price), 2_100_000);
-    assert.equal(saved.images[0].url, "https://cdn.example.test/bangle-updated.webp");
+    assert.equal(saved.images[0].url, "https://cdn.example.test/bangle-original.webp");
+    assert.equal(saved.fullDescription, "<p>Thông tin đầy đủ đã có</p>");
+    assert.equal(saved.seoTitle, "Tiêu đề cũ");
     assert.equal(updatedVariant.id, variant.id);
     assert.equal(updatedVariant.sku, variantSku);
     assert.equal(updatedVariant.shape, "ROUND");
     assert.equal(updatedVariant.beadSize, "54");
     assert.equal(updatedVariant.stock, 2);
-    assert.deepEqual(updatedVariant.imageUrls, []);
+    assert.deepEqual(updatedVariant.imageUrls, ["https://cdn.example.test/bangle-2a.webp"]);
+    assert.deepEqual(updatedSameQualitySize.imageUrls, ["https://cdn.example.test/bangle-2a.webp"]);
+    assert.deepEqual(differentQuality.imageUrls, ["https://cdn.example.test/bangle-3a.webp"]);
+    assert.equal(updatedSameQualitySize.id, sameQualitySize.id);
+    assert.equal(updatedSameQualitySize.sku, `${sku}R02S56`);
+    assert.equal(updatedSameQualitySize.stock, 3);
     assert.equal(orderItem.productId, product.id);
     assert.equal(orderItem.variantId, variant.id);
+
+    await commerce.updateProductFields(product.id, { description: "PATCH chỉ sửa mô tả" }, actor());
+    const afterOmittedMedia = await prisma!.product.findUniqueOrThrow({ where: { id: product.id }, include: { images: true, variants: true } });
+    assert.equal(afterOmittedMedia.description, "PATCH chỉ sửa mô tả");
+    assert.equal(afterOmittedMedia.images[0]?.url, "https://cdn.example.test/bangle-original.webp");
+    assert.deepEqual(afterOmittedMedia.variants.find((row) => row.id === variant.id)?.imageUrls, ["https://cdn.example.test/bangle-2a.webp"]);
+
+    await commerce.updateProductFields(product.id, { priceVariants: [{ id: variant.id, imageUrls: [] }] }, actor());
+    const afterExplicitClear = await prisma!.product.findUniqueOrThrow({ where: { id: product.id }, include: { images: true, variants: true } });
+    assert.equal(afterExplicitClear.images[0]?.url, "https://cdn.example.test/bangle-original.webp");
+    assert.deepEqual(afterExplicitClear.variants.filter((row) => row.quality === "2A").map((row) => row.imageUrls), [[], []]);
+    assert.deepEqual(afterExplicitClear.variants.find((row) => row.sku === `${sku}R03S54`)?.imageUrls, ["https://cdn.example.test/bangle-3a.webp"]);
   });
 
   await t.test("report separates pending orders, collections, refunds, returned goods and unverified COD", async () => {

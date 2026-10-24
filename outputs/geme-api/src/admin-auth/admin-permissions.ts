@@ -15,17 +15,18 @@ export const ADMIN_PERMISSION_CATALOG = [
   "audit.read", "access.manage",
   "settings.manage", "integrations.manage",
   "integrations.read", "shipping.read", "shipping.manage",
-  "social.read", "social.manage", "ai-studio.read", "ai-studio.manage",
+  "social.read", "social.draft", "social.approve", "social.publish", "social.connect", "social.manage",
+  "ai-studio.read", "ai-studio.draft", "ai-studio.approve", "ai-studio.manage",
   "contacts.read", "contacts.manage",
 ] as const;
 export type AdminPermission = typeof ADMIN_PERMISSION_CATALOG[number];
 export const RequireAdminPermissions = (...permissions: AdminPermission[]) => SetMetadata(ADMIN_PERMISSION_KEY, permissions);
 
-const allForAdmin = ADMIN_PERMISSION_CATALOG.filter((permission) => permission !== "access.manage" && permission !== "audit.read");
+const allForAdmin = ADMIN_PERMISSION_CATALOG;
 export const ADMIN_PERMISSION_DEFAULTS: Record<string, readonly string[]> = {
   SUPER_ADMIN: ADMIN_PERMISSION_CATALOG,
   ADMIN: allForAdmin,
-  CONTENT_EDITOR: ["dashboard.read", "catalog.read", "catalog.content.write", "content.read", "content.write", "social.read", "ai-studio.read"],
+  CONTENT_EDITOR: ["dashboard.read", "catalog.read", "catalog.content.write", "content.read", "content.write", "social.read", "social.draft", "ai-studio.read", "ai-studio.draft"],
 };
 
 @Injectable()
@@ -38,11 +39,17 @@ export class AdminPermissionService {
 
   private effectiveSet(role: string, grants: Array<{ permission: string; effect: string }>) {
     const effective = new Set(ADMIN_PERMISSION_DEFAULTS[role] || []);
+    const denied = new Set<string>();
     for (const grant of grants) {
       if (!ADMIN_PERMISSION_CATALOG.includes(grant.permission as AdminPermission)) continue;
       if (grant.effect === "ALLOW") effective.add(grant.permission);
-      else if (grant.effect === "DENY") effective.delete(grant.permission);
+      else if (grant.effect === "DENY") {
+        effective.delete(grant.permission);
+        denied.add(grant.permission);
+      }
     }
+    if (effective.has("social.manage")) for (const permission of ["social.draft", "social.approve", "social.publish", "social.connect"]) if (!denied.has(permission)) effective.add(permission);
+    if (effective.has("ai-studio.manage")) for (const permission of ["ai-studio.draft", "ai-studio.approve"]) if (!denied.has(permission)) effective.add(permission);
     return effective;
   }
 

@@ -7,6 +7,7 @@ type Row = Record<string, any>;
 type Props = { request: (path: string, method?: string, body?: unknown) => Promise<any> };
 const labels: Record<string, string> = {
   "dashboard.read": "Xem tổng quan", "catalog.read": "Xem sản phẩm, danh mục và loại đá", "catalog.write": "Sửa danh mục sản phẩm",
+  "catalog.content.write": "Sửa tên, mô tả và nội dung sản phẩm", "catalog.price.write": "Sửa giá sản phẩm", "catalog.publish": "Ẩn hoặc đăng sản phẩm", "catalog.delete": "Xóa sản phẩm",
   "content.read": "Xem nội dung, bài viết và khuyến mãi", "content.write": "Sửa nội dung, bài viết và khuyến mãi",
   "orders.read": "Xem đơn hàng", "orders.write": "Cập nhật đơn hàng", "customers.read": "Xem khách hàng", "customers.write": "Sửa khách hàng",
   "inventory.read": "Xem tồn kho và lịch sử", "inventory.write": "Nhập, xuất và điều chỉnh kho", "returns.read": "Xem phiếu trả hàng",
@@ -14,7 +15,9 @@ const labels: Record<string, string> = {
   "audit.read": "Xem nhật ký quản trị", "access.manage": "Quản lý quyền tài khoản", "settings.manage": "Sửa cài đặt cửa hàng",
   "integrations.read": "Xem kết nối POS và marketplace", "integrations.manage": "Quản lý kết nối và đồng bộ POS/marketplace",
   "shipping.read": "Xem vận đơn", "shipping.manage": "Tạo vận đơn và nhãn giao hàng", "social.read": "Xem nội dung mạng xã hội",
-  "social.manage": "Soạn, duyệt và đăng nội dung mạng xã hội", "ai-studio.read": "Xem AI Studio", "ai-studio.manage": "Tạo và duyệt tác vụ AI",
+  "social.draft": "Soạn nội dung mạng xã hội", "social.approve": "Duyệt nội dung mạng xã hội", "social.publish": "Đăng và quản lý lịch đăng", "social.connect": "Kết nối hoặc ngắt kết nối Meta",
+  "social.manage": "Quyền cũ: soạn, duyệt, đăng và kết nối mạng xã hội", "ai-studio.read": "Xem AI Studio", "ai-studio.draft": "Tạo và sửa bản nháp AI",
+  "ai-studio.approve": "Duyệt nội dung và ảnh AI", "ai-studio.manage": "Quyền cũ: tạo và duyệt tác vụ AI",
 };
 
 export default function AccessWorkspace({ request }: Props) {

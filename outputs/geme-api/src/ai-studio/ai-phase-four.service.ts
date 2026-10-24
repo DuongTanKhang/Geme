@@ -4,7 +4,7 @@ import { Prisma, type AiMarketingDraftStatus, type AiSalesKnowledgeStatus } from
 import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { AiStudioQueue } from "./ai-studio.queue.js";
-import { normalizeMarketingEdits, normalizeMarketingSubmission, normalizeSalesSubmission, validateKnowledgeDocument } from "./ai-phase-four.contract.js";
+import { expectedMarketingRevision, normalizeMarketingEdits, normalizeMarketingSubmission, normalizeSalesSubmission, validateKnowledgeDocument } from "./ai-phase-four.contract.js";
 
 const activeKnowledgeStatuses: AiSalesKnowledgeStatus[] = ["ACTIVE"];
 type PhaseFourTaskType = "SALES_ANSWER" | "MARKETING_DRAFT_GENERATION";
@@ -265,29 +265,58 @@ export class AiPhaseFourService {
   }
 
   async updateMarketingDraft(actor: AdminIdentity, id: string, body: unknown) {
+    const expectedRevision = expectedMarketingRevision(body);
     const data = normalizeMarketingEdits(body);
-    const current = await this.prisma.aiMarketingDraft.findUnique({ where: { id }, select: { id: true, status: true, title: true, caption: true, body: true, callToAction: true, seoTitle: true, seoDescription: true, altText: true, hashtags: true } });
-    if (!current) throw new NotFoundException("Không tìm thấy bản nháp Marketing.");
-    if (!["DRAFT", "REJECTED", "APPROVED"].includes(current.status)) throw new ConflictException("Chỉ có thể chỉnh sửa nội dung đã được tạo xong.");
-    const updated = await this.prisma.aiMarketingDraft.update({
-      where: { id },
-      data: { ...data, status: "DRAFT", reviewedByAdminId: null, reviewedAt: null, decisionNote: null } as Prisma.AiMarketingDraftUpdateInput,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.aiMarketingDraft.findUnique({ where: { id } });
+      if (!current) throw new NotFoundException("Không tìm thấy bản nháp Marketing.");
+      if (current.revision !== expectedRevision) throw new ConflictException("Bản nháp đã được người khác cập nhật. Hãy tải lại trước khi tiếp tục.");
+      if (!["DRAFT", "REJECTED", "APPROVED"].includes(current.status)) throw new ConflictException("Chỉ có thể chỉnh sửa nội dung đã được tạo xong.");
+      const claimed = await tx.aiMarketingDraft.updateMany({
+        where: { id, revision: expectedRevision, status: { in: ["DRAFT", "REJECTED", "APPROVED"] } },
+        data: { ...data, status: "DRAFT", revision: { increment: 1 }, reviewedByAdminId: null, reviewedAt: null, decisionNote: null } as Prisma.AiMarketingDraftUpdateManyMutationInput,
+      });
+      if (claimed.count !== 1) throw new ConflictException("Bản nháp đã được người khác cập nhật. Hãy tải lại trước khi tiếp tục.");
+      const saved = await tx.aiMarketingDraft.findUniqueOrThrow({ where: { id } });
+      await tx.auditLog.create({ data: {
+        adminId: actor.id,
+        action: "AI_MARKETING_DRAFT_EDITED",
+        entityType: "AI_PHASE4",
+        entityId: id,
+        before: { ...pickMarketingFields(current), status: current.status, revision: current.revision } as unknown as Prisma.InputJsonValue,
+        after: { ...pickMarketingFields(saved), status: saved.status, revision: saved.revision } as unknown as Prisma.InputJsonValue,
+      } });
+      return saved;
     });
-    await this.audit(actor, "AI_MARKETING_DRAFT_EDITED", id, pickMarketingFields(current), pickMarketingFields(updated));
     return updated;
   }
 
-  async decideMarketingDraft(actor: AdminIdentity, id: string, decision: "APPROVED" | "REJECTED", noteInput: unknown) {
-    const note = typeof noteInput === "string" ? noteInput.trim().slice(0, 1000) || null : null;
-    const current = await this.prisma.aiMarketingDraft.findUnique({ where: { id } });
-    if (!current) throw new NotFoundException("Không tìm thấy bản nháp Marketing.");
-    if (current.status === decision) return current;
-    if (current.status !== "DRAFT") throw new ConflictException("Chỉ có thể duyệt hoặc từ chối nội dung ở trạng thái nháp.");
-    const updatedCount = await this.prisma.aiMarketingDraft.updateMany({ where: { id, status: "DRAFT" }, data: { status: decision, reviewedByAdminId: actor.id, reviewedAt: new Date(), decisionNote: note } });
-    if (updatedCount.count !== 1) throw new ConflictException("Bản nháp vừa được người khác cập nhật.");
-    const updated = await this.marketingDraft(id);
-    await this.audit(actor, `AI_MARKETING_DRAFT_${decision}`, id, { status: current.status }, { status: decision, note });
-    this.log(`ai.marketing.draft_${decision.toLowerCase()}`, actor.id, id, { channel: updated.channel });
+  async decideMarketingDraft(actor: AdminIdentity, id: string, decision: "APPROVED" | "REJECTED", body: unknown) {
+    const expectedRevision = expectedMarketingRevision(body);
+    const value = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {};
+    const note = typeof value.note === "string" ? value.note.trim().slice(0, 1000) || null : null;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.aiMarketingDraft.findUnique({ where: { id } });
+      if (!current) throw new NotFoundException("Không tìm thấy bản nháp Marketing.");
+      if (current.revision !== expectedRevision) throw new ConflictException("Bản nháp đã được người khác cập nhật. Hãy tải lại trước khi quyết định.");
+      if (current.status !== "DRAFT") throw new ConflictException("Chỉ có thể duyệt hoặc từ chối nội dung ở trạng thái nháp.");
+      const claimed = await tx.aiMarketingDraft.updateMany({
+        where: { id, revision: expectedRevision, status: "DRAFT" },
+        data: { status: decision, revision: { increment: 1 }, reviewedByAdminId: actor.id, reviewedAt: new Date(), decisionNote: note },
+      });
+      if (claimed.count !== 1) throw new ConflictException("Bản nháp đã được người khác cập nhật. Hãy tải lại trước khi quyết định.");
+      const saved = await tx.aiMarketingDraft.findUniqueOrThrow({ where: { id } });
+      await tx.auditLog.create({ data: {
+        adminId: actor.id,
+        action: `AI_MARKETING_DRAFT_${decision}`,
+        entityType: "AI_PHASE4",
+        entityId: id,
+        before: { status: current.status, revision: current.revision },
+        after: { status: saved.status, revision: saved.revision, note },
+      } });
+      return saved;
+    });
+    this.log(`ai.marketing.draft_${decision.toLowerCase()}`, actor.id, id, { channel: updated.channel, revision: updated.revision });
     return updated;
   }
 

@@ -10,7 +10,7 @@ type SalesKnowledge = { id: string; documentKey: string; version: number; title:
 type SalesCitation = { id: string; version: number; title: string; topic: string; source: string };
 type SalesTask = { id: string; status: Status; result?: Record<string, unknown> | null; errorMessage?: string | null; input?: { catalog?: SalesProduct[]; knowledge?: SalesKnowledge[] } };
 type RecommendedProduct = { id: string; name: string; sku: string; slug: string; category: string | null; gemstone: string | null; material: string | null; price: number | null; availableQuantity: number; publicPath: string };
-type MarketingDraft = { id: string; status: string; channel: string; objective: string; title: string; caption: string; body: string; callToAction: string; seoTitle: string; seoDescription: string; altText: string; hashtags: string[]; sourceProductIds: string[]; sourceFacts: Record<string, unknown>[]; factWarnings: string[]; createdAt: string; decisionNote?: string | null; errorCode?: string | null; task: { id: string; status: string; errorMessage?: string | null }; reviewedBy?: { displayName: string } | null };
+type MarketingDraft = { id: string; revision: number; status: string; channel: string; objective: string; title: string; caption: string; body: string; callToAction: string; seoTitle: string; seoDescription: string; altText: string; hashtags: string[]; sourceProductIds: string[]; sourceFacts: Record<string, unknown>[]; factWarnings: string[]; createdAt: string; decisionNote?: string | null; errorCode?: string | null; task: { id: string; status: string; errorMessage?: string | null }; reviewedBy?: { displayName: string } | null };
 type Analytics = { periodDays: number; sales: { totalQuestions: number; handoffCount: number; unresolvedCount: number; productClicks: number }; marketing: { draftCount: number; approvedCount: number } };
 
 const channelLabels: Record<string, string> = { THREADS: "Threads", FACEBOOK: "Facebook", INSTAGRAM: "Instagram", BLOG: "Blog GEME", EMAIL: "Email draft", BANNER: "Banner" };
@@ -23,6 +23,10 @@ function marketingFailureMessage(draft: MarketingDraft) {
   return draft.task?.errorMessage || draft.errorCode || "Không tạo được nội dung.";
 }
 
+class ApiRequestError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${apiBaseUrl}/admin/ai-studio/phase4/${path.replace(/^\//, "")}`, {
     ...init,
@@ -31,7 +35,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers: { "Content-Type": "application/json", ...init.headers },
   });
   const body = await response.json().catch(() => ({})) as { message?: string | string[] };
-  if (!response.ok) throw new Error(Array.isArray(body.message) ? body.message.join(" ") : body.message || `API trả về lỗi ${response.status}.`);
+  if (!response.ok) throw new ApiRequestError(Array.isArray(body.message) ? body.message.join(" ") : body.message || `API trả về lỗi ${response.status}.`, response.status);
   return body as T;
 }
 
@@ -240,20 +244,30 @@ function MarketingReview({ alerts }: { alerts: Alerts }) {
   const [edited, setEdited] = useState<Partial<MarketingDraft>>({});
   const [busy, setBusy] = useState(false);
   const selected = useMemo(() => drafts.find((item) => item.id === selectedId) || null, [drafts, selectedId]);
+  const hasUnsavedEdits = Boolean(selected && JSON.stringify(edited) !== JSON.stringify({ title: selected.title, caption: selected.caption, body: selected.body, callToAction: selected.callToAction, seoTitle: selected.seoTitle, seoDescription: selected.seoDescription, altText: selected.altText, hashtags: selected.hashtags }));
   const reload = useCallback(async () => setDrafts(await request<MarketingDraft[]>("marketing/drafts?limit=60")), []);
   useEffect(() => { void reload().catch((error) => alerts.setError(error instanceof Error ? error.message : "Không tải được bản nháp.")); }, [alerts.setError, reload]);
   useEffect(() => { if (selected) setEdited({ title: selected.title, caption: selected.caption, body: selected.body, callToAction: selected.callToAction, seoTitle: selected.seoTitle, seoDescription: selected.seoDescription, altText: selected.altText, hashtags: selected.hashtags }); }, [selected]);
 
   async function save() {
     if (!selected) return; setBusy(true); alerts.clear();
-    try { const updated = await request<MarketingDraft>(`marketing/drafts/${encodeURIComponent(selected.id)}`, { method: "PATCH", body: JSON.stringify(edited) }); setDrafts((rows) => rows.map((row) => row.id === updated.id ? updated : row)); alerts.setNotice("Đã lưu nội dung chỉnh sửa; trạng thái quay về nháp chờ rà soát."); }
-    catch (error) { alerts.setError(error instanceof Error ? error.message : "Không lưu được nội dung."); } finally { setBusy(false); }
+    try { const updated = await request<MarketingDraft>(`marketing/drafts/${encodeURIComponent(selected.id)}`, { method: "PATCH", body: JSON.stringify({ ...edited, expectedRevision: selected.revision }) }); setDrafts((rows) => rows.map((row) => row.id === updated.id ? updated : row)); alerts.setNotice("Đã lưu nội dung chỉnh sửa; trạng thái quay về nháp chờ rà soát."); }
+    catch (error) { if (error instanceof ApiRequestError && error.status === 409) { await refreshConflictedDraft(selected.id); alerts.setError("Bản nháp vừa được người khác cập nhật. Đã tải lại phiên bản mới nhất; hãy kiểm tra trước khi sửa tiếp."); } else alerts.setError(error instanceof Error ? error.message : "Không lưu được nội dung."); } finally { setBusy(false); }
   }
 
   async function decide(decision: "approve" | "reject") {
     if (!selected) return; setBusy(true); alerts.clear();
-    try { const updated = await request<MarketingDraft>(`marketing/drafts/${encodeURIComponent(selected.id)}/${decision}`, { method: "POST", body: JSON.stringify({}) }); setDrafts((rows) => rows.map((row) => row.id === updated.id ? updated : row)); alerts.setNotice(decision === "approve" ? "Đã duyệt nội dung. Nội dung vẫn chưa được đăng hoặc gửi." : "Đã từ chối bản nháp."); }
-    catch (error) { alerts.setError(error instanceof Error ? error.message : "Không lưu được quyết định."); } finally { setBusy(false); }
+    try { const updated = await request<MarketingDraft>(`marketing/drafts/${encodeURIComponent(selected.id)}/${decision}`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); setDrafts((rows) => rows.map((row) => row.id === updated.id ? updated : row)); alerts.setNotice(decision === "approve" ? "Đã duyệt nội dung. Nội dung vẫn chưa được đăng hoặc gửi." : "Đã từ chối bản nháp."); }
+    catch (error) { if (error instanceof ApiRequestError && error.status === 409) { await refreshConflictedDraft(selected.id); alerts.setError("Bản nháp vừa được người khác cập nhật. Đã tải lại phiên bản mới nhất; hãy kiểm tra trước khi quyết định."); } else alerts.setError(error instanceof Error ? error.message : "Không lưu được quyết định."); } finally { setBusy(false); }
+  }
+
+  async function refreshConflictedDraft(id: string) {
+    try {
+      const latest = await request<MarketingDraft>(`marketing/drafts/${encodeURIComponent(id)}`);
+      setDrafts((rows) => rows.map((row) => row.id === latest.id ? latest : row));
+    } catch {
+      await reload();
+    }
   }
 
   async function retry() {
@@ -274,6 +288,6 @@ function MarketingReview({ alerts }: { alerts: Alerts }) {
       {selected.factWarnings?.length > 0 && <div className="ai-phase4-safety"><b>!</b><span>Đối chiếu dữ kiện trước khi dùng: {selected.factWarnings.join(" · ")}</span></div>}
       <div className="ai-phase4-fields"><label className="ai-form-field"><span>Tiêu đề</span><input maxLength={180} value={edited.title || ""} onChange={(e) => setEdited({ ...edited, title: e.target.value })} /></label><label className="ai-form-field"><span>Lời mời hành động</span><input maxLength={240} value={edited.callToAction || ""} onChange={(e) => setEdited({ ...edited, callToAction: e.target.value })} /></label><label className="ai-form-field wide"><span>Caption</span><textarea rows={4} maxLength={1200} value={edited.caption || ""} onChange={(e) => setEdited({ ...edited, caption: e.target.value })} /></label><label className="ai-form-field wide"><span>Nội dung dài / mô tả blog</span><textarea rows={8} maxLength={12000} value={edited.body || ""} onChange={(e) => setEdited({ ...edited, body: e.target.value })} /></label><label className="ai-form-field"><span>SEO title</span><input maxLength={180} value={edited.seoTitle || ""} onChange={(e) => setEdited({ ...edited, seoTitle: e.target.value })} /></label><label className="ai-form-field"><span>SEO meta description</span><textarea rows={2} maxLength={320} value={edited.seoDescription || ""} onChange={(e) => setEdited({ ...edited, seoDescription: e.target.value })} /></label><label className="ai-form-field wide"><span>Alt text</span><input maxLength={500} value={edited.altText || ""} onChange={(e) => setEdited({ ...edited, altText: e.target.value })} /></label><label className="ai-form-field wide"><span>Hashtag <small>Phân tách bằng dấu phẩy</small></span><input value={(edited.hashtags || []).join(", ")} onChange={(e) => setEdited({ ...edited, hashtags: e.target.value.split(",").map((tag) => tag.trim().replace(/^#+/, "")).filter(Boolean).slice(0, 12) })} /></label></div>
       <div className="ai-phase4-source-box"><strong>Sản phẩm/dữ kiện nguồn</strong><p>{(selected.sourceFacts || []).map((fact) => typeof fact.name === "string" ? fact.name : "Sản phẩm GEME").join(" · ")}</p><small>Không thay đổi giá, tồn kho hoặc trạng thái sản phẩm.</small></div>
-      <div className="ai-phase4-review-actions"><button type="button" onClick={downloadDraft} disabled={selected.status !== "APPROVED"}>Tải Markdown đã duyệt</button><button type="button" onClick={() => void save()} disabled={busy}>Lưu thay đổi</button><button type="button" className="is-reject" onClick={() => void decide("reject")} disabled={busy || selected.status !== "DRAFT"}>Từ chối</button><button type="button" className="is-primary" onClick={() => void decide("approve")} disabled={busy || selected.status !== "DRAFT"}>Duyệt nội dung</button></div><p className="ai-phase4-no-publish">Duyệt chỉ ghi nhận quyết định nội bộ. Markdown chỉ tải được sau khi duyệt; không có tự đăng hoặc gửi email.</p>
+      <div className="ai-phase4-review-actions"><button type="button" onClick={downloadDraft} disabled={selected.status !== "APPROVED"}>Tải Markdown đã duyệt</button><button type="button" onClick={() => void save()} disabled={busy}>Lưu thay đổi</button><button type="button" className="is-reject" onClick={() => void decide("reject")} disabled={busy || selected.status !== "DRAFT" || hasUnsavedEdits}>Từ chối</button><button type="button" className="is-primary" onClick={() => void decide("approve")} disabled={busy || selected.status !== "DRAFT" || hasUnsavedEdits}>Duyệt nội dung</button></div>{hasUnsavedEdits && selected.status === "DRAFT" && <p className="ai-phase4-no-publish">Hãy lưu nội dung trước khi duyệt hoặc từ chối để quyết định gắn với đúng phiên bản.</p>}<p className="ai-phase4-no-publish">Đang xem phiên bản {selected.revision}. Duyệt chỉ ghi nhận quyết định nội bộ; nội dung không tự đăng hoặc gửi email.</p>
       </>}</section> : <section className="ai-phase4-panel ai-phase4-empty">Chọn một bản nháp ở danh sách để rà soát.</section>}</div>;
 }

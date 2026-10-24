@@ -22,7 +22,7 @@ export class AdminAuthGuard implements CanActivate {
         if (error instanceof ForbiddenException) await this.permissions.recordAuthorizationDenied(identity, route, required);
         throw error;
       }
-    } else if (identity.role === "CONTENT_EDITOR") {
+    } else {
       await this.permissions.recordAuthorizationDenied(identity, route, []);
       throw new ForbiddenException("Tài khoản chưa được cấp quyền cho trang quản trị này.");
     }

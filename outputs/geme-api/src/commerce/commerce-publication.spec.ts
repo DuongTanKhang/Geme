@@ -93,7 +93,7 @@ test("publishing still supports gemstone products and rejects invalid state valu
   const gemstone = publicationFixture({ id: "gem-1", sku: "GEM01", kind: "GEMSTONE", category: { slug: "aquamarine" }, status: "HIDDEN", price: 500_000, stock: 1, variants: [] });
   assert.equal((await gemstone.service.updateProductPublication("gem-1", "ACTIVE", { id: "admin-1" }, "Đá quý hợp lệ")).status, "ACTIVE");
   await assert.rejects(() => gemstone.service.updateProductPublication("gem-1", "DRAFT", { id: "admin-1" }, "Trạng thái sai"), BadRequestException);
-  await assert.rejects(() => gemstone.service.updateProductPublication("gem-1", "HIDDEN", { id: "admin-1" }, "no"), BadRequestException);
+  assert.equal((await gemstone.service.updateProductPublication("gem-1", "HIDDEN", { id: "admin-1" })).status, "HIDDEN");
 });
 
 function productEditFixture(status: "ACTIVE" | "HIDDEN") {
@@ -118,7 +118,7 @@ function productEditFixture(status: "ACTIVE" | "HIDDEN") {
   const tx = { product: txProduct, productPriceVariant: { findMany: async () => [] } };
   const prisma = {
     product: {
-      findUnique: async () => ({ sku: product.sku, slug: product.slug, status: product.status }),
+      findUnique: async () => ({ ...product, images: [], variants: product.variants || [] }),
       findUniqueOrThrow: async () => product,
     },
     category: { findUnique: async () => ({ slug: "nhan" }) },
@@ -137,7 +137,7 @@ test("editing product content without a status field preserves its current publi
 
     assert.equal(saved.status, initialStatus);
     assert.equal(fixture.product.status, initialStatus);
-    assert.equal(fixture.updatePayloads[0].status, initialStatus);
+    assert.equal(Object.hasOwn(fixture.updatePayloads[0], "status"), false);
     assert.equal(saved.name, "Nhẫn sau khi sửa");
   }
 });

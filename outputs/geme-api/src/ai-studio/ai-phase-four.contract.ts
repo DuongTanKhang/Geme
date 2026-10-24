@@ -88,6 +88,17 @@ export function normalizeMarketingEdits(body: unknown) {
   return result;
 }
 
+export function expectedMarketingRevision(body: unknown) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new BadRequestException("Thiếu revision của bản nháp đang được chỉnh sửa.");
+  }
+  const revision = (body as Record<string, unknown>).expectedRevision;
+  if (!Number.isSafeInteger(revision) || Number(revision) < 1) {
+    throw new BadRequestException("expectedRevision phải là số nguyên dương của bản nháp đang được chỉnh sửa.");
+  }
+  return Number(revision);
+}
+
 function parseOptionalDate(value: unknown, label: string) {
   if (value === undefined || value === null || value === "") return null;
   if (typeof value !== "string") throw new BadRequestException(`${label} không hợp lệ.`);

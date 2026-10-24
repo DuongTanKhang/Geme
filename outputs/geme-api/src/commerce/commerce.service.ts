@@ -10,6 +10,7 @@ import { sanitizeBlogHtml } from "./blog-html.js";
 import { calculateCheckoutPrice, getCheckoutPromotionValue, loadActiveStorePromotions, type CheckoutPromotion } from "./checkout-pricing.js";
 import { canTransitionOrder } from "./order-state.js";
 import { getInventoryReservationExpiry } from "./reservation-expiry.js";
+import { synchronizeBangleVariantMedia } from "./bangle-variant-media.js";
 
 type Input = Record<string, any>;
 const inventoryReceiptDuplicateWindowMs = 5 * 60 * 1000;
@@ -834,7 +835,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const changedProductIds = new Set<string>();
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
-        const current = await tx.product.findUnique({ where: { id }, include: { images: { orderBy: { sortOrder: "asc" } }, variants: { orderBy: { sortOrder: "asc" } } } });
+        const current = await tx.product.findUnique({ where: { id }, include: { category: { select: { slug: true } }, images: { orderBy: { sortOrder: "asc" } }, variants: { orderBy: { sortOrder: "asc" } } } });
         if (!current) throw new NotFoundException("Không tìm thấy sản phẩm trong kho.");
         const before = {
           name: current.name, description: current.description, fullDescription: current.fullDescription,
@@ -870,6 +871,21 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             }
             if (Object.keys(variantData).length) variantUpdates.push({ id: variant.id, data: variantData });
           }
+        }
+        if (current.category?.slug === "vong-kieng" && variantUpdates.some((row) => Object.hasOwn(row.data, "imageUrls") || Object.hasOwn(row.data, "videoUrl"))) {
+          const updatesById = new Map(variantUpdates.map((row) => [row.id, row.data]));
+          const synchronized = synchronizeBangleVariantMedia(current.sku, current.variants.map((variant) => ({
+            ...variant,
+            ...(updatesById.get(variant.id) || {}),
+          })), { changedVariantKeys: new Set(variantUpdates.filter((row) => Object.hasOwn(row.data, "imageUrls") || Object.hasOwn(row.data, "videoUrl")).map((row) => row.id)) });
+          const synchronizedUpdates = new Map(variantUpdates.map((row) => [row.id, { ...row.data }]));
+          for (const variant of synchronized) {
+            const data = synchronizedUpdates.get(variant.id) || {};
+            data.imageUrls = variant.imageUrls;
+            data.videoUrl = variant.videoUrl;
+            synchronizedUpdates.set(variant.id, data);
+          }
+          variantUpdates.splice(0, variantUpdates.length, ...[...synchronizedUpdates].map(([variantId, data]) => ({ id: variantId, data })));
         }
         const priceChanged = Object.hasOwn(data, "price") || Object.hasOwn(data, "originalPrice") || variantUpdates.some((row) => Object.hasOwn(row.data, "price") || Object.hasOwn(row.data, "originalPrice"));
         if (priceChanged) Object.assign(data, {
@@ -917,7 +933,6 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const status = enumValue(statusInput, ["ACTIVE", "HIDDEN"], "");
     const reason = typeof reasonInput === "string" ? reasonInput.trim().slice(0, 1000) : "";
     if (!status) throw new BadRequestException("Chỉ có thể đăng bán hoặc ẩn sản phẩm.");
-    if (reason.length < 5) throw new BadRequestException("Nhập lý do xuất bản/ẩn sản phẩm tối thiểu 5 ký tự.");
     try {
       const product = await this.prisma.$transaction(async (tx) => {
         const current = await tx.product.findUnique({ where: { id }, include: { category: { select: { slug: true } }, variants: { select: { sku: true, shape: true, quality: true, beadSize: true, stock: true, price: true } } } });
@@ -937,7 +952,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           }
         }
         const saved = await tx.product.update({ where: { id }, data: { status: status as any } });
-        await tx.auditLog.create({ data: { adminId: actor.id, correlationId: actor.correlationId, action: status === "ACTIVE" ? "PRODUCT_PUBLISHED" : "PRODUCT_UNPUBLISHED", entityType: "PRODUCT", entityId: id, before: { status: current.status }, after: { status, reason } } });
+        await tx.auditLog.create({ data: { adminId: actor.id, correlationId: actor.correlationId, action: status === "ACTIVE" ? "PRODUCT_PUBLISHED" : "PRODUCT_UNPUBLISHED", entityType: "PRODUCT", entityId: id, before: { status: current.status }, after: { status, ...(reason ? { reason } : {}) } } });
         return saved;
       });
       this.publishCatalogChange("product", "updated", id);
@@ -971,10 +986,66 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   async saveProduct(input: Input, id?: string) {
-    const data = this.productData(input);
+    const existingProduct = id ? await this.prisma.product.findUnique({ where: { id }, include: includeProduct }) : null;
+    if (id && !existingProduct) throw new NotFoundException("Không tìm thấy sản phẩm trong kho.");
+    const existingInput: Input = existingProduct ? {
+      sku: existingProduct.sku, name: existingProduct.name, slug: existingProduct.slug, kind: existingProduct.kind,
+      categoryId: existingProduct.categoryId, gemstoneTypeId: existingProduct.gemstoneTypeId, materialOptionId: existingProduct.materialOptionId,
+      description: existingProduct.description, fullDescription: existingProduct.fullDescription,
+      coverVideoUrl: existingProduct.coverVideoUrl, technicalImageUrl: existingProduct.technicalImageUrl, technicalVideoUrl: existingProduct.technicalVideoUrl,
+      weightGrams: existingProduct.weightGrams, lengthCm: existingProduct.lengthCm, widthCm: existingProduct.widthCm, heightCm: existingProduct.heightCm,
+      status: existingProduct.status, isNew: existingProduct.isNew, isFeatured: existingProduct.isFeatured,
+      isPremiumGemstone: existingProduct.isPremiumGemstone, price: existingProduct.price, originalPrice: existingProduct.originalPrice,
+      seoTitle: existingProduct.seoTitle, seoDescription: existingProduct.seoDescription, kiotVietProductId: existingProduct.kiotVietProductId,
+      gallery: existingProduct.images.map((image) => image.url),
+      priceVariants: existingProduct.variants.map((variant) => ({
+        id: variant.id, sku: variant.sku, quality: variant.quality, shape: variant.shape, beadSize: variant.beadSize,
+        carat: variant.carat?.toString() || null, gemstoneQuality: variant.gemstoneQuality,
+        price: Number(variant.price || 0), originalPrice: Number(variant.originalPrice || 0), stock: variant.stock,
+        imageUrls: variant.imageUrls, videoUrl: variant.videoUrl,
+      })),
+    } : {};
+    const effectiveInput: Input = { ...existingInput, ...input };
+    if (existingProduct && Array.isArray(input.priceVariants)) {
+      const submitted = input.priceVariants.filter((variant: unknown): variant is Input => Boolean(variant) && typeof variant === "object" && !Array.isArray(variant));
+      const submittedByExistingId = new Map<string, Input>();
+      const unmatched: Input[] = [];
+      for (const variant of submitted) {
+        const existing = existingProduct.variants.find((row) => (variant.id && row.id === String(variant.id)) || (variant.sku && row.sku === String(variant.sku)));
+        if (existing) {
+          if (submittedByExistingId.has(existing.id)) throw new BadRequestException(`Biến thể SKU ${existing.sku} bị lặp trong dữ liệu cập nhật.`);
+          submittedByExistingId.set(existing.id, variant);
+        } else unmatched.push(variant);
+      }
+      effectiveInput.priceVariants = existingProduct.variants.map((variant, index) => ({
+        ...(existingInput.priceVariants as Input[])[index],
+        ...(submittedByExistingId.get(variant.id) || {}),
+      })).concat(unmatched);
+    }
+    const data = this.productData(effectiveInput);
+    const productDataToPersist: Input = { ...data };
+    const productFieldInputs: Array<[string, string]> = [
+      ["sku", "sku"], ["name", "name"], ["slug", "slug"], ["kind", "kind"], ["categoryId", "categoryId"],
+      ["gemstoneTypeId", "gemstoneTypeId"], ["materialOptionId", "materialOptionId"], ["description", "description"],
+      ["fullDescription", "fullDescription"], ["coverVideoUrl", "coverVideoUrl"], ["technicalImageUrl", "technicalImageUrl"],
+      ["technicalVideoUrl", "technicalVideoUrl"], ["weightGrams", "weightGrams"], ["lengthCm", "lengthCm"],
+      ["widthCm", "widthCm"], ["heightCm", "heightCm"], ["status", "status"], ["isNew", "isNew"],
+      ["isFeatured", "isFeatured"], ["isPremiumGemstone", "isPremiumGemstone"], ["price", "price"],
+      ["originalPrice", "originalPrice"], ["seoTitle", "seoTitle"], ["seoDescription", "seoDescription"],
+      ["kiotVietProductId", "kiotVietProductId"],
+    ];
+    if (existingProduct) for (const [inputKey, dataKey] of productFieldInputs) if (!Object.hasOwn(input, inputKey)) delete productDataToPersist[dataKey];
+    const submittedVariantFields = new Map<string, Set<string>>();
+    if (existingProduct && Array.isArray(input.priceVariants)) {
+      for (const raw of input.priceVariants) {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+        const row = raw as Input;
+        const existing = existingProduct.variants.find((variant) => (row.id && variant.id === String(row.id)) || (row.sku && variant.sku === String(row.sku)));
+        if (existing) submittedVariantFields.set(existing.id, new Set(Object.keys(row)));
+      }
+    }
     if (id) {
-      const current = await this.prisma.product.findUnique({ where: { id }, select: { sku: true, slug: true, status: true, isPremiumGemstone: true } });
-      if (!current) throw new NotFoundException("Không tìm thấy sản phẩm trong kho.");
+      const current = existingProduct!;
       if (data.sku !== current.sku) throw new BadRequestException("Không được thay đổi SKU trong Hồ sơ sản phẩm.");
       if (!Object.hasOwn(input, "isPremiumGemstone")) data.isPremiumGemstone = current.isPremiumGemstone;
       if (data.isPremiumGemstone && data.kind !== "GEMSTONE") throw new BadRequestException("Nhãn Hàng cao cấp chỉ áp dụng cho sản phẩm đá quý.");
@@ -1007,12 +1078,35 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     }
     const productCategory = await this.prisma.category.findUnique({ where: { id: data.categoryId }, select: { slug: true } });
     const isBangleProduct = data.kind === "JEWELRY" && productCategory?.slug === "vong-kieng";
-    const imageInputs = (Array.isArray(input.gallery) ? input.gallery : input.image ? [input.image] : []).filter((url: unknown) => typeof url === "string" && url.length > 0).slice(0, 10) as string[];
+    const imageInputs = (Array.isArray(effectiveInput.gallery) ? effectiveInput.gallery : effectiveInput.image ? [effectiveInput.image] : []).filter((url: unknown) => typeof url === "string" && url.length > 0).slice(0, 10) as string[];
     const images = await Promise.all(imageInputs.map((url, index) => url.startsWith("data:image/") ? this.persistDataImageReference(url, `product-${data.sku}-${index + 1}.webp`, data.name) : url));
     if (data.technicalImageUrl?.startsWith("data:image/")) {
       data.technicalImageUrl = await this.persistDataImageReference(data.technicalImageUrl, `product-${data.sku}-technical.webp`, data.name);
     }
-    const variants = Array.isArray(input.priceVariants) ? input.priceVariants : [];
+    const submittedVariants = Array.isArray(effectiveInput.priceVariants) ? effectiveInput.priceVariants as Input[] : [];
+    const changedBangleMediaKeys = new Set<string>();
+    const submittedBangleMediaKeys = new Set<string>();
+    if (isBangleProduct && existingProduct) {
+      if (Array.isArray(input.priceVariants)) for (const raw of input.priceVariants) {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+        const row = raw as Input;
+        const existing = existingProduct.variants.find((variant) => (row.id && variant.id === String(row.id)) || (row.sku && variant.sku === String(row.sku)));
+        if (existing && (Object.hasOwn(row, "imageUrls") || Object.hasOwn(row, "videoUrl"))) submittedBangleMediaKeys.add(existing.id);
+      }
+      for (const variant of submittedVariants) {
+        const existing = existingProduct.variants.find((row) => (variant.id && row.id === String(variant.id)) || (variant.sku && row.sku === String(variant.sku)));
+        if (!existing) continue;
+        const submittedImages = Array.isArray(variant.imageUrls) ? variant.imageUrls.map((url: unknown) => String(url || "").trim()).filter(Boolean) : [];
+        const existingImages = Array.isArray(existing.imageUrls) ? existing.imageUrls.map((url) => String(url || "").trim()).filter(Boolean) : [];
+        const submittedVideo = typeof variant.videoUrl === "string" ? variant.videoUrl.trim() : "";
+        const existingVideo = typeof existing.videoUrl === "string" ? existing.videoUrl.trim() : "";
+        if (JSON.stringify(submittedImages) !== JSON.stringify(existingImages) || submittedVideo !== existingVideo) changedBangleMediaKeys.add(existing.id);
+      }
+    }
+    const variants = isBangleProduct && (!existingProduct || submittedBangleMediaKeys.size > 0)
+      ? synchronizeBangleVariantMedia(data.sku, submittedVariants, { changedVariantKeys: changedBangleMediaKeys, synchronizeAll: !existingProduct })
+      : submittedVariants;
+    const persistedVariantImageReferences = new Map<string, Promise<string>>();
     const variantCreate = await Promise.all(variants.map(async (variant: Input, index: number) => {
       const quality = String(variant.quality || "Standard").trim().slice(0, 40);
       const shape = String(variant.shape || "").trim().toLocaleUpperCase("en") || null;
@@ -1023,9 +1117,15 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       const imageUrls = (Array.isArray(variant.imageUrls) ? variant.imageUrls : [])
         .filter((url: unknown) => typeof url === "string" && url.trim())
         .slice(0, 8);
-      const savedImageUrls = await Promise.all(imageUrls.map((url: string, imageIndex: number) =>
-        url.startsWith("data:image/") ? this.persistDataImageReference(url, `variant-${data.sku}-${index + 1}-${imageIndex + 1}.webp`, data.name) : url,
-      ));
+      const savedImageUrls = await Promise.all(imageUrls.map((url: string, imageIndex: number) => {
+        if (!url.startsWith("data:image/")) return url;
+        let pending = persistedVariantImageReferences.get(url);
+        if (!pending) {
+          pending = this.persistDataImageReference(url, `variant-${data.sku}-${index + 1}-${imageIndex + 1}.webp`, data.name);
+          persistedVariantImageReferences.set(url, pending);
+        }
+        return pending;
+      }));
       const sku = String(variant.sku || "").trim();
       const videoUrl = String(variant.videoUrl || "").trim().slice(0, 2000) || null;
       if (!quality) throw new BadRequestException("Mỗi biến thể cần có thông tin chất lượng hoặc phân loại.");
@@ -1079,7 +1179,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       let catalogChanged = !id;
       const result = await this.prisma.$transaction(async (tx) => {
         let record: any;
-        if (data.status === "ACTIVE") {
+        const isPublishingNow = data.status === "ACTIVE" && (!existingProduct || existingProduct.status !== "ACTIVE");
+        if (isPublishingNow) {
           if (!id) throw new BadRequestException("Để đăng bán, hãy chọn một SKU đã có trong kho.");
           const current = await tx.product.findUnique({ where: { id }, select: { status: true, stock: true, variants: { select: { stock: true } } } });
           if (!current) throw new NotFoundException("Không tìm thấy sản phẩm trong kho.");
@@ -1091,7 +1192,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           }
         }
         if (id) {
-          const currentPriceData = await tx.product.findUnique({ where: { id }, select: { sku: true, name: true, kind: true, categoryId: true, isPremiumGemstone: true, price: true, originalPrice: true, category: { select: { pricingMode: true } }, variants: { select: { id: true, optionKey: true, sku: true, price: true, originalPrice: true, carat: true, gemstoneQuality: true } } } });
+          const currentPriceData = await tx.product.findUnique({ where: { id }, select: { sku: true, name: true, kind: true, categoryId: true, isPremiumGemstone: true, price: true, originalPrice: true, category: { select: { pricingMode: true } }, variants: { select: { id: true, optionKey: true, sku: true, quality: true, shape: true, beadSize: true, price: true, originalPrice: true, carat: true, gemstoneQuality: true, imageUrls: true, videoUrl: true } } } });
           if (!currentPriceData) throw new NotFoundException("Không tìm thấy sản phẩm trong kho.");
           if (data.sku !== currentPriceData.sku) throw new BadRequestException("Không được thay đổi SKU trong Hồ sơ sản phẩm.");
           const currentVariantsByKey = new Map(currentPriceData.variants.map((variant) => [variant.optionKey, variant]));
@@ -1121,7 +1222,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             pos365PriceSyncedAt: null,
             pos365PriceSyncError: null,
           } : {};
-          await tx.product.update({ where: { id }, data: { ...data, ...posPriceSyncFields, images: { deleteMany: {}, create: images.map((url: string, index: number) => ({ url, alt: data.name, sortOrder: index, isPrimary: index === 0 })) } } });
+          const productUpdateData: Input = { ...productDataToPersist, ...posPriceSyncFields };
+          if (Object.hasOwn(input, "gallery") || Object.hasOwn(input, "image")) {
+            productUpdateData.images = { deleteMany: {}, create: images.map((url: string, index: number) => ({ url, alt: data.name, sortOrder: index, isPrimary: index === 0 })) };
+          }
+          await tx.product.update({ where: { id }, data: productUpdateData });
           const existingVariants = await tx.productPriceVariant.findMany({ where: { productId: id }, select: { id: true, optionKey: true } });
           const existingByKey = new Map(existingVariants.map((variant) => [variant.optionKey, variant]));
           for (const variant of variantCreate) {
@@ -1132,7 +1237,15 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
                 const productCollision = await tx.product.findUnique({ where: { sku: variant.sku }, select: { id: true } });
                 if ((collision && collision.id !== existing.id) || productCollision) throw new ConflictException(`SKU biến thể ${variant.sku} đã được sử dụng.`);
               }
-              await tx.productPriceVariant.update({ where: { id: existing.id }, data: { sku: variant.sku, quality: variant.quality, shape: variant.shape, beadSize: variant.beadSize, carat: variant.carat, gemstoneQuality: variant.gemstoneQuality, imageUrls: variant.imageUrls, videoUrl: variant.videoUrl, price: variant.price, originalPrice: variant.originalPrice, sortOrder: variant.sortOrder } });
+              const currentVariant = currentPriceData.variants.find((row) => row.id === existing.id);
+              const changedInputFields = submittedVariantFields.get(existing.id) || new Set<string>();
+              const variantUpdateData: Input = {};
+              for (const field of ["sku", "quality", "shape", "beadSize", "carat", "gemstoneQuality", "price", "originalPrice", "imageUrls", "videoUrl"] as const) {
+                if (changedInputFields.has(field)) variantUpdateData[field] = variant[field];
+              }
+              if (currentVariant && JSON.stringify(currentVariant.imageUrls) !== JSON.stringify(variant.imageUrls)) variantUpdateData.imageUrls = variant.imageUrls;
+              if (currentVariant && String(currentVariant.videoUrl || "") !== String(variant.videoUrl || "")) variantUpdateData.videoUrl = variant.videoUrl;
+              if (Object.keys(variantUpdateData).length) await tx.productPriceVariant.update({ where: { id: existing.id }, data: variantUpdateData });
             }
           }
           record = await tx.product.findUniqueOrThrow({ where: { id }, include: includeProduct });

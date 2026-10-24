@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { BadRequestException } from "@nestjs/common";
-import { normalizeMarketingEdits, normalizeMarketingSubmission, normalizeSalesSubmission, validateKnowledgeDocument } from "./ai-phase-four.contract.js";
+import { expectedMarketingRevision, normalizeMarketingEdits, normalizeMarketingSubmission, normalizeSalesSubmission, validateKnowledgeDocument } from "./ai-phase-four.contract.js";
 
 test("Sales Agent replaces order and contact details before any AI payload is created", () => {
   const result = normalizeSalesSubmission({ question: "Tra cứu đơn hàng của tôi, số điện thoại 0912345678" });
@@ -37,4 +37,11 @@ test("Marketing edits reject executable markup and bound metadata", () => {
   assert.throws(() => normalizeMarketingEdits({ body: "<script>alert(1)</script>" }), BadRequestException);
   assert.throws(() => normalizeMarketingEdits({ seoDescription: "x".repeat(321) }), BadRequestException);
   assert.deepEqual(normalizeMarketingEdits({ hashtags: ["#GEME", "#GEME", "Opal"] }).hashtags, ["GEME", "Opal"]);
+});
+
+test("Marketing review requires a positive expected revision", () => {
+  assert.equal(expectedMarketingRevision({ expectedRevision: 4, title: "Draft" }), 4);
+  for (const value of [undefined, null, {}, { expectedRevision: 0 }, { expectedRevision: -1 }, { expectedRevision: 1.5 }, { expectedRevision: "2" }]) {
+    assert.throws(() => expectedMarketingRevision(value), BadRequestException);
+  }
 });

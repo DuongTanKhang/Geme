@@ -1,0 +1,120 @@
+name: GEME CI
+
+on:
+  push:
+    branches: [main, codex/**]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: API build and contract tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: outputs/geme-api
+    env:
+      DATABASE_URL: postgresql://geme:geme@localhost:5432/geme_ci
+      ADMIN_AUTH_JWT_SECRET: ci-only-not-a-production-secret-value-123456
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: outputs/geme-api/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm build
+      - run: pnpm test
+
+  postgres-integration:
+    name: PostgreSQL migrations and integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: geme
+          POSTGRES_PASSWORD: geme
+          POSTGRES_DB: geme_integration_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U geme -d geme_integration_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: outputs/geme-api
+    env:
+      DATABASE_URL: postgresql://geme:geme@localhost:5432/geme_integration_ci
+      RUN_POSTGRES_INTEGRATION_TESTS: "1"
+      ADMIN_AUTH_JWT_SECRET: ci-only-not-a-production-secret-value-123456
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: outputs/geme-api/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm exec prisma migrate deploy
+      - run: pnpm test:integration
+
+  admin:
+    name: Admin build and mapper/proxy tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: outputs/geme-admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: outputs/geme-admin/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm test:social-proxy
+      - run: pnpm test:product-mapper
+
+  storefront:
+    name: Storefront build and contract tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: outputs/geme
+    env:
+      GEME_SITE_URL: https://geme.vn
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: outputs/geme/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm test:seo
+      - run: pnpm test:commerce

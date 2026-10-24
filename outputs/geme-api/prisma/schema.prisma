@@ -1411,6 +1411,7 @@ model AiSalesKnowledgeSource {
 
 model AiMarketingDraft {
   id                String                 @id @default(uuid()) @db.Uuid
+  revision          Int                    @default(1)
   taskId            String                 @unique @map("task_id") @db.Uuid
   createdByAdminId  String                 @map("created_by_admin_id") @db.Uuid
   reviewedByAdminId String?                @map("reviewed_by_admin_id") @db.Uuid
