@@ -11,6 +11,7 @@ export type AdminIdentity = {
   email: string;
   displayName: string;
   role: string;
+  correlationId?: string;
 };
 
 type AdminTokenPayload = AdminIdentity & { sub: string; iat: number; exp: number; iss: "geme-admin" };

@@ -30,7 +30,7 @@ function RelatedProductCard({ product }: { product: StoreProduct }) {
       {product.isNew && <span className="detail-related-new">Mới</span>}
     </a>
     <a className="detail-related-name" href={`/san-pham/${encodeURIComponent(product.slug)}`}>{product.name}</a>
-    <strong>{product.price ? formatStorePrice(product.price) : "Liên hệ"}</strong>
+    <strong>{product.kind === "GEMSTONE" && product.isPremiumGemstone ? "Liên hệ" : product.price ? formatStorePrice(product.price) : "Liên hệ"}</strong>
     {product.materialOption?.name && <small>{product.materialOption.name}</small>}
   </article>;
 }
@@ -237,9 +237,10 @@ export function StoreProductDetail({
             {originalPrice > price && <del>{formatStorePrice(originalPrice)}</del>}
           </div>
           {promotionPeriod && <small className="detail-promo-period">{promotionPeriod}</small>}
-          {(material || product.isNew) && <div className="detail-meta-chip-list">
+          {(material || product.isNew || product.isPremiumGemstone) && <div className="detail-meta-chip-list">
             {material && <span className="detail-material-chip">{product.kind === "GEMSTONE" ? "Loại đá" : "Chất liệu / đá"}: <strong>{material}</strong></span>}
             {product.isNew && <span className="detail-new-chip">Sản phẩm mới</span>}
+            {product.isPremiumGemstone && <span className="detail-premium-chip">Hàng cao cấp</span>}
           </div>}
           <p className="detail-summary">{product.description || product.fullDescription || "Sản phẩm được tuyển chọn và giới thiệu bởi GEME."}</p>
 
@@ -273,8 +274,10 @@ export function StoreProductDetail({
             </button>)}</div>
           </fieldset>}
 
-          <div className="detail-stock-status" role="status">{stock > 0 ? "Còn " + stock + " sản phẩm" : "Tạm hết hàng"}<small>SKU: {selectedVariant?.sku || product.sku}</small></div>
-          <div className="detail-buy-row">
+          <div className="detail-stock-status" role="status">{product.isPremiumGemstone ? "Liên hệ để được tư vấn và kiểm tra tình trạng hàng" : stock > 0 ? "Còn " + stock + " sản phẩm" : "Tạm hết hàng"}<small>SKU: {selectedVariant?.sku || product.sku}</small></div>
+          {product.isPremiumGemstone
+            ? <div className="detail-contact-only"><a href="/lien-he">LIÊN HỆ GEME ĐỂ ĐƯỢC TƯ VẤN</a></div>
+            : <div className="detail-buy-row">
             <div className="detail-quantity" aria-label="Số lượng">
               <button type="button" onClick={() => setQuantity((value) => Math.max(1, value - 1))} aria-label="Giảm số lượng">−</button>
               <span>{quantity}</span>
@@ -282,7 +285,7 @@ export function StoreProductDetail({
             </div>
             <button className="detail-buy-now" type="button" onClick={buyNow} disabled={stock === 0}>MUA NGAY</button>
             <button className="detail-add-cart" type="button" onClick={addToCart} disabled={stock === 0}>{stock > 0 ? "BỎ VÀO GIỎ HÀNG" : "TẠM HẾT HÀNG"}</button>
-          </div>
+          </div>}
           {cartNotice && <p className="detail-cart-notice" role="status">{cartNotice}</p>}
           <button className={`detail-wishlist${isSaved ? " is-saved" : ""}`} type="button" aria-label={isSaved ? "Bỏ khỏi danh sách yêu thích" : "Thêm vào danh sách yêu thích"} aria-pressed={isSaved} onClick={() => void handleFavorite()}><HeartIcon />{isSaved ? "Đã lưu yêu thích" : "Thêm vào danh sách yêu thích"}</button>
           {wishlistNotice && <p className="detail-cart-notice" role="status">{wishlistNotice}</p>}

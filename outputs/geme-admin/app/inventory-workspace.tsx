@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { apiBaseUrl } from "../lib/api";
 import type { AdminCategory } from "./categories-workspace";
 import type { MaterialOption } from "./materials-workspace";
@@ -43,6 +43,53 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(message);
  }
   return response.json() as Promise<T>;
+}
+
+function parseCsvDocument(source: string) {
+  const text = source.replace(/^\uFEFF/, "");
+  const firstLine = text.split(/\r?\n/, 1)[0] || "";
+  let quoted = false;
+  let commaCount = 0;
+  let semicolonCount = 0;
+  for (let index = 0; index < firstLine.length; index += 1) {
+    const character = firstLine[index];
+    if (character === '"') {
+      if (quoted && firstLine[index + 1] === '"') index += 1;
+      else quoted = !quoted;
+    } else if (!quoted && character === ",") commaCount += 1;
+    else if (!quoted && character === ";") semicolonCount += 1;
+  }
+  const delimiter = semicolonCount > commaCount ? ";" : ",";
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === '"') {
+      if (quoted && text[index + 1] === '"') { field += '"'; index += 1; }
+      else quoted = !quoted;
+    } else if (!quoted && character === delimiter) { row.push(field.trim()); field = ""; }
+    else if (!quoted && (character === "\n" || character === "\r")) {
+      if (character === "\r" && text[index + 1] === "\n") index += 1;
+      row.push(field.trim());
+      if (row.some((cell) => cell !== "")) rows.push(row);
+      row = []; field = "";
+    } else field += character;
+  }
+  row.push(field.trim());
+  if (row.some((cell) => cell !== "")) rows.push(row);
+  return rows;
+}
+
+function csvMoney(value: string | undefined) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const normalized = raw.replace(/[^0-9-]/g, "");
+  if (!normalized || !/^-?\d+$/.test(normalized)) throw new Error(`Giá trị tiền trong CSV không hợp lệ: ${raw}`);
+  const amount = Number(normalized);
+  if (!Number.isSafeInteger(amount) || amount < 0 || amount > 1_000_000_000_000) throw new Error(`Giá trị tiền trong CSV vượt giới hạn: ${raw}`);
+  return amount || null;
 }
 
 export default function InventoryWorkspace({ categories, materials, initialTab, onNavigate, onNotify, onCategoryCreated }: Props) {
@@ -375,7 +422,7 @@ function OutboundIssuePage({ products, onCancel, onComplete, onNotify }: {
 
 type SkuRule = { categoryId: string; prefix: string; skuFormat?: "SEQUENTIAL" | "BANGLE_SHAPE_QUALITY_SIZE"; materialOptionIds?: string[]; materialPrefixes: Array<{ materialOptionId: string; prefix: string }> };
 type ReceiptVariantDraft = { shape?: string; quality: string; beadSize: string; carat?: string; gemstoneQuality?: string; cutCategoryId?: string; quantity: number; unitCost: number; skuSuffix: string; sku?: string };
-type ReceiptLine = { key: string; productId?: string; variantId?: string; quantity: number; unitCost: number; newProduct?: { name: string; categoryId: string; gemstoneTypeId?: string; materialOptionId?: string; skuSequence?: string; bangleShape?: string; bangleQuality?: string; bangleSizeMm?: string; sku: string; variants?: ReceiptVariantDraft[] } };
+type ReceiptLine = { key: string; productId?: string; variantId?: string; quantity: number; unitCost: number | null; newProduct?: { name: string; categoryId: string; kind?: "JEWELRY" | "GEMSTONE"; gemstoneTypeId?: string; materialOptionId?: string; skuSequence?: string; bangleShape?: string; bangleQuality?: string; bangleSizeMm?: string; sku: string; legacySku?: string; allowLegacySku?: boolean; standalonePremiumGemstone?: boolean; isPremiumGemstone?: boolean; price?: number | null; lengthCm?: number | null; widthCm?: number | null; variants?: ReceiptVariantDraft[] } };
 type ReceiptDocument = { name: string; url: string; mimeType: string };
 type ReceiptRecord = { receiptNo: string; supplierName?: string | null };
 type NewProductVariantMode = "SIZE" | "QUALITY" | "QUALITY_AND_BEAD_SIZE" | "BANGLE_SHAPE_QUALITY_SIZE" | "GEMSTONE_SIZE" | "GEMSTONE_CARAT" | "GEMSTONE_CARAT_AND_QUALITY" | null;
@@ -469,6 +516,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const [documents, setDocuments] = useState<ReceiptDocument[]>([]);
   const [documentBusy, setDocumentBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const receiptSubmitLock = useRef(false);
   const [skuRules, setSkuRules] = useState<SkuRule[]>([]);
   const [ruleModal, setRuleModal] = useState(false);
   const [ruleCategoryId, setRuleCategoryId] = useState("");
@@ -551,7 +599,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
     }).join(" · "),
   }));
   const totalQuantity = lines.reduce((total, line) => total + (line.newProduct?.variants?.length ? line.newProduct.variants.reduce((sum, variant) => sum + variant.quantity, 0) : Number(line.quantity) || 0), 0);
-  const subtotalAmount = lines.reduce((total, line) => total + (line.newProduct?.variants?.length ? line.newProduct.variants.reduce((sum, variant) => sum + variant.quantity * variant.unitCost, 0) : (Number(line.quantity) || 0) * (Number(line.unitCost) || 0)), 0);
+  const subtotalAmount = lines.reduce((total, line) => total + (line.newProduct?.variants?.length ? line.newProduct.variants.reduce((sum, variant) => sum + variant.quantity * variant.unitCost, 0) : line.unitCost == null ? 0 : (Number(line.quantity) || 0) * line.unitCost), 0);
   const discountRate = Math.min(100, Math.max(0, Number(discountPercent) || 0));
   const vatRate = Math.min(100, Math.max(0, Number(vatPercent) || 0));
   const discountAmount = Math.round(subtotalAmount * discountRate / 100);
@@ -866,18 +914,19 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   };
 
   const saveReceipt = async () => {
-    if (saving || documentBusy) return;
+    if (receiptSubmitLock.current || saving || documentBusy) return;
     if (!supplierName.trim()) { onNotify("Chọn hoặc nhập nhà cung cấp trước khi lưu phiếu."); return; }
     if (!lines.length || completeLines.length !== lines.length) { onNotify("Mỗi dòng cần chọn sản phẩm và có số lượng hợp lệ."); return; }
     if (lines.some((line) => { const product = products.find((item) => item.id === line.productId); return Boolean(product?.variants.length && !line.variantId); })) { onNotify("Chọn đúng biến thể tồn kho cho từng dòng sản phẩm có phân loại."); return; }
+    receiptSubmitLock.current = true;
     setSaving(true);
     try {
-      const saved = await request<{ receiptNo: string; pos365SyncStatus?: string | null; pos365SyncError?: string | null }>("inventory/receipts", { method: "POST", body: JSON.stringify({ receivedAt, supplierName, receiver, warehouseName, paymentMethod, discountPercent: discountRate, vatPercent: vatRate, note, additionalNote, documentUrls: documents.map((document) => document.url), items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId, quantity: Number(line.quantity), unitCost: Number(line.unitCost), newProduct: line.newProduct })) }) });
+      const saved = await request<{ receiptNo: string; pos365SyncStatus?: string | null; pos365SyncError?: string | null }>("inventory/receipts", { method: "POST", body: JSON.stringify({ receivedAt, supplierName, receiver, warehouseName, paymentMethod, discountPercent: discountRate, vatPercent: vatRate, note, additionalNote, documentUrls: documents.map((document) => document.url), items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId, quantity: Number(line.quantity), unitCost: line.unitCost, newProduct: line.newProduct })) }) });
       const posMessage = saved.pos365SyncStatus === "SYNCED" ? " POS365 đã nhận phiếu." : saved.pos365SyncStatus ? " Phiếu đang chờ POS365; hệ thống sẽ tự thử lại." : " POS365 chưa bật đồng bộ.";
       onNotify(`Đã lưu phiếu nhập ${saved.receiptNo} vào GEME.${posMessage}${saved.pos365SyncError ? ` ${saved.pos365SyncError}` : ""}`);
       await onComplete();
     } catch (cause) { onNotify(cause instanceof Error ? cause.message : "Không thể lưu phiếu nhập."); }
-    finally { setSaving(false); }
+    finally { receiptSubmitLock.current = false; setSaving(false); }
   };
 
   const categoryLabel = (category: AdminCategory) => categoryPath(category, categoryOptions);
@@ -885,7 +934,96 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const materialForProduct = (product: InventoryProduct) => stoneNameOf(product) || "—";
   const amountForLine = (line: ReceiptLine) => line.newProduct?.variants?.length
     ? line.newProduct.variants.reduce((sum, variant) => sum + variant.quantity * variant.unitCost, 0)
-    : (Number(line.quantity) || 0) * (Number(line.unitCost) || 0);
+    : line.unitCost == null ? 0 : (Number(line.quantity) || 0) * line.unitCost;
+
+  const importReceiptCsv = async (file: File) => {
+    if (lines.length) throw new Error("Phiếu đã có dòng hàng. Hãy lưu hoặc xóa các dòng hiện tại trước khi nhập CSV Emerald.");
+    const rows = parseCsvDocument(await file.text());
+    if (rows.length < 2) throw new Error("CSV không có dòng dữ liệu để nhập.");
+    const headers = rows[0].map((header) => header.trim());
+    const skuColumn = headers.indexOf("SKUDeXuat");
+    if (skuColumn < 0) {
+      const delimiter = headers[0]?.includes(";") ? ";" : ",";
+      const records = rows.slice(1).map((row) => row);
+      const imported: ReceiptLine[] = [];
+      for (const record of records) {
+        const [sku, qty, cost] = record.map((value) => value.trim());
+        const product = products.find((item) => item.sku.toLocaleLowerCase("vi") === sku.toLocaleLowerCase("vi") || item.variants.some((variant) => variant.sku?.toLocaleLowerCase("vi") === sku.toLocaleLowerCase("vi")));
+        if (!product) continue;
+        const variant = product.variants.find((item) => item.sku?.toLocaleLowerCase("vi") === sku.toLocaleLowerCase("vi"));
+        imported.push({ key: crypto.randomUUID(), productId: product.id, variantId: variant?.id, quantity: Math.max(1, Number(qty) || 1), unitCost: Math.max(0, Number(String(cost || "").replace(/\D/g, "")) || 0) });
+      }
+      if (!imported.length) throw new Error(`Không tìm thấy SKU khớp với ${delimiter === ";" ? "danh sách" : "file"} CSV.`);
+      setLines(imported);
+      onNotify(`Đã thêm ${imported.length} dòng SKU có sẵn. Kiểm tra phiếu rồi bấm Lưu phiếu nhập.`);
+      return;
+    }
+
+    const indexes = new Map(headers.map((header, index) => [header, index]));
+    const cell = (record: string[], column: string) => record[indexes.get(column) ?? -1] || "";
+    const data = rows.slice(1).filter((record) => cell(record, "SKUDeXuat").trim());
+    if (!data.length) throw new Error("CSV không có SKUDeXuat nào để nhập.");
+    const emeraldRoot = categoryOptions.find((category) => category.kind === "Đá quý" && category.level === 1 && category.status === "Hoạt động" && (/^mặt đá$/i.test(category.name) || category.slug === "mat-da"))
+      || categoryOptions.find((category) => category.kind === "Đá quý" && category.level === 1 && category.status === "Hoạt động");
+    if (!emeraldRoot) throw new Error("Không tìm thấy nhóm đá quý cấp 1 đang hoạt động để tạo loại Emerald.");
+    let emerald = categoryOptions.find((category) => category.kind === "Đá quý" && category.level === 2 && (category.slug === "emerald" || category.name.toLocaleLowerCase("vi") === "emerald"));
+    if (!emerald) {
+      const record = await request<Record<string, any>>("categories", { method: "POST", body: JSON.stringify({
+        name: "Emerald", slug: "emerald", kind: "GEMSTONE", usage: "GEMSTONE_TYPE", level: 2,
+        parentId: emeraldRoot.id, pricingMode: "GEMSTONE_CARAT", status: "ACTIVE",
+        sortOrder: categoryOptions.filter((category) => category.parentId === emeraldRoot.id).reduce((max, category) => Math.max(max, Number(category.sortOrder) || 0), 0) + 1,
+      }) });
+      emerald = { id: String(record.id), name: String(record.name), slug: String(record.slug || "emerald"), products: 0, status: record.status === "INACTIVE" ? "Đã ẩn" : "Hoạt động", kind: "Đá quý", usage: record.usage === "GEMSTONE_TYPE" ? "stone" : "product", level: Number(record.level || 2) as 1 | 2 | 3, parentId: String(record.parentId || emeraldRoot.id), pricingMode: record.pricingMode || "GEMSTONE_CARAT", sortOrder: String(record.sortOrder ?? 0) };
+      setCategoryOptions((current) => current.some((item) => item.id === emerald!.id) ? current : [...current, emerald!]);
+      onCategoryCreated(emerald);
+    } else if (emerald.usage !== "stone" || emerald.parentId !== emeraldRoot.id || emerald.pricingMode !== "GEMSTONE_CARAT") {
+      throw new Error("Danh mục Emerald hiện có không khớp loại đá NCT/carats. Mình chưa tự đổi cấu hình danh mục.");
+    }
+    if (emerald.status !== "Hoạt động") throw new Error("Danh mục Emerald đang bị ẩn. Hãy bật danh mục trước khi nhập kho.");
+
+    const currentRuleData = await request<{ rules: SkuRule[] }>("inventory/sku-rules");
+    const currentRules = currentRuleData.rules || [];
+    const emeraldRule = currentRules.find((rule) => rule.categoryId === emerald!.id);
+    if (emeraldRule?.prefix !== "NCTEM") {
+      if (products.some((product) => product.category?.id === emerald!.id)) throw new Error("Danh mục Emerald đã có sản phẩm nên mình không đổi tiền tố SKU đang dùng.");
+      const nextRules = [...currentRules.filter((rule) => rule.categoryId !== emerald!.id), { categoryId: emerald.id, prefix: "NCTEM", skuFormat: "SEQUENTIAL" as const, materialOptionIds: [], materialPrefixes: [] }];
+      const savedRules = await request<{ rules: SkuRule[] }>("inventory/sku-rules", { method: "PATCH", body: JSON.stringify({ rules: nextRules }) });
+      setSkuRules(savedRules.rules || []);
+    }
+
+    const importedSkus = new Set<string>();
+    const imported: ReceiptLine[] = data.map((record) => {
+      const sku = cell(record, "SKUDeXuat").trim();
+      if (!/^NCTEM[A-Z0-9]+(?:-[A-Z0-9]+)*$/i.test(sku)) throw new Error(`SKU ${sku} không đúng tiền tố NCTEM hoặc sai định dạng.`);
+      const normalizedSku = sku.toLocaleUpperCase("en");
+      if (importedSkus.has(normalizedSku) || products.some((product) => product.sku.toLocaleUpperCase("en") === normalizedSku || product.variants.some((variant) => variant.sku?.toLocaleUpperCase("en") === normalizedSku))) throw new Error(`SKU ${sku} bị lặp trong CSV hoặc đã tồn tại trong GEME.`);
+      importedSkus.add(normalizedSku);
+      const quantity = Number(cell(record, "SoLuongNhap"));
+      if (quantity !== 1) throw new Error(`SKU ${sku} chưa có số lượng đúng 1 như yêu cầu.`);
+      if (cell(record, "Carat").trim()) throw new Error(`SKU ${sku} đang có carat trong CSV; lô này phải để trống carat.`);
+      const lengthCm = Number(cell(record, "Dai_cm"));
+      const widthCm = Number(cell(record, "Rong_cm"));
+      if (!Number.isFinite(lengthCm) || lengthCm <= 0 || !Number.isFinite(widthCm) || widthCm <= 0) throw new Error(`SKU ${sku} thiếu chiều dài hoặc chiều rộng cm.`);
+      const oldSalePrice = csvMoney(cell(record, "GiaCu_SQL_VND"));
+      const unitCost = csvMoney(cell(record, "GiaNhapDuKien_VND"));
+      if (oldSalePrice !== null && unitCost !== null && Math.round(oldSalePrice / 3) !== unitCost) throw new Error(`SKU ${sku} có giá nhập không khớp giá SQL cũ chia 3.`);
+      return {
+        key: crypto.randomUUID(), quantity, unitCost,
+        newProduct: {
+          name: cell(record, "TenChung") || "Mặt đá Emerald", kind: "GEMSTONE", categoryId: emerald!.id,
+          gemstoneTypeId: emerald!.id, sku, legacySku: sku, allowLegacySku: true,
+          standalonePremiumGemstone: true, isPremiumGemstone: true, price: oldSalePrice,
+          lengthCm, widthCm,
+        },
+      };
+    });
+    const missingCosts = imported.filter((line) => line.unitCost === null).length;
+    setLines(imported);
+    setSupplierIsNew(true);
+    setSupplierName("Chưa ghi nhận");
+    setNote("Nhập kho mặt đá Emerald đối chiếu SQL cũ; mỗi SKU 1 viên. Carat chưa có dữ liệu nên để trống. Giá nhập theo SQL cũ chia 3; dòng chưa có giá để trống.");
+    onNotify(`Đã nạp ${imported.length} SKU Emerald để rà soát: mỗi SKU 1 viên, carat để trống${missingCosts ? `, ${missingCosts} SKU chưa có giá nhập` : ""}. Bấm Lưu phiếu nhập để ghi tồn.`);
+  };
 
   return <div className="receipt-page">
     <header className="receipt-page-heading"><div><h1>Nhập hàng</h1><p>Tạo phiếu nhập hàng mới để cập nhật sản phẩm vào kho.</p></div><div><button className="button button-quiet" onClick={onCancel}>Hủy</button><button className="button button-primary" onClick={() => void saveReceipt()} disabled={saving || documentBusy || !lines.length}>{saving ? "Đang lưu…" : "Lưu phiếu nhập"}</button></div></header>
@@ -897,12 +1035,9 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
           <label>Người nhập<input value={receiver} onChange={(event) => setReceiver(event.target.value)} placeholder="Tên người nhập"/></label><label>Kho nhập <b>*</b><select value={warehouseName} onChange={(event) => setWarehouseName(event.target.value)}><option>Kho chính</option></select></label><label>Hình thức thanh toán<select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option>Chuyển khoản</option><option>Tiền mặt</option><option>Công nợ</option></select></label>
         </div><label className="receipt-note-field">Ghi chú<textarea rows={2} maxLength={500} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Nhập ghi chú cho phiếu nhập..."/><small>{note.length}/500</small></label></section>
 
-        <section className="receipt-card receipt-items-card"><div className="receipt-card-heading"><div><h2>Danh sách sản phẩm nhập</h2><p>Tạo mặt hàng mới hoặc chọn sản phẩm đã có trong kho.</p></div><div className="receipt-card-actions"><button className="button button-quiet" onClick={() => setRuleModal(true)}>⚙ Quy tắc mã hàng</button><button className="button button-quiet" onClick={addEmptyLine}>＋ Chọn hàng có sẵn</button><button className="button button-primary" onClick={() => { setNewSkuSequence(""); setNewSkuPreview(""); setNewSkuError(""); setNewSkuLookup(null); setNewBangleShape(""); setNewBangleQuality(""); setNewBangleSizeMm(""); setNewProductModal(true); }}>＋ Thêm sản phẩm mới</button><label className="button button-quiet receipt-file-import">⇧ Thêm từ CSV<input type="file" accept=".csv,.txt,text/csv" onChange={async (event) => {
+        <section className="receipt-card receipt-items-card"><div className="receipt-card-heading"><div><h2>Danh sách sản phẩm nhập</h2><p>Tạo mặt hàng mới hoặc chọn sản phẩm đã có trong kho.</p></div><div className="receipt-card-actions"><button className="button button-quiet" onClick={() => setRuleModal(true)}>⚙ Quy tắc mã hàng</button><button className="button button-quiet" onClick={addEmptyLine}>＋ Chọn hàng có sẵn</button><button className="button button-primary" onClick={() => { setNewSkuSequence(""); setNewSkuPreview(""); setNewSkuError(""); setNewSkuLookup(null); setNewBangleShape(""); setNewBangleQuality(""); setNewBangleSizeMm(""); setNewProductModal(true); }}>＋ Thêm sản phẩm mới</button><label className="button button-quiet receipt-file-import">⇧ Thêm từ CSV<input type="file" accept=".csv,.txt,text/csv" onChange={(event) => {
             const file = event.target.files?.[0]; event.currentTarget.value = ""; if (!file) return;
-            const linesFromFile = (await file.text()).split(/\r?\n/).map((line) => line.trim()).filter(Boolean); const delimiter = linesFromFile[0]?.includes(";") ? ";" : ","; const dataRows = linesFromFile.slice(1); let added = 0;
-            const imported: ReceiptLine[] = [];
-            for (const record of dataRows) { const [sku, qty, cost] = record.split(delimiter).map((value) => value.trim().replace(/^"|"$/g, "")); const product = products.find((item) => item.sku.toLocaleLowerCase("vi") === sku.toLocaleLowerCase("vi") || item.variants.some((variant) => variant.sku?.toLocaleLowerCase("vi") === sku.toLocaleLowerCase("vi"))); if (!product) continue; const variant = product.variants.find((item) => item.sku?.toLocaleLowerCase("vi") === sku.toLocaleLowerCase("vi")); imported.push({ key: crypto.randomUUID(), productId: product.id, variantId: variant?.id, quantity: Math.max(1, Number(qty) || 1), unitCost: Math.max(0, Number(cost.replace(/\D/g, "")) || 0) }); added++; }
-            setLines((current) => [...current, ...imported]); onNotify(added ? `Đã thêm ${added} dòng từ file CSV.` : "Không tìm thấy SKU phù hợp trong file CSV.");
+            void importReceiptCsv(file).catch((cause) => onNotify(cause instanceof Error ? cause.message : "Không thể đọc file CSV."));
           }}/></label></div></div>
           <div className="receipt-table-wrap"><table className="receipt-table"><thead><tr><th>#</th><th>Sản phẩm</th><th>Mã SKU</th><th>Phân loại</th><th>Số lượng *</th><th>Đơn giá nhập *</th><th>Thành tiền</th><th></th></tr></thead><tbody>{lines.length ? lines.map((line, index) => {
             const product = products.find((item) => item.id === line.productId);
@@ -911,7 +1046,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
             const productSku = variant?.sku || product?.sku || line.newProduct?.sku || "—";
             const classification = line.newProduct ? `${categoryOptions.find((item) => item.id === line.newProduct?.categoryId)?.name || "—"} · ${line.newProduct.materialOptionId ? materialOptions.find((material) => material.id === line.newProduct?.materialOptionId)?.name || "Loại đá" : "—"}` : product ? `${categoryForProduct(product)} · ${materialForProduct(product)}` : "—";
             const newVariants = line.newProduct?.variants || [];
-            return <tr key={line.key}><td>{index + 1}</td><td>{line.newProduct ? <span className="receipt-new-item"><strong>{productName}</strong><small>Mã do người nhập chọn</small>{newVariants.length > 0 && <details className="receipt-variant-summary"><summary>{newVariants.length} biến thể · xem số lượng và SKU</summary>{newVariants.map((item) => <span key={`${item.quality}:${item.beadSize}`}><b>{[item.quality !== "Kích thước" ? item.quality : "", item.beadSize].filter(Boolean).join(" · ")}</b><small>{money(item.quantity)} cái · SKU {item.sku || "Mã sẽ được tạo khi lưu"} · Đơn giá nhập {money(item.unitCost)} ₫/cái</small></span>)}</details>}</span> : <select aria-label={`Sản phẩm dòng ${index + 1}`} value={line.productId || ""} onChange={(event) => { const selected = products.find((item) => item.id === event.target.value); updateLine(line.key, { productId: selected?.id, variantId: selected?.variants[0]?.id }); }}><option value="">Chọn sản phẩm</option>{products.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}</td><td><strong className="receipt-sku">{productSku}</strong></td><td>{classification}{product?.variants.length ? <select aria-label={`Phiên bản dòng ${index + 1}`} value={line.variantId || ""} onChange={(event) => updateLine(line.key, { variantId: event.target.value || undefined })}><option value="">Chọn biến thể</option>{product.variants.map((item) => <option key={item.id} value={item.id}>{variantLabel(item)} · {item.sku || "Không có mã riêng"}</option>)}</select> : null}{newVariants.length > 0 && <small className="receipt-variant-kind">{line.newProduct?.variants?.length} biến thể</small>}</td><td>{newVariants.length > 0 ? money(line.quantity) : <input type="number" min="1" max="100000" value={line.quantity} onChange={(event) => updateLine(line.key, { quantity: Number(event.target.value) })}/>}</td><td>{newVariants.length > 0 ? <small>Theo từng biến thể</small> : <input type="text" inputMode="numeric" pattern="[0-9]*" value={line.unitCost} onFocus={(event) => event.currentTarget.select()} onChange={(event) => updateLine(line.key, { unitCost: Number(event.target.value.replace(/\D/g, "")) || 0 })}/>}</td><td>{money(amountForLine(line))}</td><td><button className="receipt-remove-line" aria-label={`Xóa dòng ${index + 1}`} onClick={() => setLines((current) => current.filter((item) => item.key !== line.key))}>×</button></td></tr>;
+            return <tr key={line.key}><td>{index + 1}</td><td>{line.newProduct ? <span className="receipt-new-item"><strong>{productName}</strong><small>{line.newProduct.standalonePremiumGemstone ? `SKU đã đối chiếu · ${line.newProduct.lengthCm} × ${line.newProduct.widthCm} cm` : "Mã do người nhập chọn"}</small>{newVariants.length > 0 && <details className="receipt-variant-summary"><summary>{newVariants.length} biến thể · xem số lượng và SKU</summary>{newVariants.map((item) => <span key={`${item.quality}:${item.beadSize}`}><b>{[item.quality !== "Kích thước" ? item.quality : "", item.beadSize].filter(Boolean).join(" · ")}</b><small>{money(item.quantity)} cái · SKU {item.sku || "Mã sẽ được tạo khi lưu"} · Đơn giá nhập {money(item.unitCost)} ₫/cái</small></span>)}</details>}</span> : <select aria-label={`Sản phẩm dòng ${index + 1}`} value={line.productId || ""} onChange={(event) => { const selected = products.find((item) => item.id === event.target.value); updateLine(line.key, { productId: selected?.id, variantId: selected?.variants[0]?.id }); }}><option value="">Chọn sản phẩm</option>{products.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}</td><td><strong className="receipt-sku">{productSku}</strong></td><td>{classification}{product?.variants.length ? <select aria-label={`Phiên bản dòng ${index + 1}`} value={line.variantId || ""} onChange={(event) => updateLine(line.key, { variantId: event.target.value || undefined })}><option value="">Chọn biến thể</option>{product.variants.map((item) => <option key={item.id} value={item.id}>{variantLabel(item)} · {item.sku || "Không có mã riêng"}</option>)}</select> : null}{newVariants.length > 0 && <small className="receipt-variant-kind">{line.newProduct?.variants?.length} biến thể</small>}</td><td>{newVariants.length > 0 ? money(line.quantity) : <input type="number" min="1" max="100000" value={line.quantity} onChange={(event) => updateLine(line.key, { quantity: Number(event.target.value) })}/>}</td><td>{newVariants.length > 0 ? <small>Theo từng biến thể</small> : <input type="text" inputMode="numeric" pattern="[0-9]*" aria-label={`Đơn giá nhập dòng ${index + 1}; để trống nếu chưa có dữ liệu`} value={line.unitCost ?? ""} onFocus={(event) => event.currentTarget.select()} onChange={(event) => { const raw = event.target.value.replace(/\D/g, ""); updateLine(line.key, { unitCost: raw ? Number(raw) : null }); }}/>}</td><td>{line.unitCost == null ? <small>Chưa có giá</small> : money(amountForLine(line))}</td><td><button className="receipt-remove-line" aria-label={`Xóa dòng ${index + 1}`} onClick={() => setLines((current) => current.filter((item) => item.key !== line.key))}>×</button></td></tr>;
           }) : <tr><td className="receipt-empty" colSpan={8}>Chưa có mặt hàng. Hãy thêm sản phẩm hoặc tạo mã hàng mới.</td></tr>}</tbody></table></div>
           <div className="receipt-table-footer"><button className="button button-quiet" onClick={addEmptyLine}>＋ Thêm dòng</button><div><span>Tiền hàng trước điều chỉnh</span><strong>{money(subtotalAmount)} VND</strong></div></div>
         </section>

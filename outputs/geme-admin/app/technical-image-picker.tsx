@@ -5,6 +5,7 @@ export function TechnicalImagePicker({
   video,
   uploading = false,
   uploadingVideo = false,
+  disabled = false,
   onSelect,
   onSelectVideo,
   onRemove,
@@ -14,12 +15,13 @@ export function TechnicalImagePicker({
   video?: string | null;
   uploading?: boolean;
   uploadingVideo?: boolean;
+  disabled?: boolean;
   onSelect: (file: File) => void;
   onSelectVideo: (file: File) => void;
   onRemove: () => void;
   onRemoveVideo: () => void;
 }) {
-  const busy = uploading || uploadingVideo;
+  const busy = disabled || uploading || uploadingVideo;
   return <section className="technical-image-picker" aria-label="Ảnh hoặc video kỹ thuật">
     <div className="technical-image-copy">
       <strong>Ảnh / video kỹ thuật</strong>

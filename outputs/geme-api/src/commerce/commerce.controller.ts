@@ -1,13 +1,15 @@
-import { Body, Controller, Delete, Get, Header, Headers, NotFoundException, Param, Patch, Post, Query, Req, Res, Sse, UseGuards, applyDecorators } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Header, Headers, NotFoundException, Param, Patch, Post, Query, Req, Res, Sse, UseGuards, applyDecorators } from "@nestjs/common";
 import { AdminAuthGuard } from "../admin-auth/admin-auth.guard.js";
 import { AdminAuthService } from "../admin-auth/admin-auth.service.js";
 import { AdminPermissionService, RequireAdminPermissions, type AdminPermission } from "../admin-auth/admin-permissions.js";
+import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
 import { CommerceService } from "./commerce.service.js";
 import { onlineOrderInput } from "./online-order-input.js";
 import { MediaAssetsService } from "../media/media-assets.service.js";
 
 type MediaResponse = { setHeader(name: string, value: string): void; end(data?: Uint8Array): void; redirect(status: number, url: string): unknown };
 type AuthorizationRequest = { headers: { authorization?: string } };
+type AdminRequest = { adminIdentity: AdminIdentity };
 
 const admin = (...permissions: AdminPermission[]) => permissions.length
   ? applyDecorators(UseGuards(AdminAuthGuard), RequireAdminPermissions(...permissions))
@@ -44,11 +46,83 @@ export class CommerceController {
   @Get("products/:id") @admin("catalog.read") adminProduct(@Param("id") id: string) { return this.commerce.adminProduct(id); }
   @Get("products/detail/:slug/related") relatedProducts(@Param("slug") slug: string, @Query("limit") limit?: string) { return this.commerce.relatedProducts(slug, limit); }
   @Get("products/detail/:slug") product(@Param("slug") slug: string) { return this.commerce.product(slug); }
-  @Post("products") @admin("catalog.write") createProduct(@Body() body: Record<string, any>) { return this.commerce.saveProduct(body); }
-  @Patch("products/by-sku/:sku") @admin("catalog.write") updateProductBySku(@Param("sku") sku: string, @Body() body: Record<string, any>) { return this.commerce.saveProductBySku(body, sku); }
-  @Patch("products/:id") @admin("catalog.write") updateProduct(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.saveProduct(body, id); }
-  @Delete("products/:id") @admin("catalog.write") deleteProduct(@Param("id") id: string, @Body() body?: Record<string, any>) { return this.commerce.deleteProduct(id, body); }
-  @Patch("products/:id/unpublish") @admin("catalog.write") unpublishProduct(@Param("id") id: string) { return this.commerce.unpublishProduct(id); }
+  @Post("products") @admin("catalog.read") async createProduct(@Req() request: AdminRequest, @Body() body: Record<string, any>) { await this.assertProductMutation(request.adminIdentity, body, "create"); return this.commerce.saveProduct(body); }
+  @Patch("products/by-sku/:sku") @admin("catalog.read") async updateProductBySku(@Req() request: AdminRequest, @Param("sku") sku: string, @Body() body: Record<string, any>) {
+    const full = await this.assertProductMutation(request.adminIdentity, body);
+    return full ? this.commerce.saveProductBySku(body, sku) : this.commerce.updateProductFieldsBySku(sku, body, request.adminIdentity);
+  }
+  @Patch("products/:id") @admin("catalog.read") async updateProduct(@Req() request: AdminRequest, @Param("id") id: string, @Body() body: Record<string, any>) {
+    const full = await this.assertProductMutation(request.adminIdentity, body);
+    return full ? this.commerce.saveProduct(body, id) : this.commerce.updateProductFields(id, body, request.adminIdentity);
+  }
+  @Delete("products/:id") @admin("catalog.read") async deleteProduct(@Req() request: AdminRequest, @Param("id") id: string, @Body() body?: Record<string, any>) { await this.assertProductMutation(request.adminIdentity, body || {}, "delete"); return this.commerce.deleteProduct(id, body, request.adminIdentity); }
+  @Patch("products/:id/unpublish") @admin("catalog.read") async unpublishProduct(@Req() request: AdminRequest, @Param("id") id: string, @Body() body: Record<string, any> = {}) { await this.assertProductMutation(request.adminIdentity, body, "publish"); return this.commerce.updateProductPublication(id, "HIDDEN", request.adminIdentity, body.reason); }
+  @Patch("products/:id/publication") @admin("catalog.read") async updateProductPublication(@Req() request: AdminRequest, @Param("id") id: string, @Body() body: Record<string, any>) { await this.assertProductMutation(request.adminIdentity, body, "publish"); return this.commerce.updateProductPublication(id, body.status, request.adminIdentity, body.reason); }
+  @Patch("products/:id/new-label") @admin("catalog.publish") async updateProductNewLabel(@Req() request: AdminRequest, @Param("id") id: string, @Body() body: Record<string, any>) {
+    if (!body || Object.keys(body).length !== 1 || typeof body.isNew !== "boolean") throw new BadRequestException("Chỉ gửi trường isNew dạng true/false để cập nhật nhãn sản phẩm mới.");
+    await this.adminPermissions.assertPermissions(request.adminIdentity, ["catalog.publish"]);
+    return this.commerce.updateProductNewLabel(id, body.isNew, request.adminIdentity);
+  }
+
+  private async assertProductMutation(identity: AdminIdentity, body: Record<string, any>, operation: "write" | "create" | "delete" | "publish" = "write"): Promise<boolean> {
+    const required = new Set<string>();
+    if (operation === "create") {
+      required.add("catalog.write");
+      if (body.status === "ACTIVE") required.add("catalog.publish");
+      await this.adminPermissions.assertPermissions(identity, [...required]);
+      return true;
+    }
+    if (operation === "delete") {
+      required.add("catalog.delete");
+      // Deletion currently removes exact matching SKU rows from POS365 as part
+      // of the same user action, so both scopes are mandatory.
+      required.add("integrations.manage");
+      await this.adminPermissions.assertPermissions(identity, [...required]);
+      return false;
+    }
+    if (operation === "publish") {
+      required.add("catalog.publish");
+      if (Object.keys(body).some((key) => !["status", "reason"].includes(key))) throw new BadRequestException("Chỉ gửi trạng thái xuất bản và lý do vào endpoint này.");
+      await this.adminPermissions.assertPermissions(identity, [...required]);
+      return false;
+    }
+
+    const contentFields = new Set(["name", "description", "fullDescription", "coverVideoUrl", "technicalImageUrl", "technicalVideoUrl", "gallery", "seoTitle", "seoDescription"]);
+    const priceFields = new Set(["price", "originalPrice"]);
+    const fullFields = new Set(["sku", "kind", "categoryId", "gemstoneTypeId", "materialOptionId", "weightGrams", "lengthCm", "widthCm", "heightCm", "isNew", "isFeatured", "featured", "published"]);
+    let usesContent = false;
+    let usesPrice = false;
+    let needsFullCatalog = false;
+    for (const key of Object.keys(body)) {
+      if (contentFields.has(key)) { usesContent = true; continue; }
+      if (priceFields.has(key)) { usesPrice = true; continue; }
+      if (key === "priceVariants") {
+        if (!Array.isArray(body.priceVariants)) throw new BadRequestException("Danh sách biến thể không hợp lệ.");
+        for (const row of body.priceVariants as Array<Record<string, unknown>>) {
+          const keys = Object.keys(row || {});
+          if (keys.some((field) => !["id", "sku", "price", "originalPrice", "imageUrls", "videoUrl"].includes(field))) needsFullCatalog = true;
+          if (keys.some((field) => ["price", "originalPrice"].includes(field))) usesPrice = true;
+          if (keys.some((field) => ["imageUrls", "videoUrl"].includes(field))) usesContent = true;
+        }
+        continue;
+      }
+      if (["stock", "minimumStock", "variants"].includes(key)) throw new BadRequestException("Không được sửa tồn kho qua hồ sơ sản phẩm. Dùng mục Quản lý tồn kho để tạo phiếu có kiểm toán.");
+      if (key === "status") {
+        if (Object.keys(body).length === 1) throw new BadRequestException("Dùng endpoint publication riêng và gửi status cùng lý do.");
+        required.add("catalog.publish");
+        needsFullCatalog = true;
+        continue;
+      }
+      if (["isNew", "isFeatured", "featured", "published"].includes(key)) required.add("catalog.publish");
+      if (fullFields.has(key) || !contentFields.has(key)) needsFullCatalog = true;
+    }
+    if (usesContent) required.add("catalog.content.write");
+    if (usesPrice) required.add("catalog.price.write");
+    if (needsFullCatalog) required.add("catalog.write");
+    if (!required.size) throw new BadRequestException("Không có trường sản phẩm hợp lệ để cập nhật.");
+    await this.adminPermissions.assertPermissions(identity, [...required]);
+    return needsFullCatalog;
+  }
 
   @Get("inventory") @admin("inventory.read") inventory() { return this.commerce.inventory(); }
   @Get("inventory/movements") @admin("inventory.read") inventoryMovements(@Query("limit") limit?: string) { return this.commerce.inventoryMovements(limit); }
@@ -59,6 +133,7 @@ export class CommerceController {
   @Get("inventory/receipts") @admin("inventory.read") inventoryReceipts(@Query("limit") limit?: string) { return this.commerce.inventoryReceipts(limit); }
   @Get("inventory/receipts/:id") @admin("inventory.read") inventoryReceipt(@Param("id") id: string) { return this.commerce.inventoryReceipt(id); }
   @Post("inventory/receipts") @admin("inventory.write") createInventoryReceipt(@Body() body: Record<string, any>) { return this.commerce.createInventoryReceipt(body); }
+  @Post("inventory/receipts/reconcile-pos") @admin("inventory.write") reconcileInventoryReceiptsFromPos(@Body("receiptIds") receiptIds: unknown) { return this.commerce.reconcileInventoryReceiptsFromPos(receiptIds); }
   @Get("inventory/issues") @admin("inventory.read") inventoryIssues(@Query() query: Record<string, string>) { return this.commerce.inventoryIssues(query); }
   @Post("inventory/issues") @admin("inventory.write") createInventoryIssue(@Body() body: Record<string, any>) { return this.commerce.createInventoryIssue(body); }
   @Post("inventory/reset/preview") @admin("inventory.read") inventoryResetPreview(@Body() body: Record<string, any>) { return this.commerce.inventoryResetPreview(body); }
@@ -79,8 +154,11 @@ export class CommerceController {
     return this.commerce.createOrder(onlineOrderInput(body), undefined, false, idempotencyKey);
   }
   @Post("admin/orders") @admin("orders.write") createAdminOrder(@Body() body: Record<string, any>, @Headers("idempotency-key") idempotencyKey?: string) { return this.commerce.createOrder(body, undefined, true, idempotencyKey); }
-  @Patch("orders/:id/status") @admin("orders.write") orderStatus(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.updateOrderStatus(id, body.status); }
+  @Patch("orders/:id/status") @admin("orders.write") orderStatus(@Param("id") id: string, @Req() request: AdminRequest, @Body() body: Record<string, any>) { return this.commerce.updateOrderStatus(id, body.status, request.adminIdentity, body.reason); }
   @Patch("orders/:id/payment") @admin("finance.manage") orderPayment(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.markOrderPaid(id, body.status); }
+  @Post("orders/:id/payments") @admin("finance.manage") recordOrderPayment(@Param("id") id: string, @Req() request: AdminRequest, @Body() body: Record<string, any>, @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.commerce.recordOrderPayment(id, request.adminIdentity, body, idempotencyKey);
+  }
   @Post("orders/:id/email/retry") @admin("orders.write") retryOrderEmail(@Param("id") id: string) { return this.commerce.retryOrderConfirmationEmail(id); }
 
   @Get("promotions/storefront") storefrontPromotions() { return this.commerce.storefrontPromotions(); }

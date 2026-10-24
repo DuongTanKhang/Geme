@@ -76,6 +76,7 @@ export type StoreProduct = {
   status: "DRAFT" | "ACTIVE" | "HIDDEN";
   isNew: boolean;
   isFeatured: boolean;
+  isPremiumGemstone: boolean;
   price: number;
   originalPrice?: number | null;
   stock: number;
@@ -118,6 +119,8 @@ const STOREFRONT_REVALIDATE_SECONDS = (() => {
   return Number.isInteger(configured) && configured >= 1 && configured <= 60 ? configured : 5;
 })();
 const STOREFRONT_CACHE_TAG = "storefront-catalog";
+const STOREFRONT_PRODUCT_PAGE_SIZE = 500;
+const STOREFRONT_PRODUCT_MAX_PAGES = 20;
 
 const requestApi = cache(async (path: string, revalidateSeconds = 0, cacheTag = ""): Promise<{ data: unknown | null; connected: boolean; status?: number }> => {
   try {
@@ -300,6 +303,7 @@ export function getStoreJewelryCarouselBanners(settings: StoreSiteSettings) {
 }
 
 function asStoreProduct(value: any): StoreProduct {
+  const isPremiumGemstone = value.kind === "GEMSTONE" && Boolean(value.isPremiumGemstone);
   const images = Array.isArray(value.images)
     ? value.images
         .filter((image: any) => typeof image?.url === "string" && image.url)
@@ -315,8 +319,8 @@ function asStoreProduct(value: any): StoreProduct {
         beadSize: variant.beadSize || null,
         carat: variant.carat == null ? null : Number(variant.carat),
         gemstoneQuality: variant.gemstoneQuality || null,
-        price: Number(variant.price) || 0,
-        originalPrice: variant.originalPrice == null ? null : Number(variant.originalPrice),
+        price: isPremiumGemstone ? 0 : Number(variant.price) || 0,
+        originalPrice: isPremiumGemstone || variant.originalPrice == null ? null : Number(variant.originalPrice),
         stock: Number(variant.stock) || 0,
         imageUrls: Array.isArray(variant.imageUrls) ? variant.imageUrls.filter((url: unknown) => typeof url === "string" && url) : [],
         videoUrl: typeof variant.videoUrl === "string" && variant.videoUrl ? variant.videoUrl : null,
@@ -349,8 +353,9 @@ function asStoreProduct(value: any): StoreProduct {
     status: value.status,
     isNew: Boolean(value.isNew),
     isFeatured: Boolean(value.isFeatured),
-    price: variants.length && variantPrices.length ? Math.min(...variantPrices) : Number(value.price) || 0,
-    originalPrice: variants.length && variantOriginalPrices.length ? Math.min(...variantOriginalPrices) : value.originalPrice == null ? null : Number(value.originalPrice),
+    isPremiumGemstone,
+    price: isPremiumGemstone ? 0 : variants.length && variantPrices.length ? Math.min(...variantPrices) : Number(value.price) || 0,
+    originalPrice: isPremiumGemstone ? null : variants.length && variantOriginalPrices.length ? Math.min(...variantOriginalPrices) : value.originalPrice == null ? null : Number(value.originalPrice),
     stock: Number(value.stock) || 0,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
@@ -450,8 +455,26 @@ export async function getStoreFacets() {
 }
 
 export async function getStoreCatalog() {
-  const [products, facets] = await Promise.all([getStoreProducts(), getStoreFacets()]);
+  const [products, facets] = await Promise.all([getAllStorefrontProducts(), getStoreFacets()]);
   return { ...products, ...facets };
+}
+
+async function getAllStorefrontProducts() {
+  const products: StoreProduct[] = [];
+
+  for (let page = 0; page < STOREFRONT_PRODUCT_MAX_PAGES; page += 1) {
+    const offset = page * STOREFRONT_PRODUCT_PAGE_SIZE;
+    const result = await getStoreProducts({ limit: STOREFRONT_PRODUCT_PAGE_SIZE, offset });
+    if (!result.connected) return { products: [] as StoreProduct[], connected: false };
+
+    products.push(...result.products);
+    if (result.products.length < STOREFRONT_PRODUCT_PAGE_SIZE) {
+      return { products, connected: true };
+    }
+  }
+
+  // Do not render an apparently complete catalog if it exceeds the pagination safety limit.
+  return { products: [] as StoreProduct[], connected: false };
 }
 
 export async function getStoreProduct(slug: string) {

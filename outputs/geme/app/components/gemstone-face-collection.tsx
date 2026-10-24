@@ -131,19 +131,19 @@ export function GemstoneFaceCollection({ activeStone = "", activeCut = "", stone
       const matchesStone = !selectedStone || productStones.includes(selectedStone) || categoryBelongsToStone;
       const selectedCutChoice = cuts.find((cut) => cut.slug === selectedCut);
       const matchesCut = !selectedCut || product.variants.some((variant) => variant.quality === selectedCutChoice?.name) || product.category?.slug === selectedCut;
-      const matchesPrice = !priceRange ||
+      const matchesPrice = !priceRange || (!product.isPremiumGemstone &&
         (priceRange === "under2" ? product.price < 2_000_000 :
           priceRange === "2to5" ? product.price >= 2_000_000 && product.price <= 5_000_000 :
             priceRange === "5to10" ? product.price > 5_000_000 && product.price <= 10_000_000 :
-              product.price > 10_000_000);
+              product.price > 10_000_000));
       return matchesStone && matchesCut && matchesPrice;
     });
 
     return filtered
       .map((product, index) => ({ product, index }))
       .sort((a, b) => {
-        if (sort === "price-asc") return a.product.price - b.product.price || a.index - b.index;
-        if (sort === "price-desc") return b.product.price - a.product.price || a.index - b.index;
+        if (sort === "price-asc") return Number(a.product.isPremiumGemstone) - Number(b.product.isPremiumGemstone) || a.product.price - b.product.price || a.index - b.index;
+        if (sort === "price-desc") return Number(a.product.isPremiumGemstone) - Number(b.product.isPremiumGemstone) || b.product.price - a.product.price || a.index - b.index;
         if (sort === "best-selling") return (salesBySku.get(b.product.sku) || 0) - (salesBySku.get(a.product.sku) || 0) || a.index - b.index;
         return new Date(b.product.createdAt || 0).getTime() - new Date(a.product.createdAt || 0).getTime() || a.index - b.index;
       })

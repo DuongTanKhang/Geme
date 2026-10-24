@@ -15,6 +15,7 @@ type WishlistContextValue = {
 const WishlistContext = createContext<WishlistContextValue | null>(null);
 
 function mapFavoriteProduct(value: Record<string, any>): StoreProduct {
+  const isPremiumGemstone = value.kind === "GEMSTONE" && Boolean(value.isPremiumGemstone);
   return {
     ...value,
     id: String(value.id || ""),
@@ -22,11 +23,12 @@ function mapFavoriteProduct(value: Record<string, any>): StoreProduct {
     name: String(value.name || ""),
     slug: String(value.slug || ""),
     kind: value.kind === "GEMSTONE" ? "GEMSTONE" : "JEWELRY",
-    price: Number(value.price) || 0,
-    originalPrice: value.originalPrice == null ? null : Number(value.originalPrice),
+    price: isPremiumGemstone ? 0 : Number(value.price) || 0,
+    originalPrice: isPremiumGemstone || value.originalPrice == null ? null : Number(value.originalPrice),
     stock: Number(value.stock) || 0,
     isNew: Boolean(value.isNew),
     isFeatured: Boolean(value.isFeatured),
+    isPremiumGemstone,
     images: Array.isArray(value.images) ? value.images.map((image: Record<string, any>) => ({
       url: String(image.url || ""), alt: image.alt ?? null,
       sortOrder: Number(image.sortOrder) || 0, isPrimary: Boolean(image.isPrimary),
@@ -36,8 +38,8 @@ function mapFavoriteProduct(value: Record<string, any>): StoreProduct {
       sku: variant.sku ?? null,
       quality: String(variant.quality || "Tiêu chuẩn"),
       beadSize: variant.beadSize ?? null,
-      price: Number(variant.price) || 0,
-      originalPrice: variant.originalPrice == null ? null : Number(variant.originalPrice),
+      price: isPremiumGemstone ? 0 : Number(variant.price) || 0,
+      originalPrice: isPremiumGemstone || variant.originalPrice == null ? null : Number(variant.originalPrice),
       stock: Number(variant.stock) || 0,
       sortOrder: Number(variant.sortOrder ?? index) || 0,
       imageUrls: Array.isArray(variant.imageUrls) ? variant.imageUrls : [],

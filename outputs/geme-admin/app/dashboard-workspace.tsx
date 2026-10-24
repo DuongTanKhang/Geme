@@ -14,6 +14,13 @@ type DashboardOrder = {
 
 export type DashboardReport = {
   revenue: number;
+  capturedPayments?: number;
+  refundAmount?: number;
+  grossOrderValue?: number;
+  returnedGoodsValue?: number;
+  codUnreconciled?: number;
+  codRemittanceOutstanding?: number;
+  codUnverifiedRemittanceLines?: number;
   orderCount: number;
   customerCount: number;
   productCount?: number;

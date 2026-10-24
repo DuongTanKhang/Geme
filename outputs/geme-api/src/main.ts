@@ -30,7 +30,7 @@ async function bootstrap() {
   const readLimit = requestsPerMinute("API_READ_REQUESTS_PER_MINUTE", 30_000, 100);
   const writeLimit = requestsPerMinute("API_WRITE_REQUESTS_PER_MINUTE", 120, 20);
   const maxTrackedClients = 50_000;
-  const requestWindows = new Map<string, { startedAt: number; reads: number; writes: number; adminLogins: number; guestOrders: number; accountOrders: number }>();
+  const requestWindows = new Map<string, { startedAt: number; reads: number; writes: number; adminLogins: number; guestOrders: number; accountOrders: number; contactMessages: number }>();
   let requestCount = 0;
   app.use((request: RateLimitRequest, response: RateLimitResponse, next: () => void) => {
     const path = request.path || "";
@@ -56,7 +56,7 @@ async function bootstrap() {
         const leastRecentlyUsed = requestWindows.keys().next().value;
         if (leastRecentlyUsed !== undefined) requestWindows.delete(leastRecentlyUsed);
       }
-      window = { startedAt: now, reads: 0, writes: 0, adminLogins: 0, guestOrders: 0, accountOrders: 0 };
+      window = { startedAt: now, reads: 0, writes: 0, adminLogins: 0, guestOrders: 0, accountOrders: 0, contactMessages: 0 };
       requestWindows.set(client, window);
     } else {
       // Keep the least-recently-used client first so the table remains bounded
@@ -69,8 +69,9 @@ async function bootstrap() {
     const isAdminLogin = request.method === "POST" && path === "/api/v1/admin/auth/login";
     const isGuestOrder = request.method === "POST" && path === "/api/v1/orders";
     const isAccountOrder = request.method === "POST" && path === "/api/v1/account/orders";
-    const count = isAdminLogin ? ++window.adminLogins : isGuestOrder ? ++window.guestOrders : isAccountOrder ? ++window.accountOrders : isRead ? ++window.reads : ++window.writes;
-    const limit = isAdminLogin ? 10 : isGuestOrder ? 5 : isAccountOrder ? 600 : isRead ? readLimit : writeLimit;
+    const isContactMessage = request.method === "POST" && path === "/api/v1/contact";
+    const count = isAdminLogin ? ++window.adminLogins : isGuestOrder ? ++window.guestOrders : isAccountOrder ? ++window.accountOrders : isContactMessage ? ++window.contactMessages : isRead ? ++window.reads : ++window.writes;
+    const limit = isAdminLogin ? 10 : isGuestOrder ? 5 : isAccountOrder ? 600 : isContactMessage ? 5 : isRead ? readLimit : writeLimit;
     if (count > limit) {
       response.setHeader("Retry-After", String(Math.max(1, Math.ceil((window.startedAt + 60_000 - now) / 1000))));
       response.status(429).json({ statusCode: 429, message: "Có quá nhiều yêu cầu từ kết nối này. Vui lòng thử lại sau." });

@@ -13,7 +13,8 @@ type Props = {
   onConfirm: () => void;
   onDispatch: () => void;
   onDelivered: () => void;
-  onMarkPaid: () => Promise<void>;
+  onRecordPayment: () => Promise<void>;
+  onRefundPreShipment: () => void;
   onRetryOrderEmail: () => Promise<void>;
   onShowBill: () => void;
   onCustomerHistory: () => void;
@@ -50,14 +51,14 @@ function paymentName(method: string) {
 }
 
 function paymentStatusName(status: string) {
-  return ({ PAID: "Đã thanh toán", PENDING: "Chưa thanh toán", FAILED: "Thanh toán thất bại", REFUNDED: "Đã hoàn tiền" } as Record<string, string>)[status] || status || "Chưa ghi nhận";
+  return ({ PAID: "Đã thanh toán", PARTIALLY_PAID: "Đã thu một phần", PENDING: "Chưa thanh toán", FAILED: "Thanh toán thất bại", REFUNDED: "Đã hoàn tiền", PARTIALLY_REFUNDED: "Đã hoàn một phần" } as Record<string, string>)[status] || status || "Chưa ghi nhận";
 }
 
 function posSyncName(status?: string | null) {
   return ({ PENDING: "Đang chờ gửi", SYNCING: "Đang đồng bộ", RETRYING: "Sẽ tự thử lại", SYNCED: "Đã đồng bộ", BLOCKED: "Cần cấu hình thanh toán" } as Record<string, string>)[status || ""] || "Chưa gửi lên POS365";
 }
 
-export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch, onDelivered, onMarkPaid, onRetryOrderEmail, onShowBill, onCustomerHistory, onGetViettelPostStatus, onGetViettelPostPrintUrl, onQuoteViettelPost, onCreateViettelPostShipment, onRefreshOrders }: Props) {
+export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch, onDelivered, onRecordPayment, onRefundPreShipment, onRetryOrderEmail, onShowBill, onCustomerHistory, onGetViettelPostStatus, onGetViettelPostPrintUrl, onQuoteViettelPost, onCreateViettelPostShipment, onRefreshOrders }: Props) {
   const defaultWeight = Math.round(order.items.reduce((sum, item) => sum + (Number(item.weightGrams) || 0) * item.quantity, 0));
   const [shipmentOpen, setShipmentOpen] = useState(false);
   const [shipmentStatus, setShipmentStatus] = useState<VtpStatus | null>(null);
@@ -149,7 +150,7 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
   const markPaymentAsPaid = async () => {
     setPaymentLoading(true);
     setPaymentError("");
-    try { await onMarkPaid(); }
+    try { await onRecordPayment(); }
     catch (error) { setPaymentError(error instanceof Error ? error.message : "Không thể ghi nhận thanh toán."); }
     finally { setPaymentLoading(false); }
   };
@@ -211,12 +212,16 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
 
     <section className="drawer-products"><div className="drawer-products-title"><h3>Sản phẩm trong đơn</h3><span>{order.items.length} sản phẩm</span></div>
       {order.items.map((item) => <div className="drawer-product-row" key={item.id}>{item.image ? <img className="product-thumb" src={item.image} alt=""/> : <span className="product-thumb" aria-hidden="true">◇</span>}<span className="drawer-product-name">{item.productName}<small>{[item.productSku, item.quality, item.beadSize].filter(Boolean).join(" · ")}</small></span><span>x{item.quantity}</span><strong>{money(item.lineTotal)}</strong></div>)}
-      <div className="drawer-total"><div><span>Tạm tính</span><strong>{money(order.subtotal)}</strong></div><div><span>Phí vận chuyển</span><strong>{money(order.shippingFee)}</strong></div><div><span>Giảm giá</span><strong>− {money(order.discountAmount)}</strong></div><strong><span>Tổng tiền</span><span>{money(order.total)}</span></strong><div className="payment-status"><span>Trạng thái thanh toán</span><span className={"status-pill "+(order.paymentStatus === "PAID" ? "green" : order.paymentStatus === "FAILED" ? "red" : "amber")}>{paymentStatusName(order.paymentStatus)}</span><button className="row-action" type="button" onClick={onShowBill}>Xem hóa đơn</button></div></div>
+      <div className="drawer-total"><div><span>Tạm tính</span><strong>{money(order.subtotal)}</strong></div><div><span>Phí vận chuyển</span><strong>{money(order.shippingFee)}</strong></div><div><span>Giảm giá</span><strong>− {money(order.discountAmount)}</strong></div><strong><span>Tổng tiền</span><span>{money(order.total)}</span></strong><div className="payment-status"><span>Trạng thái thanh toán</span><span className={"status-pill "+(order.paymentStatus === "PAID" ? "green" : order.paymentStatus === "FAILED" ? "red" : "amber")}>{paymentStatusName(order.paymentStatus)}</span><button className="row-action" type="button" onClick={onShowBill}>Xem hóa đơn</button></div>
+        {(order.paymentCaptured || order.paymentRefunded || order.paymentBalance != null) && <div className="payment-collection-summary"><span>Đã thu: <strong>{money(order.paymentCaptured || 0)}</strong></span><span>Đã hoàn: <strong>{money(order.paymentRefunded || 0)}</strong></span><span>Còn phải thu: <strong>{money(order.paymentBalance || 0)}</strong></span></div>}
+        {order.paymentEntries?.length ? <div className="payment-ledger-list"><strong>Các khoản thu</strong>{order.paymentEntries.map((entry)=> <div key={entry.id}><span>{entry.method} · {entry.providerRef || "Giao dịch cũ"}{entry.recordingNote ? ` · ${entry.recordingNote}` : ""}</span><b>{money(entry.amount)}</b>{entry.refundedAmount>0&&<small>Đã hoàn {money(entry.refundedAmount)}</small>}</div>)}</div> : null}
+      </div>
     </section>
 
     {order.note && <section className="drawer-note"><h3><SectionIcon name="note"/>Ghi chú đơn hàng</h3><p>{order.note}</p></section>}
     <div className="drawer-actions">
-      {order.paymentStatus !== "PAID" && !order.payment.includes("COD") && order.status !== "Đã hủy" && <button className="button button-primary" type="button" onClick={() => void markPaymentAsPaid()} disabled={paymentLoading}>{paymentLoading ? "Đang lưu thanh toán…" : "✓ Ghi nhận đã thanh toán"}</button>}
+      {order.paymentStatus !== "PAID" && order.paymentBalance !== 0 && !order.payment.includes("COD") && <button className="button button-primary" type="button" onClick={() => void markPaymentAsPaid()} disabled={paymentLoading}>{paymentLoading ? "Đang lưu khoản thu…" : order.status === "Đã hủy" ? "Ghi nhận tiền đến muộn" : "＋ Ghi nhận khoản thu"}</button>}
+      {(((["Chờ xác nhận", "Đang xử lý"].includes(order.status)) || order.status === "Đã hủy") && (order.paymentCaptured || 0) > (order.paymentRefunded || 0) && !order.payment.includes("COD")) && <button className="button button-quiet" type="button" onClick={onRefundPreShipment}>Ghi nhận hoàn tiền trước giao</button>}
       {paymentError && <small className="vtp-error" role="alert">{paymentError}</small>}
       {order.status === "Chờ xác nhận"
         ? <button className="button button-primary" type="button" onClick={onConfirm}>✓ Xác nhận đơn</button>

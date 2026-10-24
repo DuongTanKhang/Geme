@@ -220,7 +220,7 @@ export class ViettelPostService {
         ? ("SHIPPING" as const)
         : order.status;
     const nextOrderStatus = canTransitionOrder(order.status, proposedOrderStatus, "CARRIER") ? proposedOrderStatus : order.status;
-    const shouldCommitLegacyReservation = nextOrderStatus === "DELIVERED" && order.inventoryReservedAt && !order.inventoryCommittedAt && !order.inventoryReleasedAt;
+    const shouldCommitLegacyReservation = (nextOrderStatus === "SHIPPING" || nextOrderStatus === "DELIVERED") && order.inventoryReservedAt && !order.inventoryCommittedAt && !order.inventoryReleasedAt;
     const updated = await this.prisma.$transaction(async (tx) => {
       const saved = await tx.order.updateMany({
         where: {
@@ -240,6 +240,16 @@ export class ViettelPostService {
         },
       });
       if (saved.count !== 1) return null;
+      if (shouldCommitLegacyReservation) await tx.inventoryReservation.updateMany({
+        where: { orderId: order.id, status: "ACTIVE" },
+        data: { status: "COMMITTED", committedAt: new Date(), expiresAt: null },
+      });
+      await tx.auditLog.create({ data: {
+        adminId: null, correlationId: `vtp:${order.id}:${occurredAt.getTime()}`,
+        action: "CARRIER_SHIPMENT_STATUS_SYNCED", entityType: "ORDER", entityId: order.id,
+        before: { orderStatus: order.status, shipmentStatus: order.carrierShipmentStatus || null, inventoryCommittedAt: order.inventoryCommittedAt?.toISOString() || null },
+        after: { orderStatus: nextOrderStatus, shipmentStatus: carrierShipmentStatus, inventoryCommitted: Boolean(shouldCommitLegacyReservation), carrierStatusName },
+      } });
       return tx.order.findUnique({ where: { id: order.id }, select: { id: true, status: true } });
     });
     if (!updated) return { accepted: true };

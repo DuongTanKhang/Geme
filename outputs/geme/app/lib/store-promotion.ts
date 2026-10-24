@@ -22,6 +22,9 @@ export function getStoreProductPromotion(product: StoreProduct, promotions: Stor
 /** Keep card, detail, cart and product schema prices aligned. A promotion is
  * applied to GEME's selling price; originalPrice is only a compare-at price. */
 export function getStoreProductPrice(product: StoreProduct, promotions: StorePromotion[], variant?: StoreVariant | null) {
+  if (product.kind === "GEMSTONE" && product.isPremiumGemstone) {
+    return { listedPrice: 0, salePrice: 0, originalPrice: 0, discountPercent: 0, promotion: null, promotionDiscount: 0 };
+  }
   const caratPricing = product.kind === "GEMSTONE"
     && ["GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"].includes(product.category?.pricingMode || "");
   const multiplier = caratPricing && variant ? Math.max(0, Number(variant.carat) || 0) : 1;

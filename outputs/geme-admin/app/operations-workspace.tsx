@@ -15,7 +15,7 @@ const tabs: Array<{ id: Tab; label: string; permission: string }> = [
 const idempotencyKey = () => `ops-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 const money = (value: unknown) => `${new Intl.NumberFormat("vi-VN").format(Number(value) || 0)} ₫`;
 const date = (value: unknown) => { const parsed = new Date(String(value || "")); return Number.isNaN(parsed.getTime()) ? "—" : parsed.toLocaleString("vi-VN"); };
-const stateLabel: Record<string, string> = { REQUESTED: "Chờ duyệt", APPROVED: "Đã duyệt", REJECTED: "Từ chối", RECEIVED: "Đã nhận hàng", CLOSED: "Đã đóng", NONE: "Chưa hoàn", PARTIALLY_REFUNDED: "Hoàn một phần", REFUNDED: "Đã hoàn", OPEN: "Đang đối soát", RECONCILED: "Khớp", RECONCILED_WITH_VARIANCE: "Có chênh lệch", MATCHED: "Khớp", VARIANCE: "Chênh lệch" };
+const stateLabel: Record<string, string> = { REQUESTED: "Chờ duyệt", APPROVED: "Đã duyệt", REJECTED: "Từ chối", RECEIVED: "Đã nhận hàng", CLOSED: "Đã đóng", NONE: "Chưa hoàn", PARTIALLY_REFUNDED: "Hoàn một phần", REFUNDED: "Đã hoàn", OPEN: "Đang đối soát", RECONCILED: "Khớp", RECONCILED_WITH_VARIANCE: "Có chênh lệch", REVERSED: "Đã đảo", MATCHED: "Khớp", VARIANCE: "Chênh lệch" };
 
 export default function OperationsWorkspace({ request, permissions }: Props) {
   const [tab, setTab] = useState<Tab>("overview");
@@ -35,6 +35,7 @@ export default function OperationsWorkspace({ request, permissions }: Props) {
   const [codSelected, setCodSelected] = useState<Record<string, boolean>>({});
   const [codReceived, setCodReceived] = useState<Record<string, number>>({});
   const [codFees, setCodFees] = useState<Record<string, number>>({});
+  const [codRemitted, setCodRemitted] = useState<Record<string, number>>({});
   const [batchReference, setBatchReference] = useState("");
   const [batchDate, setBatchDate] = useState(new Date().toISOString().slice(0, 10));
   const [carrier, setCarrier] = useState("VIETTEL_POST");
@@ -90,7 +91,11 @@ export default function OperationsWorkspace({ request, permissions }: Props) {
 
   const createCodBatch = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const entries = codOrders.filter((order) => codSelected[order.id]).map((order) => ({ orderId: order.id, receivedAmount: Number(codReceived[order.id] ?? order.carrierCodAmount ?? order.totalAmount), carrierFee: Number(codFees[order.id] || 0) }));
+    const entries = codOrders.filter((order) => codSelected[order.id]).map((order) => {
+      const receivedAmount = Number(codReceived[order.id] ?? order.carrierCodAmount ?? order.totalAmount);
+      const carrierFee = Number(codFees[order.id] || 0);
+      return { orderId: order.id, receivedAmount, carrierFee, remittedAmount: Number(codRemitted[order.id] ?? Math.max(0, receivedAmount - carrierFee)) };
+    });
     if (!batchReference.trim() || !entries.length) { setError("Nhập mã bảng kê và chọn ít nhất một đơn COD."); return; }
     void run(() => request("cod-reconciliations", "POST", { externalReference: batchReference.trim(), carrier, statementDate: batchDate, entries }), "Đã tạo bảng kê COD để kiểm tra.", "cod").then(() => { setBatchReference(""); setCodSelected({}); });
   };
@@ -101,13 +106,22 @@ export default function OperationsWorkspace({ request, permissions }: Props) {
     void run(() => request(`cod-reconciliations/${batch.id}/reconcile`, "POST", { note }), "Đã hoàn tất đối soát.", "cod");
   };
 
+  const reverseCod = (batch: Row) => {
+    const reason = window.prompt("Lý do đảo bảng kê (tối thiểu 5 ký tự):")?.trim();
+    if (!reason || reason.length < 5) { setError("Cần ghi lý do đảo bảng kê tối thiểu 5 ký tự."); return; }
+    if (!window.confirm(`Đảo bảng kê ${batch.externalReference}? Bút toán thu COD đã xác nhận sẽ được giữ làm bằng chứng thu tiền; hãy lập bảng kê mới với mã tham chiếu khác để điều chỉnh.`)) return;
+    void run(() => request(`cod-reconciliations/${batch.id}/reverse`, "POST", { reason }), "Đã đảo bảng kê và ghi nhật ký. Payment đã thu vẫn được giữ nguyên.", "cod");
+  };
+
   const refund = (item: Row) => {
     const amountText = window.prompt("Số tiền hoàn (₫)");
     if (!amountText) return;
     const amount = Number(amountText.replace(/[^0-9]/g, ""));
+    const externalReference = window.prompt("Mã giao dịch hoàn tiền thực tế từ ngân hàng/cổng thanh toán");
+    if (!externalReference?.trim()) return;
     const note = window.prompt("Ghi chú giao dịch hoàn tiền") || "";
     if (!amount || note.trim().length < 5) { setError("Số tiền hoặc ghi chú hoàn tiền chưa hợp lệ."); return; }
-    void run(() => request(`returns/${item.id}/refunds`, "POST", { amount, note, idempotencyKey: idempotencyKey() }), "Đã ghi nhận hoàn tiền. Thao tác này ghi sổ GEME; tiền cần được hoàn qua cổng thanh toán riêng.", "returns");
+    void run(() => request(`returns/${item.id}/refunds`, "POST", { amount, externalReference: externalReference.trim(), note, idempotencyKey: idempotencyKey() }), "Đã ghi nhận khoản hoàn có mã tham chiếu. Thao tác này chỉ ghi sổ GEME; tiền cần được chuyển riêng qua ngân hàng/cổng thanh toán.", "returns");
   };
 
   return <div className={styles.workspace}>
@@ -121,6 +135,7 @@ export default function OperationsWorkspace({ request, permissions }: Props) {
           ["Khả dụng trong kho", overview?.inventory?.availableUnits ?? "—"],
           ["Đang giữ tồn", overview?.inventory?.reservedUnits ?? "—"],
           ["Tồn thực trong kho", overview?.inventory?.onHandUnits ?? "—"],
+          ["Đang vận chuyển", overview?.inventory?.inTransitUnits ?? "—"],
           ["Giữ tồn sắp hết hạn", overview?.inventory?.expiringSoon ?? "—"],
           ["Sản phẩm dưới ngưỡng", overview?.inventory?.lowStockProducts ?? "—"],
           ["Phiếu trả đang mở", overview?.returns?.open ?? "—"],
@@ -131,9 +146,9 @@ export default function OperationsWorkspace({ request, permissions }: Props) {
       </section>
       <p className={styles.footnote}>Thời điểm tổng hợp: {date(overview?.generatedAt)}. Giữ tồn tự giải phóng sau thời hạn cấu hình nếu đơn chưa thanh toán.</p>
     </> : tab === "returns" ? <>
-      <section className={styles.card}><div className={styles.sectionHeading}><div><h2>Tạo yêu cầu trả hàng</h2><p>Chỉ chọn đơn đã giao; từng dòng hàng được giới hạn theo số lượng đã mua và các lần trả trước.</p></div></div>
+      <section className={styles.card}><div className={styles.sectionHeading}><div><h2>Tạo yêu cầu trả hàng</h2><p>Chọn đơn đã giao hoặc kiện Viettel Post đang hoàn về. Hàng chỉ nhập lại kho sau khi nhận và kiểm tra.</p></div></div>
         <form className={styles.returnForm} onSubmit={createReturn}>
-          <label>Đơn đã giao<select value={returnOrderId} onChange={(event) => { setReturnOrderId(event.target.value); setReturnQuantities({}); }}><option value="">Chọn đơn hàng</option>{returnOrders.map((order) => <option key={order.id} value={order.id}>{order.code} · {order.customerName} · {money(order.totalAmount)}</option>)}</select></label>
+          <label>Đơn đã giao / kiện đang hoàn<select value={returnOrderId} onChange={(event) => { setReturnOrderId(event.target.value); setReturnQuantities({}); }}><option value="">Chọn đơn hàng</option>{returnOrders.map((order) => <option key={order.id} value={order.id}>{order.code} · {order.customerName} · {money(order.totalAmount)}{order.carrierShipmentStatus === "RETURNING" ? " · Hãng đang hoàn" : ""}</option>)}</select></label>
           {selectedReturnOrder && <div className={styles.lineList}>{selectedReturnOrder.items.map((line: Row) => {
             const previouslyReturned = selectedReturnOrder.returns.flatMap((entry: Row) => entry.items).filter((returned: Row) => returned.orderItemId === line.id).reduce((sum: number, returned: Row) => sum + returned.quantity, 0);
             const remaining = Math.max(0, line.quantity - previouslyReturned);
@@ -154,10 +169,10 @@ export default function OperationsWorkspace({ request, permissions }: Props) {
     </> : tab === "cod" ? <>
       <section className={styles.card}><div className={styles.sectionHeading}><div><h2>Lập bảng kê COD</h2><p>Chọn đơn đã giao chưa đối soát. Đơn khớp được ghi nhận đã thu tiền; dòng lệch cần kiểm tra riêng.</p></div></div>
         <form className={styles.codForm} onSubmit={createCodBatch}><label>Mã bảng kê<input required value={batchReference} onChange={(event) => setBatchReference(event.target.value)} placeholder="VDN-2026-10-001"/></label><label>Đơn vị<select value={carrier} onChange={(event) => setCarrier(event.target.value)}><option value="VIETTEL_POST">Viettel Post</option><option value="MANUAL">Khác / nhập tay</option></select></label><label>Ngày bảng kê<input type="date" value={batchDate} onChange={(event) => setBatchDate(event.target.value)} required/></label>
-          <div className={styles.codOrders}>{codOrders.map((order) => <div className={styles.codOrder} key={order.id}><label className={styles.checkOrder}><input type="checkbox" checked={Boolean(codSelected[order.id])} onChange={(event) => setCodSelected((state) => ({ ...state, [order.id]: event.target.checked }))}/><span><strong>{order.code}</strong><small>{order.customerName} · COD dự kiến {money(order.carrierCodAmount ?? order.totalAmount)}</small></span></label><label>Đã thu<input type="number" min="0" value={codReceived[order.id] ?? Number(order.carrierCodAmount ?? order.totalAmount)} onChange={(event) => setCodReceived((state) => ({ ...state, [order.id]: Number(event.target.value) || 0 }))}/></label><label>Phí<input type="number" min="0" value={codFees[order.id] || 0} onChange={(event) => setCodFees((state) => ({ ...state, [order.id]: Number(event.target.value) || 0 }))}/></label></div>)}{!codOrders.length && <div className={styles.empty}>Không có đơn COD đã giao đang chờ đối soát.</div>}</div><button className="button button-primary" disabled={busy || !codOrders.length}>Tạo bảng kê</button>
+          <div className={styles.codOrders}>{codOrders.map((order) => { const received = Number(codReceived[order.id] ?? order.carrierCodAmount ?? order.totalAmount); const fee = Number(codFees[order.id] || 0); return <div className={styles.codOrder} key={order.id}><label className={styles.checkOrder}><input type="checkbox" checked={Boolean(codSelected[order.id])} onChange={(event) => setCodSelected((state) => ({ ...state, [order.id]: event.target.checked }))}/><span><strong>{order.code}</strong><small>{order.customerName} · COD dự kiến {money(order.carrierCodAmount ?? order.totalAmount)}</small></span></label><label>Khách đã trả<input type="number" min="0" value={received} onChange={(event) => setCodReceived((state) => ({ ...state, [order.id]: Number(event.target.value) || 0 }))}/></label><label>Phí hãng<input type="number" min="0" value={fee} onChange={(event) => setCodFees((state) => ({ ...state, [order.id]: Number(event.target.value) || 0 }))}/></label><label>Thực chuyển về<input type="number" min="0" value={codRemitted[order.id] ?? Math.max(0, received - fee)} onChange={(event) => setCodRemitted((state) => ({ ...state, [order.id]: Number(event.target.value) || 0 }))}/></label></div>; })}{!codOrders.length && <div className={styles.empty}>Không có đơn COD đã giao đang chờ đối soát.</div>}</div><button className="button button-primary" disabled={busy || !codOrders.length}>Tạo bảng kê</button>
         </form>
       </section>
-      <section className={styles.card}><div className={styles.sectionHeading}><div><h2>Bảng kê gần đây</h2><p>{codBatches.length} bảng kê</p></div></div>{codBatches.length ? <div className={styles.batchList}>{codBatches.map((batch) => <article className={styles.batch} key={batch.id}><div><strong>{batch.externalReference}</strong><small>{batch.carrier} · {date(batch.statementDate)} · {batch.items?.length || 0} đơn</small><small>Dự kiến {money(batch.expectedTotal)} · thu {money(batch.receivedTotal)} · phí {money(batch.feeTotal)}</small></div><span>{stateLabel[batch.status] || batch.status}</span>{batch.status === "OPEN" && <button className="button button-quiet" disabled={busy} onClick={() => reconcile(batch)}>Đối soát & chốt</button>}</article>)}</div> : <div className={styles.empty}>Chưa có bảng kê COD.</div>}</section>
+      <section className={styles.card}><div className={styles.sectionHeading}><div><h2>Bảng kê gần đây</h2><p>{codBatches.length} bảng kê</p></div></div>{codBatches.length ? <div className={styles.batchList}>{codBatches.map((batch) => <article className={styles.batch} key={batch.id}><div><strong>{batch.externalReference}</strong><small>{batch.carrier} · {date(batch.statementDate)} · {batch.items?.length || 0} đơn</small><small>COD dự kiến {money(batch.expectedTotal)} · khách trả {money(batch.receivedTotal)} · phí hãng {money(batch.feeTotal)} · thực chuyển {batch.remittedTotal == null ? "Chưa ghi nhận (phiếu cũ)" : money(batch.remittedTotal)}</small></div><span>{stateLabel[batch.status] || batch.status}</span>{batch.status === "OPEN" && <button className="button button-quiet" disabled={busy} onClick={() => reconcile(batch)}>Đối soát & chốt</button>}{batch.status !== "REVERSED" && <button className="button button-quiet" disabled={busy} onClick={() => reverseCod(batch)}>Đảo bảng kê</button>}</article>)}</div> : <div className={styles.empty}>Chưa có bảng kê COD.</div>}</section>
     </> : <section className={styles.card}><div className={styles.sectionHeading}><div><h2>Nhật ký thay đổi</h2><p>Chỉ hiển thị metadata của thao tác quản trị, không lưu nội dung khách hàng hay bí mật cấu hình.</p></div></div>{audit.length ? <div className={styles.auditList}>{audit.map((entry) => <article key={entry.id}><div><strong>{entry.action}</strong><small>{entry.entityType}{entry.entityId ? ` · ${entry.entityId}` : ""}</small></div><div><span>{entry.admin?.displayName || "Hệ thống"}</span><small>{date(entry.createdAt)}</small></div></article>)}</div> : <div className={styles.empty}>Chưa có nhật ký hoặc tài khoản không có quyền xem.</div>}</section>}
   </div>;
 }

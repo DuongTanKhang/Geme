@@ -14,6 +14,10 @@ Nguồn: `exports/legacy-products.csv`. Đây là danh sách đối chiếu, ch�
 - Dòng thiếu nhóm Nhom: **73**
 - Có **10** nhóm hình dạng được nhận diện trong Nhom, ứng với **574** sản phẩm; phần Nhom còn lại có thể là nhóm nguồn/loại ngọc hoặc đang trống.
 
+## Quy tắc SKU Mặt Đá Quý
+
+Mặt đá quý có quy tắc SKU và đơn vị tính riêng: `NCT` theo carat, `NSG` theo gram, `NSC` theo viên. Xem [QUY_TAC_SKU_MAT_DA_QUY.md](QUY_TAC_SKU_MAT_DA_QUY.md). File Emerald bên dưới là bản chuẩn bị theo nhánh `NCT`.
+
 ## Danh sách theo loại đá
 
 ### Amethyst (Thạch Anh Tím) — 34 sản phẩm

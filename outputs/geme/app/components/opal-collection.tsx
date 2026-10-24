@@ -165,10 +165,10 @@ export function OpalCollection({ products, categories, materials, connected, pro
       const productStones = [product.materialOption?.slug, product.gemstoneType?.slug].filter(Boolean);
       const matchesStone = selectedStones.length === 0 || selectedStones.some((slug) => productStones.includes(slug));
       const matchesSize = selectedSizes.length === 0 || product.variants.some((variant) => selectedSizes.includes(variant.beadSize || ""));
-      const matchesPrice = !priceRange || (priceRange === "under2" ? product.price < 2_000_000 : priceRange === "2to5" ? product.price >= 2_000_000 && product.price <= 5_000_000 : priceRange === "5to10" ? product.price > 5_000_000 && product.price <= 10_000_000 : product.price > 10_000_000);
+      const matchesPrice = !priceRange || (!product.isPremiumGemstone && (priceRange === "under2" ? product.price < 2_000_000 : priceRange === "2to5" ? product.price >= 2_000_000 && product.price <= 5_000_000 : priceRange === "5to10" ? product.price > 5_000_000 && product.price <= 10_000_000 : product.price > 10_000_000));
       return matchesType && matchesStone && matchesSize && matchesPrice;
     });
-    return filtered.sort((a, b) => sort === "price-asc" ? a.price - b.price : sort === "price-desc" ? b.price - a.price : sort === "best-selling" ? (bestSellerRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (bestSellerRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER) : selectedTypes.length ? compareNewestByGemstone(a, b) : compareNewestFirst(a, b));
+    return filtered.sort((a, b) => sort === "price-asc" ? Number(a.isPremiumGemstone) - Number(b.isPremiumGemstone) || a.price - b.price : sort === "price-desc" ? Number(a.isPremiumGemstone) - Number(b.isPremiumGemstone) || b.price - a.price : sort === "best-selling" ? (bestSellerRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (bestSellerRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER) : selectedTypes.length ? compareNewestByGemstone(a, b) : compareNewestFirst(a, b));
   }, [products, categoryDescendants, selectedTypes, selectedStones, selectedSizes, priceRange, sort, bestSellerRanks]);
 
   const toggle = (value: string, current: string[], update: (next: string[]) => void) => update(current.includes(value) ? current.filter((item) => item !== value) : [...current, value]);

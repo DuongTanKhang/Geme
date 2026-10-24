@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { AdminCategory } from "./categories-workspace";
 import type { MaterialOption } from "./materials-workspace";
 import { uploadProductImage, uploadProductVideo, MAX_PRODUCT_IMAGES, MAX_VARIANT_MEDIA_ITEMS, parsePriceInput } from "./product-images";
@@ -17,6 +17,7 @@ export type AdminProduct = {
   stock: number;
   status: string;
   isNew?: boolean;
+  isPremiumGemstone?: boolean;
   productType?: "Trang sức" | "Đá quý";
   category?: string;
   categoryId?: string;
@@ -72,7 +73,13 @@ type Props = {
   categories: AdminCategory[];
   materials: MaterialOption[];
   onLoadDetails: (apiId: string) => Promise<void>;
+  permissions: string[];
+  isAdmin?: boolean;
+  onSetNewLabel: (product: AdminProduct, isNew: boolean) => Promise<AdminProduct>;
+  onSetPublication: (product: AdminProduct, status: "ACTIVE" | "HIDDEN", reason: string) => Promise<AdminProduct>;
 };
+
+const PRODUCT_PAGE_SIZE = 50;
 
 const qualityPricing = (mode?: AdminProduct["categoryPricingMode"]) => mode === "QUALITY" || mode === "QUALITY_AND_BEAD_SIZE" || mode === "GEMSTONE_SIZE" || mode === "GEMSTONE_CARAT" || mode === "GEMSTONE_CARAT_AND_QUALITY";
 
@@ -118,17 +125,28 @@ const tabs = [
   { key: "history", label: "Lịch sử", icon: "clock" },
 ];
 
-export default function ProductsWorkspace({ products, categories: categoryRecords, materials, onSave, onDelete, onAdd, onNotify, onLoadDetails }: Props) {
+export default function ProductsWorkspace({ products, categories: categoryRecords, materials, onSave, onDelete, onAdd, onNotify, onLoadDetails, permissions, isAdmin = false, onSetNewLabel, onSetPublication }: Props) {
+  const canFullCatalog = isAdmin || permissions.includes("catalog.write");
+  const canEditContent = canFullCatalog || permissions.includes("catalog.content.write");
+  const canEditPrice = canFullCatalog || permissions.includes("catalog.price.write");
+  // Show the action to authenticated Admin roles even if a stale API response
+  // omits its permission list. The status endpoint remains the authority and
+  // enforces catalog.publish before making any change.
+  const canPublish = isAdmin || canFullCatalog || permissions.includes("catalog.publish");
+  const canDelete = (canFullCatalog || permissions.includes("catalog.delete")) && permissions.includes("integrations.manage");
   const [catalogKind, setCatalogKind] = useState<"Trang sức" | "Đá quý">(products.some((item) => item.productType === "Trang sức") ? "Trang sức" : "Đá quý");
   const [selectedId, setSelectedId] = useState(products.find((item) => item.productType === "Trang sức")?.id ?? products[0]?.id ?? "");
   const [activeTab, setActiveTab] = useState("basic");
   const [imageIndex, setImageIndex] = useState(0);
   const [draft, setDraft] = useState<Partial<AdminProduct>>({});
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
+  const [page, setPage] = useState(0);
   const [categoryFilter, setCategoryFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
+  const checkedIdSet = useMemo(() => new Set(checkedIds), [checkedIds]);
   const [uploadingImages, setUploadingImages] = useState(false);
   const [uploadingCoverVideo, setUploadingCoverVideo] = useState(false);
   const [uploadingTechnicalImage, setUploadingTechnicalImage] = useState(false);
@@ -150,7 +168,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [previewVariantImage]);
 
-  const selected = products.find((product) => product.id === selectedId);
+  const selected = useMemo(() => products.find((product) => product.id === selectedId), [products, selectedId]);
   const product = selected ? { ...selected, ...draft } : undefined;
   useEffect(() => {
     if (!selectedId && products.length) {
@@ -189,11 +207,45 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   const materialOptions = materials.filter((item) => item.scope === "Trang sức" && item.active && isApplicableMaterial(item));
   const categories = useMemo(() => [...new Set(products.filter((item) => item.productType === catalogKind).map((item) => item.category).filter(Boolean))] as string[], [products, catalogKind]);
   const types = useMemo(() => [...new Set(products.filter((item) => item.productType === catalogKind && (!categoryFilter || item.category === categoryFilter)).map((item) => item.subcategory).filter(Boolean))] as string[], [products, catalogKind, categoryFilter]);
-  const rows = useMemo(() => products.filter((item) => {
-    const query = search.trim().toLocaleLowerCase("vi");
-    const matchesText = !query || `${item.id} ${item.name} ${item.category ?? ""} ${item.subcategory ?? ""}`.toLocaleLowerCase("vi").includes(query);
-    return matchesText && item.productType === catalogKind && (!categoryFilter || item.category === categoryFilter) && (!typeFilter || item.subcategory === typeFilter) && (!statusFilter || item.status === statusFilter);
-  }), [products, search, catalogKind, categoryFilter, typeFilter, statusFilter]);
+  const rows = useMemo(() => {
+    const query = deferredSearch.trim().toLocaleLowerCase("vi");
+    const filtered = products.filter((item) => {
+      const matchesText = !query || `${item.id} ${item.name} ${item.category ?? ""} ${item.subcategory ?? ""}`.toLocaleLowerCase("vi").includes(query);
+      const matchesStatus = !statusFilter || (statusFilter === "Hết hàng" ? item.stock === 0 : item.status === statusFilter);
+      return matchesText && item.productType === catalogKind && (!categoryFilter || item.category === categoryFilter) && (!typeFilter || item.subcategory === typeFilter) && matchesStatus;
+    });
+    const stoneGroup = (item: AdminProduct) => (item.productType === "Đá quý" ? item.category : item.subcategory)?.trim() || "Chưa phân loại đá";
+    return filtered
+      .map((item, index) => ({ item, index }))
+      .sort((left, right) => {
+        const leftActive = left.item.status === "Đang hoạt động";
+        const rightActive = right.item.status === "Đang hoạt động";
+        if (leftActive !== rightActive) return leftActive ? -1 : 1;
+
+        const leftGroup = stoneGroup(left.item);
+        const rightGroup = stoneGroup(right.item);
+        const leftUnclassified = leftGroup === "Chưa phân loại đá";
+        const rightUnclassified = rightGroup === "Chưa phân loại đá";
+        if (leftUnclassified !== rightUnclassified) return leftUnclassified ? 1 : -1;
+
+        const groupOrder = leftGroup.localeCompare(rightGroup, "vi", { sensitivity: "base" });
+        return groupOrder || left.index - right.index;
+      })
+      .map(({ item }) => item);
+  }, [products, deferredSearch, catalogKind, categoryFilter, typeFilter, statusFilter]);
+  const productCounts = useMemo(() => products.reduce((counts, item) => {
+    if (item.status === "Đang hoạt động") counts.active += 1;
+    if (item.status === "Tạm ẩn") counts.hidden += 1;
+    if (item.stock === 0) counts.outOfStock += 1;
+    if (item.productType === "Trang sức") counts.jewelry += 1;
+    if (item.productType === "Đá quý") counts.gemstone += 1;
+    return counts;
+  }, { active: 0, hidden: 0, outOfStock: 0, jewelry: 0, gemstone: 0 }), [products]);
+  const pageCount = Math.max(1, Math.ceil(rows.length / PRODUCT_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount - 1);
+  const visibleRows = useMemo(() => rows.slice(currentPage * PRODUCT_PAGE_SIZE, (currentPage + 1) * PRODUCT_PAGE_SIZE), [rows, currentPage]);
+  const visibleStart = rows.length ? currentPage * PRODUCT_PAGE_SIZE + 1 : 0;
+  const visibleEnd = Math.min((currentPage + 1) * PRODUCT_PAGE_SIZE, rows.length);
   const gallery = product?.gallery?.length ? product.gallery : product?.image ? [product.image] : [];
 
   const selectProduct = (id: string) => {
@@ -286,6 +338,32 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   };
   const save = async () => {
     if (!product || saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)) return;
+    if (Object.keys(draft).length === 1 && Object.prototype.hasOwnProperty.call(draft, "isNew")) {
+      setSaving(true);
+      try {
+        const saved = await onSetNewLabel(product, Boolean(product.isNew));
+        setDraft({});
+        onNotify(saved.isNew ? `Đã gắn nhãn “Mới” cho ${saved.id}.` : `Đã bỏ nhãn “Mới” khỏi ${saved.id}.`);
+      } catch (error) {
+        onNotify(error instanceof Error ? error.message : "Không thể cập nhật nhãn sản phẩm mới.");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+    if (!canFullCatalog) {
+      setSaving(true);
+      try {
+        await onSave({ ...product, ...draft });
+        onNotify(`Đã lưu thay đổi được cấp quyền cho ${product.id}.`);
+        setDraft({});
+      } catch (error) {
+        onNotify(error instanceof Error ? error.message : "Không thể lưu sản phẩm.");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     if (combinationRows(product).some((variant) => (variant.imageUrls?.length || 0) + (variant.videoUrl ? 1 : 0) > MAX_VARIANT_MEDIA_ITEMS)) {
       onNotify(`Mỗi biến thể chỉ lưu tối đa ${MAX_VARIANT_MEDIA_ITEMS} ảnh/video cộng lại.`);
       setActiveTab("variants");
@@ -307,7 +385,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       return;
     }
     const saved = { ...product, ...draft, category: isGemstone ? selectedCategory?.name ?? product.category : product.category, categoryId: isGemstone ? product.gemstoneTypeId ?? selectedCategory?.id : product.categoryId ?? selectedCategory?.id, gemstoneTypeId: isGemstone ? product.gemstoneTypeId ?? selectedCategory?.id : product.gemstoneTypeId, categoryPricingMode: pricingMode };
-    if (combinationRows(saved).length) {
+    if (combinationRows(saved).length && !saved.isPremiumGemstone) {
       saved.priceVariants = combinationRows(saved);
       if (saved.priceVariants.some((variant) => variant.price <= 0)) {
         onNotify("Nhập giá bán cho từng biến thể đã có trong kho trước khi lưu.");
@@ -316,7 +394,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       }
       const prices = saved.priceVariants.map((variant) => variant.price).filter((price) => price > 0);
       if (prices.length) saved.price = Math.min(...prices);
-    } else if (saved.price <= 0) {
+    } else if (!saved.isPremiumGemstone && saved.price <= 0) {
       onNotify("Nhập giá bán lớn hơn 0 trước khi lưu.");
       setActiveTab("basic");
       return;
@@ -336,10 +414,11 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   const toggleVisibility = async (item: AdminProduct) => {
     if (busyActionId) return;
     const nextStatus = item.status === "Đang hoạt động" ? "Tạm ẩn" : "Đang hoạt động";
+    const reason = nextStatus === "Tạm ẩn" ? "Ẩn từ Admin" : "Đăng bán từ Admin";
     setBusyActionId(item.id);
     try {
-      await onSave({ ...item, status: nextStatus });
-      if (selectedId === item.id) setDraft((current) => ({ ...current, status: nextStatus }));
+      const saved = await onSetPublication(item, nextStatus === "Đang hoạt động" ? "ACTIVE" : "HIDDEN", reason);
+      if (selectedId === item.id) setDraft((current) => ({ ...current, status: saved.status }));
       onNotify(nextStatus === "Tạm ẩn" ? "Đã ẩn sản phẩm “" + item.name + "” khỏi website." : "Đã hiện sản phẩm “" + item.name + "” trên website.");
     } catch (error) {
       onNotify(error instanceof Error ? error.message : "Không thể cập nhật trạng thái sản phẩm.");
@@ -452,9 +531,10 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     link.click();
     URL.revokeObjectURL(url);
   };
-  const clearFilters = () => { setSearch(""); setCategoryFilter(""); setTypeFilter(""); setStatusFilter(""); };
+  const clearFilters = () => { setSearch(""); setCategoryFilter(""); setTypeFilter(""); setStatusFilter(""); setPage(0); };
   const changeCatalogKind = (kind: "Trang sức" | "Đá quý") => {
     setCatalogKind(kind);
+    setPage(0);
     setCategoryFilter("");
     setTypeFilter("");
     setDraft({});
@@ -468,44 +548,44 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       <div className="products-heading">
         <div><h1>Sản phẩm</h1><p>Quản lý bài đăng trên website. SKU, biến thể và số lượng lấy từ mục Quản lý tồn kho.</p></div>
         <div className="products-actions">
-          <button className="button button-quiet" onClick={() => onNotify("Nhập Excel sẽ được kết nối ở bước backend.")}><Icon name="upload"/>Nhập Excel</button>
+          {canFullCatalog && <button className="button button-quiet" onClick={() => onNotify("Nhập Excel sẽ được kết nối ở bước backend.")}><Icon name="upload"/>Nhập Excel</button>}
           <button className="button button-quiet" onClick={exportCsv}><Icon name="download"/>Xuất Excel</button>
-          <button className="button button-primary" onClick={onAdd}><Icon name="plus"/>Thêm bài đăng</button>
+          {canFullCatalog && <button className="button button-primary" onClick={onAdd}><Icon name="plus"/>Thêm bài đăng</button>}
         </div>
       </div>
 
       <section className="product-summary">
-        <button className="product-metric" onClick={() => setStatusFilter("")}><span className="metric-icon green"><Icon name="cart"/></span><span><small>Tổng sản phẩm</small><strong>{products.length}</strong></span></button>
-        <button className="product-metric" onClick={() => setStatusFilter("Đang hoạt động")}><span className="metric-icon mint"><Icon name="gem"/></span><span><small>Đang hoạt động</small><strong>{products.filter((item) => item.status === "Đang hoạt động").length}</strong></span></button>
-        <button className="product-metric" onClick={() => setStatusFilter("Tạm ẩn")}><span className="metric-icon amber"><Icon name="eye"/></span><span><small>Tạm ẩn</small><strong>{products.filter((item) => item.status === "Tạm ẩn").length}</strong></span></button>
-        <button className="product-metric" onClick={() => setStatusFilter("Hết hàng")}><span className="metric-icon rose"><Icon name="bag"/></span><span><small>Hết hàng</small><strong>{products.filter((item) => item.stock === 0).length}</strong></span></button>
+        <button className="product-metric" onClick={() => { setStatusFilter(""); setPage(0); }}><span className="metric-icon green"><Icon name="cart"/></span><span><small>Tổng sản phẩm</small><strong>{products.length}</strong></span></button>
+        <button className="product-metric" onClick={() => { setStatusFilter("Đang hoạt động"); setPage(0); }}><span className="metric-icon mint"><Icon name="gem"/></span><span><small>Đang hoạt động</small><strong>{productCounts.active}</strong></span></button>
+        <button className="product-metric" onClick={() => { setStatusFilter("Tạm ẩn"); setPage(0); }}><span className="metric-icon amber"><Icon name="eye"/></span><span><small>Tạm ẩn</small><strong>{productCounts.hidden}</strong></span></button>
+        <button className="product-metric" onClick={() => { setStatusFilter("Hết hàng"); setPage(0); }}><span className="metric-icon rose"><Icon name="bag"/></span><span><small>Hết hàng</small><strong>{productCounts.outOfStock}</strong></span></button>
       </section>
 
       <section className="products-table-panel">
         <div className="product-kind-tabs" role="tablist" aria-label="Nhóm hồ sơ sản phẩm">
-          {(["Trang sức", "Đá quý"] as const).map((kind) => <button key={kind} type="button" role="tab" aria-selected={catalogKind === kind} className={catalogKind === kind ? "active" : ""} onClick={() => changeCatalogKind(kind)}>{kind}<span>{products.filter((item) => item.productType === kind).length}</span></button>)}
+          {(["Trang sức", "Đá quý"] as const).map((kind) => <button key={kind} type="button" role="tab" aria-selected={catalogKind === kind} className={catalogKind === kind ? "active" : ""} onClick={() => changeCatalogKind(kind)}>{kind}<span>{kind === "Trang sức" ? productCounts.jewelry : productCounts.gemstone}</span></button>)}
         </div>
         <div className="product-filterbar">
-          <label className="product-search"><Icon name="search"/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tìm kiếm sản phẩm, mã SKU, tên sản phẩm..." aria-label="Tìm sản phẩm"/></label>
-          <select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setTypeFilter(""); }} aria-label="Lọc danh mục"><option value="">Tất cả danh mục</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select>
-          <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} aria-label="Lọc loại"><option value="">Tất cả loại</option>{types.map((item) => <option key={item} value={item}>{item}</option>)}</select>
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Lọc trạng thái"><option value="">Tất cả trạng thái</option><option>Đang hoạt động</option><option>Tạm ẩn</option><option>Bản nháp</option><option>Hết hàng</option></select>
+          <label className="product-search"><Icon name="search"/><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(0); }} placeholder="Tìm kiếm sản phẩm, mã SKU, tên sản phẩm..." aria-label="Tìm sản phẩm"/></label>
+          <select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setTypeFilter(""); setPage(0); }} aria-label="Lọc danh mục"><option value="">Tất cả danh mục</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+          <select value={typeFilter} onChange={(event) => { setTypeFilter(event.target.value); setPage(0); }} aria-label="Lọc loại"><option value="">Tất cả loại</option>{types.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+          <select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value); setPage(0); }} aria-label="Lọc trạng thái"><option value="">Tất cả trạng thái</option><option>Đang hoạt động</option><option>Tạm ẩn</option><option>Bản nháp</option><option>Hết hàng</option></select>
           <button className="filter-reset" onClick={clearFilters}><Icon name="reset"/>Đặt lại</button>
         </div>
         <div className="page-table-wrap product-table-scroll">
           <table className="data-table product-table">
-            <thead><tr><th className="product-check-col"><input type="checkbox" aria-label="Chọn tất cả sản phẩm" checked={rows.length > 0 && rows.every((item) => checkedIds.includes(item.id))} onChange={(event) => setCheckedIds(event.target.checked ? rows.map((item) => item.id) : [])}/></th><th>Ảnh</th><th>Tên sản phẩm</th><th>Danh mục</th><th>Giá bán</th><th>Tồn kho</th><th>Trạng thái</th><th>Thao tác</th></tr></thead>
-            <tbody>{rows.length ? rows.map((item) => <tr key={item.id} onClick={() => selectProduct(item.id)} className={selectedId === item.id ? "selected" : ""}>
-              <td onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Chọn ${item.name}`} checked={checkedIds.includes(item.id)} onChange={(event) => setCheckedIds((old) => event.target.checked ? [...old, item.id] : old.filter((id) => id !== item.id))}/></td>
-              <td>{item.image ? <img className="product-row-image" src={item.image} alt=""/> : <span className="product-row-image product-image-placeholder">◇</span>}</td>
+            <thead><tr><th className="product-check-col"><input type="checkbox" aria-label="Chọn tất cả sản phẩm" checked={rows.length > 0 && rows.every((item) => checkedIdSet.has(item.id))} onChange={(event) => setCheckedIds(event.target.checked ? rows.map((item) => item.id) : [])}/></th><th>Ảnh</th><th>Tên sản phẩm</th><th>Danh mục</th><th>Giá bán</th><th>Tồn kho</th><th>Trạng thái</th><th>Thao tác</th></tr></thead>
+            <tbody>{visibleRows.length ? visibleRows.map((item) => <tr key={item.id} onClick={() => selectProduct(item.id)} className={selectedId === item.id ? "selected" : ""}>
+              <td onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Chọn ${item.name}`} checked={checkedIdSet.has(item.id)} onChange={(event) => setCheckedIds((old) => event.target.checked ? [...old, item.id] : old.filter((id) => id !== item.id))}/></td>
+              <td>{item.image ? <img className="product-row-image" src={item.image} alt="" loading="lazy" decoding="async"/> : <span className="product-row-image product-image-placeholder">◇</span>}</td>
               <td><span className="product-name-cell">{item.name}</span><small>SKU: {item.id}</small></td>
               <td><span className="category-cell">{item.category ?? "Chưa phân loại"}</span><small>{item.productType ?? "Trang sức"} · {item.subcategory ?? "—"}</small></td>
-              <td className="product-price-cell">{money(item.price)}</td><td>{item.stock}</td><td><span className="product-row-status"><Status>{item.status}</Status>{item.isNew && <span className="new-product-badge">Mới</span>}</span></td>
-              <td className="product-row-actions" onClick={(event) => event.stopPropagation()}><button disabled={busyActionId === item.id} aria-label={(item.status === "Đang hoạt động" ? "Ẩn " : "Hiện ") + item.name} title={(item.status === "Đang hoạt động" ? "Ẩn" : "Hiện") + " sản phẩm trên website"} onClick={() => void toggleVisibility(item)}><Icon name={item.status === "Đang hoạt động" ? "eye" : "eyeOff"}/></button><button className="danger" disabled={busyActionId === item.id} aria-label={`Xóa ${item.name}`} title="Xóa sản phẩm khỏi GEME và POS365" onClick={() => void deleteProduct(item)}><Icon name="trash"/></button></td>
+              <td className="product-price-cell">{item.isPremiumGemstone ? "Liên hệ" : money(item.price)}</td><td>{item.stock}</td><td><span className="product-row-status"><Status>{item.status}</Status>{item.isNew && <span className="new-product-badge">Mới</span>}{item.isPremiumGemstone && <span className="premium-product-badge">Cao cấp</span>}</span></td>
+              <td className="product-row-actions" onClick={(event) => event.stopPropagation()}>{canPublish && <button disabled={busyActionId === item.id} aria-label={(item.status === "Đang hoạt động" ? "Ẩn " : "Hiện ") + item.name} title={(item.status === "Đang hoạt động" ? "Ẩn" : "Hiện") + " sản phẩm trên website"} onClick={() => void toggleVisibility(item)}><Icon name={item.status === "Đang hoạt động" ? "eye" : "eyeOff"}/></button>}{canDelete && <button className="danger" disabled={busyActionId === item.id} aria-label={`Xóa ${item.name}`} title="Xóa sản phẩm khỏi GEME và POS365" onClick={() => void deleteProduct(item)}><Icon name="trash"/></button>}</td>
             </tr>) : <tr><td className="table-empty" colSpan={8}>{products.length ? "Không tìm thấy sản phẩm phù hợp." : "Chưa có sản phẩm."}</td></tr>}</tbody>
           </table>
         </div>
-        <div className="product-pagination"><span>Hiển thị {rows.length ? 1 : 0} - {rows.length} / {rows.length} sản phẩm{checkedIds.length > 0 && ` · Đã chọn ${checkedIds.length}`}</span></div>
+        <div className="product-pagination"><span>Hiển thị {visibleStart} - {visibleEnd} / {rows.length} sản phẩm{checkedIds.length > 0 && ` · Đã chọn ${checkedIds.length}`}</span><div><button type="button" aria-label="Trang trước" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>‹</button><span>Trang {currentPage + 1} / {pageCount}</span><button type="button" aria-label="Trang sau" disabled={currentPage >= pageCount - 1} onClick={() => setPage(currentPage + 1)}>›</button></div></div>
       </section>
     </main>
 
@@ -515,38 +595,41 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       <div className="product-detail-title"><h2>Chi tiết sản phẩm</h2><button className="product-close" aria-label="Đóng chi tiết" onClick={() => setSelectedId("")}><Icon name="close"/></button></div>
       <div className="product-overview">
         <div className="product-gallery-preview">{product.coverVideoUrl ? <video className="product-large-image" src={product.coverVideoUrl} muted autoPlay loop playsInline preload="metadata" aria-label={`${product.name} · video bìa`}/> : gallery.length ? <img className="product-large-image" src={gallery[imageIndex % gallery.length]} alt={product.name || "Ảnh sản phẩm"}/> : <div className="product-image-placeholder product-large-image">Chưa có ảnh sản phẩm</div>}<div className="product-gallery-thumbs">{gallery.slice(0, 4).map((src, index) => <button key={`${src}-${index}`} className={!product.coverVideoUrl && index === imageIndex ? "active" : ""} onClick={() => setImageIndex(index)} aria-label={`Xem ảnh ${index + 1}`}><img src={src} alt=""/></button>)}</div></div>
-        <div className="product-overview-copy"><h3>{product.name}</h3><small>SKU: {product.id}</small><div className="product-overview-price"><strong>{money(product.price)}</strong><Status>{product.status}</Status>{product.isNew && <span className="new-product-badge">Mới</span>}</div><p className="product-crumb">{product.productType ?? "Trang sức"}{product.category ? `　›　${product.category}` : "　›　Chưa chọn danh mục"}{product.subcategory ? `　›　${product.subcategory}` : ""}</p><div className="product-meta-line"><span>Tồn kho · quản lý riêng</span><strong>{product.stock}</strong></div><div className="product-meta-line"><span>Đã bán</span><strong>{product.sold}</strong></div><div className="product-rating"><span>Đánh giá</span><b>{product.reviews ? `${product.rating ?? ""} (${product.reviews})` : "Chưa có đánh giá"}</b></div></div>
+        <div className="product-overview-copy"><h3>{product.name}</h3><small>SKU: {product.id}</small><div className="product-overview-price"><strong>{product.isPremiumGemstone ? "Liên hệ" : money(product.price)}</strong><Status>{product.status}</Status>{product.isNew && <span className="new-product-badge">Mới</span>}{product.isPremiumGemstone && <span className="premium-product-badge">Cao cấp</span>}</div><p className="product-crumb">{product.productType ?? "Trang sức"}{product.category ? `　›　${product.category}` : "　›　Chưa chọn danh mục"}{product.subcategory ? `　›　${product.subcategory}` : ""}</p><div className="product-meta-line"><span>Tồn kho · quản lý riêng</span><strong>{product.stock}</strong></div><div className="product-meta-line"><span>Đã bán</span><strong>{product.sold}</strong></div><div className="product-rating"><span>Đánh giá</span><b>{product.reviews ? `${product.rating ?? ""} (${product.reviews})` : "Chưa có đánh giá"}</b></div></div>
       </div>
 
-      <div className="product-tabs" role="tablist" aria-label="Chi tiết sản phẩm">{tabs.map((tab) => <button key={tab.key} role="tab" aria-selected={activeTab === tab.key} className={activeTab === tab.key ? "active" : ""} onClick={() => setActiveTab(tab.key)}>{tab.label}</button>)}</div>
+      <div className="product-tabs" role="tablist" aria-label="Chi tiết sản phẩm">{tabs.filter((tab)=>tab.key!=="variants"||canEditPrice).map((tab) => <button key={tab.key} role="tab" aria-selected={activeTab === tab.key} className={activeTab === tab.key ? "active" : ""} onClick={() => setActiveTab(tab.key)}>{tab.label}</button>)}</div>
 
       {activeTab === "basic" && <section className="product-editor" aria-label="Thông tin cơ bản">
-        <label className="product-field"><span>Tên sản phẩm <b>*</b></span><input value={product.name} onChange={(event) => update("name", event.target.value)} /></label>
-        <div className="product-field-grid"><label className="product-field"><span>Nhóm sản phẩm <b>*</b></span><select value={product.productType ?? "Trang sức"} onChange={(event) => categoryTypeChanged(event.target.value as "Trang sức" | "Đá quý")}><option>Trang sức</option><option>Đá quý</option></select></label><label className="product-field"><span>{isGemstone ? "Loại đá / danh mục cấp 2" : "Danh mục sản phẩm"} <b>*</b></span><select value={isGemstone ? product.gemstoneTypeId ?? product.categoryId ?? "" : product.categoryId ?? selectedCategory?.id ?? ""} onChange={(event) => categoryChanged(event.target.value)}><option value="">{isGemstone ? "Chọn loại đá" : "Chọn danh mục"}</option>{productCategories.map((category) => {const parent = categoryRecords.find((item) => item.id === category.parentId);return <option key={category.id} value={category.id}>{!isGemstone && parent && parent.id !== productRoot?.id ? parent.name + " / " + category.name : category.name}</option>;})}</select>{isGemstone && <small>Chọn loại đá. Dạng cắt và size hoặc carat/chất lượng được quản lý theo cách định giá của danh mục.</small>}</label></div>
-        {isGemstone ? <div className="product-variant-note">Đá quý dùng dạng cắt cấp 3 và biến thể theo cấu hình danh mục. Có thể quản lý các SKU trong tab <b>Biến thể &amp; Giá</b>.</div> : <label className="product-field"><span>Đá gắn / Chất liệu</span><select value={product.materialOptionId ?? ""} onChange={(event) => { const option = materials.find((item) => item.id === event.target.value); update("materialOptionId", option?.id ?? ""); update("subcategory", option?.name ?? ""); }}><option value="">Chọn đá gắn hoặc chất liệu</option>{materialOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>}
-        <label className="product-field"><span>Khối lượng</span><div className="price-input"><input aria-label="Khối lượng (gram)" type="number" min="0" step="0.01" value={product.weightGrams ?? ""} onChange={(event) => update("weightGrams", event.target.value === "" ? undefined : Number(event.target.value))}/><i>g</i></div></label>
-        <div className="product-field"><span>Kích thước (dài × rộng × cao, cm)</span><div className="product-dimension-fields"><input aria-label="Dài (cm)" type="number" min="0" step="0.01" value={product.lengthCm ?? ""} onChange={(event) => update("lengthCm", event.target.value === "" ? undefined : Number(event.target.value))}/><b>×</b><input aria-label="Rộng (cm)" type="number" min="0" step="0.01" value={product.widthCm ?? ""} onChange={(event) => update("widthCm", event.target.value === "" ? undefined : Number(event.target.value))}/><b>×</b><input aria-label="Cao (cm)" type="number" min="0" step="0.01" value={product.heightCm ?? ""} onChange={(event) => update("heightCm", event.target.value === "" ? undefined : Number(event.target.value))}/></div></div>
-        <label className="product-field"><span>Mô tả ngắn</span><textarea rows={2} maxLength={160} value={product.description ?? ""} onChange={(event) => update("description", event.target.value)}/><small className="field-counter">{(product.description ?? "").length}/160</small></label>
-        <div className="product-field"><span>Mô tả chi tiết</span><div className="rich-toolbar"><button type="button"><b>B</b></button><button type="button"><i>I</i></button><button type="button"><u>U</u></button><button type="button">☷</button><button type="button">☰</button><button type="button">↔</button><button type="button">↗</button><button type="button"><Icon name="image"/></button><button type="button">ⓘ</button></div><textarea className="detail-description" rows={4} maxLength={1000} value={product.fullDescription ?? ""} onChange={(event) => update("fullDescription", event.target.value)}/><small className="field-counter">{(product.fullDescription ?? "").length}/1000</small></div>
-        <div className="product-section-caption">Giá bán</div>{product.priceVariants?.length || usesQualityPricing ? <div className="variant-price-note">Giá bán được nhập cho từng biến thể trong tab <b>Biến thể &amp; Giá</b>. Các lựa chọn và số lượng chỉ được tạo/cập nhật tại Quản lý tồn kho.</div> : <div className="product-field-grid price-stock-grid"><label className="product-field"><span>Giá bán <b>*</b></span><div className="price-input"><input type="text" inputMode="numeric" value={product.price || ""} onChange={(event) => update("price", parsePriceInput(event.target.value))}/><i>₫</i></div></label><label className="product-field"><span>Giá gốc</span><div className="price-input"><input type="text" inputMode="numeric" value={product.originalPrice || ""} onChange={(event) => update("originalPrice", parsePriceInput(event.target.value))}/><i>₫</i></div></label></div>}{!product.priceVariants?.length && !usesQualityPricing && <small className="inventory-management-hint">Số lượng tồn kho được quản lý riêng trong mục Quản lý tồn kho.</small>}
-        <div className="product-publish"><div><strong>Trạng thái</strong><small>Hiển thị sản phẩm trên website</small></div><label className="product-switch"><input type="checkbox" checked={product.status === "Đang hoạt động"} onChange={(event) => update("status", event.target.checked ? "Đang hoạt động" : "Tạm ẩn")}/><span/><small>{product.status === "Đang hoạt động" ? "Hiển thị trên website" : "Tạm ẩn sản phẩm"}</small></label></div>
-        <div className="product-new-flag"><div><strong>Sản phẩm mới</strong><small>Hiện nhãn “Mới” riêng trong danh sách sản phẩm</small></div><label className="product-switch"><input type="checkbox" checked={Boolean(product.isNew)} onChange={(event) => update("isNew", event.target.checked)}/><span/><small>{product.isNew ? "Đang gắn nhãn" : "Không gắn nhãn"}</small></label></div>
+        <label className="product-field"><span>Tên sản phẩm <b>*</b></span><input value={product.name} disabled={!canEditContent} onChange={(event) => update("name", event.target.value)} /></label>
+        <div className="product-basic-classification">
+          <div className="product-field-grid product-catalog-grid"><label className="product-field"><span>Nhóm sản phẩm <b>*</b></span><select disabled={!canFullCatalog} value={product.productType ?? "Trang sức"} onChange={(event) => categoryTypeChanged(event.target.value as "Trang sức" | "Đá quý")}><option>Trang sức</option><option>Đá quý</option></select></label><label className="product-field"><span>{isGemstone ? "Loại đá / danh mục cấp 2" : "Danh mục sản phẩm"} <b>*</b></span><select disabled={!canFullCatalog} value={isGemstone ? product.gemstoneTypeId ?? product.categoryId ?? "" : product.categoryId ?? selectedCategory?.id ?? ""} onChange={(event) => categoryChanged(event.target.value)}><option value="">{isGemstone ? "Chọn loại đá" : "Chọn danh mục"}</option>{productCategories.map((category) => {const parent = categoryRecords.find((item) => item.id === category.parentId);return <option key={category.id} value={category.id}>{!isGemstone && parent && parent.id !== productRoot?.id ? parent.name + " / " + category.name : category.name}</option>;})}</select></label></div>
+          {isGemstone ? <div className="product-category-guidance" role="note"><span className="product-category-guidance-icon" aria-hidden="true">◇</span><div className="product-category-guidance-copy"><strong>Quản lý theo danh mục đá</strong><span>Dạng cắt, kích thước hoặc carat/chất lượng được cấu hình trong tab <b>Biến thể &amp; Giá</b>.</span></div></div> : <label className="product-field product-material-field"><span>Đá gắn / Chất liệu</span><select disabled={!canFullCatalog} value={product.materialOptionId ?? ""} onChange={(event) => { const option = materials.find((item) => item.id === event.target.value); update("materialOptionId", option?.id ?? ""); update("subcategory", option?.name ?? ""); }}><option value="">Chọn đá gắn hoặc chất liệu</option>{materialOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>}
+        </div>
+        {isGemstone && canPublish && <div className="product-new-flag"><div><strong>Hàng cao cấp</strong><small>Website luôn hiển thị “Liên hệ” và không nhận đặt hàng trực tiếp. Giá lưu nội bộ không bị thay đổi.</small></div><label className="product-switch"><input type="checkbox" checked={Boolean(product.isPremiumGemstone)} onChange={(event) => update("isPremiumGemstone", event.target.checked)}/><span/><small>{product.isPremiumGemstone ? "Đang gắn nhãn" : "Chưa gắn nhãn"}</small></label></div>}
+        <label className="product-field"><span>Khối lượng</span><div className="price-input"><input disabled={!canFullCatalog} aria-label="Khối lượng (gram)" type="number" min="0" step="0.01" value={product.weightGrams ?? ""} onChange={(event) => update("weightGrams", event.target.value === "" ? undefined : Number(event.target.value))}/><i>g</i></div></label>
+        <div className="product-field"><span>Kích thước (dài × rộng × cao, cm)</span><div className="product-dimension-fields"><input disabled={!canFullCatalog} aria-label="Dài (cm)" type="number" min="0" step="0.01" value={product.lengthCm ?? ""} onChange={(event) => update("lengthCm", event.target.value === "" ? undefined : Number(event.target.value))}/><b>×</b><input disabled={!canFullCatalog} aria-label="Rộng (cm)" type="number" min="0" step="0.01" value={product.widthCm ?? ""} onChange={(event) => update("widthCm", event.target.value === "" ? undefined : Number(event.target.value))}/><b>×</b><input disabled={!canFullCatalog} aria-label="Cao (cm)" type="number" min="0" step="0.01" value={product.heightCm ?? ""} onChange={(event) => update("heightCm", event.target.value === "" ? undefined : Number(event.target.value))}/></div></div>
+        <label className="product-field"><span>Mô tả ngắn</span><textarea disabled={!canEditContent} rows={2} maxLength={160} value={product.description ?? ""} onChange={(event) => update("description", event.target.value)}/><small className="field-counter">{(product.description ?? "").length}/160</small></label>
+        <div className="product-field"><span>Mô tả chi tiết</span><div className="rich-toolbar"><button type="button"><b>B</b></button><button type="button"><i>I</i></button><button type="button"><u>U</u></button><button type="button">☷</button><button type="button">☰</button><button type="button">↔</button><button type="button">↗</button><button type="button"><Icon name="image"/></button><button type="button">ⓘ</button></div><textarea disabled={!canEditContent} className="detail-description" rows={4} maxLength={1000} value={product.fullDescription ?? ""} onChange={(event) => update("fullDescription", event.target.value)}/><small className="field-counter">{(product.fullDescription ?? "").length}/1000</small></div>
+        <div className="product-section-caption">Giá bán</div>{product.isPremiumGemstone && <div className="variant-price-note">Website luôn hiển thị “Liên hệ”; giá trong hồ sơ Admin được giữ làm dữ liệu nội bộ và không hiện cho khách.</div>}{product.priceVariants?.length || usesQualityPricing ? <div className="variant-price-note">Giá bán được nhập cho từng biến thể trong tab <b>Biến thể &amp; Giá</b>. Các lựa chọn và số lượng chỉ được tạo/cập nhật tại Quản lý tồn kho.</div> : <div className="product-field-grid price-stock-grid"><label className="product-field"><span>Giá bán <b>*</b></span><div className="price-input"><input disabled={!canEditPrice} type="text" inputMode="numeric" value={product.price || ""} onChange={(event) => update("price", parsePriceInput(event.target.value))}/><i>₫</i></div></label><label className="product-field"><span>Giá gốc</span><div className="price-input"><input disabled={!canEditPrice} type="text" inputMode="numeric" value={product.originalPrice || ""} onChange={(event) => update("originalPrice", parsePriceInput(event.target.value))}/><i>₫</i></div></label></div>}{!product.priceVariants?.length && !usesQualityPricing && <small className="inventory-management-hint">Số lượng tồn kho được quản lý riêng trong mục Quản lý tồn kho.</small>}
+        <div className="product-publish"><div><strong>Trạng thái</strong><small>{canPublish ? "Thay đổi trạng thái tại thao tác đăng/ẩn ở danh sách sản phẩm." : "Tài khoản chỉ có thể chỉnh sửa nội dung được cấp."}</small></div><strong>{product.status}</strong></div>
+        {canPublish && <div className="product-new-flag"><div><strong>Sản phẩm mới</strong><small>Hiện nhãn “Mới” riêng trong danh sách sản phẩm</small></div><label className="product-switch"><input type="checkbox" checked={Boolean(product.isNew)} onChange={(event) => update("isNew", event.target.checked)}/><span/><small>{product.isNew ? "Đang gắn nhãn" : "Không gắn nhãn"}</small></label></div>}
       </section>}
 
-      {activeTab === "variants" && <section className="product-tab-content">
+      {activeTab === "variants" && canEditPrice && <section className="product-tab-content">
         <div className="product-tab-title"><div><h3>Biến thể, giá &amp; hình ảnh</h3><p>Biến thể và tồn kho lấy từ kho; tại đây chỉnh giá cùng ảnh/video theo từng SKU con, không tạo hoặc xóa biến thể.</p></div></div>
         {combinationRows(product).length ? <div className="variant-table product-variant-edit-list">
-          {combinationRows(product).map((variant) => { const uploadKey = variant.sku || `${variant.shape || ""}-${variant.quality}-${variant.beadSize || ""}`; const mediaCount = (variant.imageUrls?.length || 0) + (variant.videoUrl ? 1 : 0); const shapeName = ({ ROUND: "Tròn", OVAL: "Oval", SQUARE: "Vuông" } as Record<string, string>)[String(variant.shape || "").toUpperCase()] || ""; return <div className="variant-edit-card" key={`${variant.sku || variant.shape || variant.quality}-${variant.beadSize ?? "standard"}`}><div className="variant-edit-card-heading"><div><strong>{isGemstone ? [`Dạng cắt ${variant.quality}`, variant.beadSize, variant.carat != null ? `${variant.carat} ct` : "", variant.gemstoneQuality ? `Chất lượng ${variant.gemstoneQuality}` : ""].filter(Boolean).join(" · ") : [shapeName, variant.quality, variant.beadSize].filter(Boolean).join(" · ")}</strong><small>{variant.sku || "SKU chưa có"} · Tồn {Number(variant.stock) || 0}</small></div><label className="variant-number-field"><span>{isGemstone && ["GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"].includes(String(pricingMode)) ? "Giá bán / 1 ct" : "Giá bán"}</span><div><input aria-label={`Giá ${shapeName} ${variant.quality} ${variant.beadSize ?? ""}`} type="text" inputMode="numeric" value={variant.price || ""} onChange={(event) => updatePriceVariant(variant, "price", parsePriceInput(event.target.value))}/><small>₫</small></div></label></div><div className="variant-edit-media"><div className="variant-edit-media-heading"><strong>Ảnh &amp; video biến thể</strong><span>{mediaCount}/{MAX_VARIANT_MEDIA_ITEMS} tệp · lưu riêng theo SKU con</span></div><div className="variant-edit-media-images">{(variant.imageUrls || []).map((url, index) => { const alt = `Ảnh ${variant.sku || variant.quality} ${index + 1}`; return <span key={`${url.slice(0, 40)}-${index}`}><button type="button" className="variant-edit-image-preview" aria-label={`Phóng to ${alt}`} title="Bấm để xem ảnh lớn" onClick={() => setPreviewVariantImage({ src: url, alt })}><img src={url} alt={alt}/></button><button type="button" className="variant-edit-image-remove" aria-label={`Xóa ảnh biến thể ${index + 1}`} onClick={() => updateVariantMedia(variant, { imageUrls: (variant.imageUrls || []).filter((_, imageIndex) => imageIndex !== index) })}>×</button></span>; })}</div><div className="create-variant-media-actions"><label className="create-variant-media-picker"><input type="file" accept="image/*" multiple disabled={Boolean(uploadingVariantMedia[uploadKey]) || mediaCount >= MAX_VARIANT_MEDIA_ITEMS} onChange={(event) => { void handleVariantImages(variant, event.target.files ?? undefined); event.currentTarget.value = ""; }}/><span>{uploadingVariantMedia[uploadKey] ? "Đang xử lý ảnh…" : "＋ Thêm ảnh"}</span></label><label className="create-variant-media-picker"><input type="file" accept="video/mp4,video/webm,.mp4,.webm" disabled={Boolean(uploadingVariantMedia[uploadKey]) || (!variant.videoUrl && mediaCount >= MAX_VARIANT_MEDIA_ITEMS)} onChange={(event) => { void handleVariantVideo(variant, event.target.files?.[0]); event.currentTarget.value = ""; }}/><span>{uploadingVariantMedia[uploadKey] ? "Đang tải video…" : variant.videoUrl ? "＋ Đổi video" : "＋ Tải video"}</span></label></div><label className="variant-edit-video-url"><span>Đường dẫn video</span><input type="url" value={variant.videoUrl || ""} onChange={(event) => { const value = event.target.value || null; if (value && !variant.videoUrl && (variant.imageUrls?.length || 0) >= MAX_VARIANT_MEDIA_ITEMS) { onNotify(`Mỗi biến thể tối đa ${MAX_VARIANT_MEDIA_ITEMS} tệp, tính cả video.`); return; } updateVariantMedia(variant, { videoUrl: value }); }} placeholder="https://… hoặc /media/…"/></label>{variant.videoUrl && <video className="create-variant-video-preview" src={variant.videoUrl} controls playsInline preload="metadata" aria-label={`Video ${variant.sku || variant.quality}`}/>}</div></div>; })}
+          {combinationRows(product).map((variant) => { const uploadKey = variant.sku || `${variant.shape || ""}-${variant.quality}-${variant.beadSize || ""}`; const mediaCount = (variant.imageUrls?.length || 0) + (variant.videoUrl ? 1 : 0); const shapeName = ({ ROUND: "Tròn", OVAL: "Oval", SQUARE: "Vuông" } as Record<string, string>)[String(variant.shape || "").toUpperCase()] || ""; return <div className="variant-edit-card" key={`${variant.sku || variant.shape || variant.quality}-${variant.beadSize ?? "standard"}`}><div className="variant-edit-card-heading"><div><strong>{isGemstone ? [`Dạng cắt ${variant.quality}`, variant.beadSize, variant.carat != null ? `${variant.carat} ct` : "", variant.gemstoneQuality ? `Chất lượng ${variant.gemstoneQuality}` : ""].filter(Boolean).join(" · ") : [shapeName, variant.quality, variant.beadSize].filter(Boolean).join(" · ")}</strong><small>{variant.sku || "SKU chưa có"} · Tồn {Number(variant.stock) || 0}</small></div><label className="variant-number-field"><span>{isGemstone && ["GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"].includes(String(pricingMode)) ? "Giá bán / 1 ct" : "Giá bán"}</span><div><input aria-label={`Giá ${shapeName} ${variant.quality} ${variant.beadSize ?? ""}`} type="text" inputMode="numeric" disabled={!canEditPrice} value={variant.price || ""} onChange={(event) => updatePriceVariant(variant, "price", parsePriceInput(event.target.value))}/><small>₫</small></div></label></div><div className="variant-edit-media"><div className="variant-edit-media-heading"><strong>Ảnh &amp; video biến thể</strong><span>{mediaCount}/{MAX_VARIANT_MEDIA_ITEMS} tệp · lưu riêng theo SKU con</span></div><div className="variant-edit-media-images">{(variant.imageUrls || []).map((url, index) => { const alt = `Ảnh ${variant.sku || variant.quality} ${index + 1}`; return <span key={`${url.slice(0, 40)}-${index}`}><button type="button" className="variant-edit-image-preview" aria-label={`Phóng to ${alt}`} title="Bấm để xem ảnh lớn" onClick={() => setPreviewVariantImage({ src: url, alt })}><img src={url} alt={alt}/></button>{canEditContent && <button type="button" className="variant-edit-image-remove" aria-label={`Xóa ảnh biến thể ${index + 1}`} onClick={() => updateVariantMedia(variant, { imageUrls: (variant.imageUrls || []).filter((_, imageIndex) => imageIndex !== index) })}>×</button>}</span>; })}</div>{canEditContent && <><div className="create-variant-media-actions"><label className="create-variant-media-picker"><input type="file" accept="image/*" multiple disabled={Boolean(uploadingVariantMedia[uploadKey]) || mediaCount >= MAX_VARIANT_MEDIA_ITEMS} onChange={(event) => { void handleVariantImages(variant, event.target.files ?? undefined); event.currentTarget.value = ""; }}/><span>{uploadingVariantMedia[uploadKey] ? "Đang xử lý ảnh…" : "＋ Thêm ảnh"}</span></label><label className="create-variant-media-picker"><input type="file" accept="video/mp4,video/webm,.mp4,.webm" disabled={Boolean(uploadingVariantMedia[uploadKey]) || (!variant.videoUrl && mediaCount >= MAX_VARIANT_MEDIA_ITEMS)} onChange={(event) => { void handleVariantVideo(variant, event.target.files?.[0]); event.currentTarget.value = ""; }}/><span>{uploadingVariantMedia[uploadKey] ? "Đang tải video…" : variant.videoUrl ? "＋ Đổi video" : "＋ Tải video"}</span></label></div><label className="variant-edit-video-url"><span>Đường dẫn video</span><input type="url" value={variant.videoUrl || ""} onChange={(event) => { const value = event.target.value || null; if (value && !variant.videoUrl && (variant.imageUrls?.length || 0) >= MAX_VARIANT_MEDIA_ITEMS) { onNotify(`Mỗi biến thể tối đa ${MAX_VARIANT_MEDIA_ITEMS} tệp, tính cả video.`); return; } updateVariantMedia(variant, { videoUrl: value }); }} placeholder="https://… hoặc /media/…"/></label></>}{variant.videoUrl && <video className="create-variant-video-preview" src={variant.videoUrl} controls playsInline preload="metadata" aria-label={`Video ${variant.sku || variant.quality}`}/>}</div></div>; })}
         </div> : <div className="jewelry-variant-note"><strong>{usesQualityPricing ? "Chưa có biến thể trong kho." : "Sản phẩm đang dùng một giá chung."}</strong><span>{usesQualityPricing ? "Tạo các phân loại và số lượng trong phiếu nhập kho trước. Sau đó nhập giá bán tại đây." : "Số lượng tồn kho được quản lý riêng trong mục Quản lý tồn kho."}</span></div>}
       </section>}
 
-      {activeTab === "images" && <section className="product-tab-content"><div className="product-tab-title"><div><h3>Ảnh &amp; video bìa</h3><p>Video tự chạy khi khách nhìn thấy sản phẩm, tắt tiếng và lặp liên tục.</p></div><span>{gallery.length}/{MAX_PRODUCT_IMAGES} ảnh</span></div><div className="product-cover-video-field"><div><strong>Video bìa (không bắt buộc)</strong><small>MP4 hoặc WebM, tối đa 8 MB. Nếu có video, website ưu tiên hiển thị video thay ảnh bìa.</small></div>{product.coverVideoUrl && <video className="product-cover-video-preview" src={product.coverVideoUrl} muted autoPlay loop playsInline preload="metadata" aria-label={`${product.name} · video bìa`}/>}<label className="product-cover-video-picker"><input type="file" accept="video/mp4,video/webm,.mp4,.webm" disabled={uploadingCoverVideo} onChange={(event) => { void uploadCoverVideo(event.target.files?.[0]); event.currentTarget.value = ""; }}/><span>{uploadingCoverVideo ? "Đang tải video…" : product.coverVideoUrl ? "Đổi video bìa" : "Chọn video bìa"}</span></label>{product.coverVideoUrl && <button type="button" className="product-cover-video-remove" onClick={() => update("coverVideoUrl", "")}>Gỡ video</button>}<label className="product-cover-video-url"><span>Hoặc dán đường dẫn video</span><input type="url" value={product.coverVideoUrl || ""} onChange={(event) => update("coverVideoUrl", event.target.value)} placeholder="https://… hoặc /media/…"/></label></div><div className="product-tab-title product-gallery-heading"><div><h3>Thư viện ảnh</h3><p>Ảnh đầu tiên làm ảnh bìa nếu chưa chọn video. Ảnh tải lên ngay sau khi chọn.</p></div></div><div className="product-image-grid">{gallery.map((src, index) => <div className="product-image-item" key={`${src}-${index}`}><button type="button" className={index === imageIndex ? "active" : ""} onClick={() => setImageIndex(index)}><img src={src} alt={`Ảnh sản phẩm ${index + 1}`}/><small>{index === 0 && !product.coverVideoUrl ? "Ảnh bìa dự phòng" : `Ảnh ${index + 1}`}</small></button><button type="button" className="product-image-remove" aria-label={`Xóa ảnh ${index + 1}`} onClick={() => removeProductImage(index)}>×</button></div>)}</div><label className="image-dropzone"><input className="product-image-file-input" type="file" accept="image/*" multiple disabled={uploadingImages || gallery.length >= MAX_PRODUCT_IMAGES} onChange={(event) => { void uploadProductImages(event.target.files ?? undefined); event.currentTarget.value = ""; }}/><Icon name="image"/><strong>{uploadingImages ? "Đang tải ảnh lên…" : "Chọn một hoặc nhiều ảnh"}</strong><span>{uploadingImages ? "Đang tối ưu và lưu ảnh; không cần chờ đến lúc bấm lưu sản phẩm." : "Ảnh được tối ưu và tải lên ngay khi chọn. Bấm Lưu thay đổi để cập nhật thông tin sản phẩm."}</span></label><TechnicalImagePicker image={product.technicalImage} video={product.technicalVideo} uploading={uploadingTechnicalImage} uploadingVideo={uploadingTechnicalVideo} onSelect={(file) => void uploadTechnicalImage(file)} onSelectVideo={(file) => void uploadTechnicalVideo(file)} onRemove={() => update("technicalImage", "")} onRemoveVideo={() => update("technicalVideo", "")}/></section>}
+      {activeTab === "images" && <section className="product-tab-content"><div className="product-tab-title"><div><h3>Ảnh &amp; video bìa</h3><p>Video tự chạy khi khách nhìn thấy sản phẩm, tắt tiếng và lặp liên tục.</p></div><span>{gallery.length}/{MAX_PRODUCT_IMAGES} ảnh</span></div><div className="product-cover-video-field"><div><strong>Video bìa (không bắt buộc)</strong><small>MP4 hoặc WebM, tối đa 8 MB. Nếu có video, website ưu tiên hiển thị video thay ảnh bìa.</small></div>{product.coverVideoUrl && <video className="product-cover-video-preview" src={product.coverVideoUrl} muted autoPlay loop playsInline preload="metadata" aria-label={`${product.name} · video bìa`}/>}<label className="product-cover-video-picker"><input type="file" accept="video/mp4,video/webm,.mp4,.webm" disabled={!canEditContent || uploadingCoverVideo} onChange={(event) => { void uploadCoverVideo(event.target.files?.[0]); event.currentTarget.value = ""; }}/><span>{uploadingCoverVideo ? "Đang tải video…" : product.coverVideoUrl ? "Đổi video bìa" : "Chọn video bìa"}</span></label>{product.coverVideoUrl && canEditContent && <button type="button" className="product-cover-video-remove" onClick={() => update("coverVideoUrl", "")}>Gỡ video</button>}<label className="product-cover-video-url"><span>Hoặc dán đường dẫn video</span><input type="url" disabled={!canEditContent} value={product.coverVideoUrl || ""} onChange={(event) => update("coverVideoUrl", event.target.value)} placeholder="https://… hoặc /media/…"/></label></div><div className="product-tab-title product-gallery-heading"><div><h3>Thư viện ảnh</h3><p>Ảnh đầu tiên làm ảnh bìa nếu chưa chọn video. Ảnh tải lên ngay sau khi chọn.</p></div></div><div className="product-image-grid">{gallery.map((src, index) => <div className="product-image-item" key={`${src}-${index}`}><button type="button" className={index === imageIndex ? "active" : ""} onClick={() => setImageIndex(index)}><img src={src} alt={`Ảnh sản phẩm ${index + 1}`}/><small>{index === 0 && !product.coverVideoUrl ? "Ảnh bìa dự phòng" : `Ảnh ${index + 1}`}</small></button>{canEditContent && <button type="button" className="product-image-remove" aria-label={`Xóa ảnh ${index + 1}`} onClick={() => removeProductImage(index)}>×</button>}</div>)}</div><label className="image-dropzone"><input className="product-image-file-input" type="file" accept="image/*" multiple disabled={!canEditContent || uploadingImages || gallery.length >= MAX_PRODUCT_IMAGES} onChange={(event) => { void uploadProductImages(event.target.files ?? undefined); event.currentTarget.value = ""; }}/><Icon name="image"/><strong>{uploadingImages ? "Đang tải ảnh lên…" : "Chọn một hoặc nhiều ảnh"}</strong><span>{uploadingImages ? "Đang tối ưu và lưu ảnh; không cần chờ đến lúc bấm lưu sản phẩm." : "Ảnh được tối ưu và tải lên ngay khi chọn. Bấm Lưu thay đổi để cập nhật thông tin sản phẩm."}</span></label><TechnicalImagePicker image={product.technicalImage} video={product.technicalVideo} uploading={uploadingTechnicalImage} uploadingVideo={uploadingTechnicalVideo} onSelect={(file) => void uploadTechnicalImage(file)} onSelectVideo={(file) => void uploadTechnicalVideo(file)} onRemove={() => update("technicalImage", "")} onRemoveVideo={() => update("technicalVideo", "")} disabled={!canEditContent}/></section>}
 
-      {activeTab === "seo" && <section className="product-tab-content"><div className="product-tab-title"><div><h3>Tối ưu tìm kiếm</h3><p>Xem trước cách sản phẩm xuất hiện trên công cụ tìm kiếm.</p></div></div><label className="product-field"><span>Tiêu đề SEO</span><input value={product.seoTitle ?? product.name} onChange={(event) => update("seoTitle", event.target.value)}/><small className="field-counter">{(product.seoTitle ?? product.name).length}/70</small></label><label className="product-field"><span>Mô tả SEO</span><textarea rows={4} maxLength={160} value={product.seoDescription ?? product.description ?? ""} onChange={(event) => update("seoDescription", event.target.value)}/><small className="field-counter">{(product.seoDescription ?? product.description ?? "").length}/160</small></label><div className="seo-preview"><small>geme.vn › san-pham › {product.id.toLowerCase()}</small><strong>{product.seoTitle ?? product.name}</strong><span>{product.seoDescription ?? product.description ?? "Khám phá trang sức đá quý thiên nhiên tinh tế tại GEME."}</span></div></section>}
+      {activeTab === "seo" && <section className="product-tab-content"><div className="product-tab-title"><div><h3>Tối ưu tìm kiếm</h3><p>Xem trước cách sản phẩm xuất hiện trên công cụ tìm kiếm.</p></div></div><label className="product-field"><span>Tiêu đề SEO</span><input disabled={!canEditContent} value={product.seoTitle ?? product.name} onChange={(event) => update("seoTitle", event.target.value)}/><small className="field-counter">{(product.seoTitle ?? product.name).length}/70</small></label><label className="product-field"><span>Mô tả SEO</span><textarea disabled={!canEditContent} rows={4} maxLength={160} value={product.seoDescription ?? product.description ?? ""} onChange={(event) => update("seoDescription", event.target.value)}/><small className="field-counter">{(product.seoDescription ?? product.description ?? "").length}/160</small></label><div className="seo-preview"><small>geme.vn › san-pham › {product.id.toLowerCase()}</small><strong>{product.seoTitle ?? product.name}</strong><span>{product.seoDescription ?? product.description ?? "Khám phá trang sức đá quý thiên nhiên tinh tế tại GEME."}</span></div></section>}
 
       {activeTab === "history" && <section className="product-tab-content"><div className="product-tab-title"><div><h3>Lịch sử cập nhật</h3><p>Các hoạt động gần đây của sản phẩm này.</p></div></div><div className="product-history product-history-empty">Chưa có lịch sử cập nhật.</div></section>}
 
-      <div className="product-editor-actions"><button className="button button-quiet" disabled={saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={cancelChanges}>Hủy</button><button className="button button-primary" disabled={saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save()}>{saving ? "Đang lưu…" : uploadingImages || uploadingCoverVideo || uploadingTechnicalVideo ? "Đang tải media…" : "Lưu thay đổi"}</button></div>
+      <div className="product-editor-actions"><button className="button button-quiet" disabled={saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={cancelChanges}>Hủy</button><button className="button button-primary" disabled={(!canFullCatalog && !canEditContent && !canEditPrice) || saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save()}>{saving ? "Đang lưu…" : uploadingImages || uploadingCoverVideo || uploadingTechnicalVideo ? "Đang tải media…" : "Lưu thay đổi"}</button></div>
     </aside> : <aside className="product-detail-panel product-detail-loading" aria-live="polite">
       <div className="product-detail-title"><h2>Chi tiết sản phẩm</h2><button className="product-close" aria-label="Đóng chi tiết" onClick={() => setSelectedId("")}><Icon name="close"/></button></div>
       <div className="workspace-loading">{detailsLoading ? "Đang tải chi tiết sản phẩm…" : detailsError || "Đang chuẩn bị dữ liệu sản phẩm…"}</div>

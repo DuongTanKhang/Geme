@@ -257,6 +257,21 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     await this.processPendingReceipts(receiptId);
   }
 
+  async purchaseOrderExists(codeInput: string) {
+    const config = this.readConfiguration();
+    if (!config.baseUrl || !config.username || !config.password || !config.branchId) {
+      throw new Error("POS365 chưa được cấu hình đủ thông tin để đối soát phiếu nhập.");
+    }
+    const code = String(codeInput || "").trim();
+    if (!code) throw new Error("Thiếu mã phiếu POS365 để đối soát.");
+    const sessionId = await this.authenticate(config);
+    const purchaseOrder = await this.findPurchaseOrder(config, sessionId, code);
+    if (!purchaseOrder) return false;
+    const branchId = asNumber(purchaseOrder.BranchId);
+    if (branchId !== null && branchId !== config.branchId) throw new Error(`Phiếu ${code} thuộc chi nhánh POS365 khác.`);
+    return true;
+  }
+
   async syncProductPricesNow(productId: string) {
     if (!this.isSyncEnabled()) return;
     await this.processPendingProductPrices(productId);

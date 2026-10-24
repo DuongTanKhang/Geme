@@ -27,6 +27,10 @@ export type OrderReceiptData = {
   status: string;
   payment: string;
   paymentStatus: string;
+  paymentCaptured?: number;
+  paymentRefunded?: number;
+  paymentBalance?: number;
+  paymentEntries?: Array<{ id: string; method: string; status: string; amount: number; providerRef?: string | null; paidAt?: string | null; refundedAmount: number; recordedByAdminId?: string | null; recordingNote?: string | null }>;
   emailOutbox?: { status: string; attemptCount: number; lastError?: string | null; nextAttemptAt?: string | null; acceptedAt?: string | null } | null;
   shipping: string;
   address: string;
@@ -73,6 +77,7 @@ function paymentStatusLabel(value: string) {
     FAILED: "Thanh toán thất bại",
     REFUNDED: "Đã hoàn tiền",
     PARTIALLY_REFUNDED: "Đã hoàn một phần",
+    PARTIALLY_PAID: "Đã thu một phần",
   } as Record<string, string>)[value] || value || "—";
 }
 

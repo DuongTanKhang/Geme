@@ -14,8 +14,6 @@ export function StoreProductCard({ product, promotions, compact = false, priorit
   const [favoriteError, setFavoriteError] = useState("");
   const isFavorite = favoriteIds.has(product.id);
   const image = product.images[0]?.url || "/assets/category-jewelry.jpg";
-  const category = product.category?.name || (product.kind === "GEMSTONE" ? "Mặt đá quý" : "Trang sức");
-  const material = product.materialOption?.name || product.gemstoneType?.name;
   const className = compact ? "product-card" : "catalog-product-card";
   const photoClass = compact ? "product-photo" : "catalog-product-photo";
   const nameClass = compact ? "product-name" : "catalog-product-name";
@@ -36,17 +34,16 @@ export function StoreProductCard({ product, promotions, compact = false, priorit
       <svg viewBox="0 0 24 24" fill={isFavorite ? "currentColor" : "none"} aria-hidden="true"><path d="M20.8 8.8c0 5-8.8 10.3-8.8 10.3S3.2 13.8 3.2 8.8A4.5 4.5 0 0 1 12 6.5a4.5 4.5 0 0 1 8.8 2.3Z" /></svg>
     </button>
     {favoriteError && <span className="product-favorite-feedback" role="status">{favoriteError}</span>}
-    <a className={`${photoClass}${secondaryImage ? " has-secondary-image" : ""}`} href={`/san-pham/${encodeURIComponent(product.slug)}`} aria-label={`Xem ${product.name}${soldOut ? " — Hết hàng" : ""}`}>
+    <a className={`${photoClass}${secondaryImage ? " has-secondary-image" : ""}`} href={`/san-pham/${encodeURIComponent(product.slug)}`} aria-label={`Xem ${product.name}${product.isPremiumGemstone ? " — Hàng cao cấp, liên hệ GEME" : soldOut ? " — Hết hàng" : ""}`}>
       {product.coverVideoUrl
         ? <ViewportVideo className="product-card-image product-cover-video" src={product.coverVideoUrl} poster={image} ariaLabel={`${product.name} · video bìa`} />
         : <Image className="product-card-image product-card-image-primary" src={image} alt={product.images[0]?.alt || product.name} fill sizes={compact ? "(max-width: 640px) 48vw, (max-width: 900px) 31vw, (max-width: 1440px) 24vw, 360px" : "(max-width: 640px) 48vw, (max-width: 1024px) 33vw, 25vw"} quality={80} loading={priority ? "eager" : "lazy"} fetchPriority={priority ? "high" : undefined} />}
       {secondaryImage && <Image className="product-card-image product-card-image-secondary" src={secondaryImage.url} alt={secondaryImage.alt || `${product.name} — ảnh thứ hai`} fill sizes={compact ? "(max-width: 640px) 48vw, (max-width: 900px) 31vw, (max-width: 1440px) 24vw, 360px" : "(max-width: 640px) 48vw, (max-width: 1024px) 33vw, 25vw"} quality={75} loading="lazy" />}
-      {soldOut ? <span className="catalog-badge catalog-badge-sold-out">Hết hàng</span> : product.isNew && <span className="catalog-badge">Mới</span>}
+      {product.kind === "GEMSTONE" && product.isPremiumGemstone ? <span className="catalog-badge catalog-badge-premium">Hàng cao cấp</span> : soldOut ? <span className="catalog-badge catalog-badge-sold-out">Hết hàng</span> : product.isNew && <span className="catalog-badge">Mới</span>}
     </a>
     <div className={compact ? "product-meta" : "catalog-product-meta"}>
       <div>
         <a href={`/san-pham/${encodeURIComponent(product.slug)}`} className={nameClass}>{product.name}</a>
-        {!compact && <p>{category}{material ? ` · ${material}` : ""}</p>}
         <div className={`store-product-prices${hasDiscount ? " has-promotion" : ""}`}>
           {hasDiscount && <span className="store-product-discount">−{new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 2 }).format(discountPercent)}%</span>}
           <strong className={compact ? "product-price" : undefined}>{salePrice ? formatStorePrice(salePrice) : "Liên hệ"}</strong>

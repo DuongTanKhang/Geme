@@ -379,6 +379,8 @@ model AdminUser {
   socialReconciliationClaims SocialPostTarget[] @relation("SocialTargetReconciliationClaim")
   shopeeOAuthStates ShopeeOAuthState[] @relation("ShopeeOAuthStateAdmin")
   shopeeConnectionsCreated ShopeeConnection[] @relation("ShopeeConnectionCreator")
+  contactInquiriesHandled ContactInquiry[] @relation("ContactInquiryHandler")
+  paymentRecords Payment[] @relation("PaymentRecordedBy")
   permissionGrants AdminPermissionGrant[] @relation("PermissionSubject")
   permissionsGranted AdminPermissionGrant[] @relation("PermissionGrantedBy")
 
@@ -398,6 +400,28 @@ model AdminPermissionGrant {
   @@id([adminId, permission])
   @@index([permission, effect])
   @@map("admin_permission_grants")
+}
+
+model ContactInquiry {
+  id               String    @id @default(uuid()) @db.Uuid
+  idempotencyKey   String    @unique @map("idempotency_key") @db.VarChar(128)
+  requestHash      String    @map("request_hash") @db.VarChar(64)
+  name             String    @db.VarChar(120)
+  email            String    @db.VarChar(320)
+  phone            String    @db.VarChar(32)
+  subject          String    @db.VarChar(80)
+  message          String    @db.Text
+  status           String    @default("NEW") @db.VarChar(20)
+  resolutionNote   String?   @map("resolution_note") @db.Text
+  handledByAdminId String?   @map("handled_by_admin_id") @db.Uuid
+  handledAt        DateTime? @map("handled_at") @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  handledBy        AdminUser? @relation("ContactInquiryHandler", fields: [handledByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@map("contact_inquiries")
 }
 
 model Customer {
@@ -495,6 +519,7 @@ model Product {
   status                ProductStatus          @default(DRAFT)
   isNew                 Boolean                @default(false) @map("is_new")
   isFeatured            Boolean                @default(false) @map("is_featured")
+    isPremiumGemstone      Boolean                @default(false) @map("is_premium_gemstone")
   price                 Decimal?               @db.Decimal(14, 0)
   originalPrice         Decimal?               @map("original_price") @db.Decimal(14, 0)
   stock                 Int                    @default(0)
@@ -701,7 +726,7 @@ model Order {
   emailOutbox     OrderEmailOutbox[]
   inventoryReservations InventoryReservation[]
   returns         OrderReturn[]
-  codReconciliationItem CodReconciliationItem?
+  codReconciliationItems CodReconciliationItem[]
   promotionUsage  PromotionUsage?
 
   @@index([status, placedAt(sort: Desc)])
@@ -746,6 +771,9 @@ model OrderItem {
 model Payment {
   id          String        @id @default(uuid()) @db.Uuid
   orderId     String        @map("order_id") @db.Uuid
+  idempotencyKey String?    @unique @map("idempotency_key") @db.VarChar(128)
+  recordedByAdminId String? @map("recorded_by_admin_id") @db.Uuid
+  recordingNote String?     @map("recording_note") @db.VarChar(1000)
   method      PaymentMethod
   status      PaymentStatus @default(PENDING)
   amount      Decimal       @db.Decimal(14, 0)
@@ -754,6 +782,7 @@ model Payment {
   createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
   order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  recordedByAdmin AdminUser? @relation("PaymentRecordedBy", fields: [recordedByAdminId], references: [id], onDelete: SetNull)
   refunds     PaymentRefund[]
 
   @@index([orderId, status])
@@ -856,18 +885,22 @@ model OrderReturnItem {
 
 model PaymentRefund {
   id               String      @id @default(uuid()) @db.Uuid
-  returnId         String      @map("return_id") @db.Uuid
+  returnId         String?     @map("return_id") @db.Uuid
   paymentId        String      @map("payment_id") @db.Uuid
   idempotencyKey   String      @unique @map("idempotency_key") @db.VarChar(128)
+  requestKey       String?     @map("request_key") @db.VarChar(128)
+  requestHash      String?     @map("request_hash") @db.VarChar(64)
+  externalReference String?    @map("external_reference") @db.VarChar(160)
   amount           Decimal     @db.Decimal(14, 0)
   note             String      @db.Text
   createdByAdminId String      @map("created_by_admin_id") @db.Uuid
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  returnCase       OrderReturn @relation(fields: [returnId], references: [id], onDelete: Restrict)
+  returnCase       OrderReturn? @relation(fields: [returnId], references: [id], onDelete: Restrict)
   payment          Payment     @relation(fields: [paymentId], references: [id], onDelete: Restrict)
 
   @@index([paymentId, createdAt])
   @@index([returnId, createdAt])
+  @@index([requestKey])
   @@map("payment_refunds")
 }
 
@@ -880,7 +913,8 @@ model CodReconciliationBatch {
   expectedTotal     Decimal  @default(0) @map("expected_total") @db.Decimal(14, 0)
   receivedTotal     Decimal  @default(0) @map("received_total") @db.Decimal(14, 0)
   feeTotal          Decimal  @default(0) @map("fee_total") @db.Decimal(14, 0)
-  status            String   @default("OPEN") @db.VarChar(16)
+  remittedTotal     Decimal? @map("remitted_total") @db.Decimal(14, 0)
+  status            String   @default("OPEN") @db.VarChar(32)
   decisionNote      String?  @map("decision_note") @db.Text
   createdByAdminId  String   @map("created_by_admin_id") @db.Uuid
   reconciledAt      DateTime? @map("reconciled_at") @db.Timestamptz(3)
@@ -896,11 +930,13 @@ model CodReconciliationBatch {
 model CodReconciliationItem {
   id             String   @id @default(uuid()) @db.Uuid
   batchId        String   @map("batch_id") @db.Uuid
-  orderId        String   @unique @map("order_id") @db.Uuid
+  orderId        String   @map("order_id") @db.Uuid
   expectedAmount Decimal  @map("expected_amount") @db.Decimal(14, 0)
   receivedAmount Decimal  @map("received_amount") @db.Decimal(14, 0)
   carrierFee    Decimal  @default(0) @map("carrier_fee") @db.Decimal(14, 0)
   varianceAmount Decimal  @map("variance_amount") @db.Decimal(14, 0)
+  remittedAmount Decimal? @map("remitted_amount") @db.Decimal(14, 0)
+  remittanceVariance Decimal? @map("remittance_variance") @db.Decimal(14, 0)
   status         String   @db.VarChar(16)
   note           String?  @db.Text
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -908,6 +944,7 @@ model CodReconciliationItem {
   order          Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
 
   @@unique([batchId, orderId])
+  @@index([orderId])
   @@index([batchId, status])
   @@map("cod_reconciliation_items")
 }
@@ -1045,6 +1082,7 @@ model InventoryReceipt {
   warehouseName   String                 @default("Kho chính") @map("warehouse_name") @db.VarChar(120)
   paymentMethod   String?                @map("payment_method") @db.VarChar(40)
   status          String                 @default("COMPLETED") @db.VarChar(24)
+  requestFingerprint String?               @map("request_fingerprint") @db.VarChar(64)
   pos365SyncStatus String?               @map("pos365_sync_status") @db.VarChar(20)
   pos365SyncAttempts Int                  @default(0) @map("pos365_sync_attempts")
   pos365SyncLastAttemptAt DateTime?       @map("pos365_sync_last_attempt_at") @db.Timestamptz(3)
@@ -1069,6 +1107,7 @@ model InventoryReceipt {
   @@index([receivedAt(sort: Desc)])
   @@index([pos365SyncStatus, pos365SyncNextAttemptAt])
   @@index([supplierName, receivedAt(sort: Desc)])
+  @@index([requestFingerprint, createdAt(sort: Desc)])
   @@map("inventory_receipts")
 }
 
@@ -1088,8 +1127,8 @@ model InventoryReceiptItem {
   stoneName    String?              @map("stone_name") @db.VarChar(120)
   kind         String               @db.VarChar(24)
   quantity     Int
-  unitCost     Decimal              @map("unit_cost") @db.Decimal(14, 0)
-  lineTotal    Decimal              @map("line_total") @db.Decimal(14, 0)
+  unitCost     Decimal?             @map("unit_cost") @db.Decimal(14, 0)
+  lineTotal    Decimal?             @map("line_total") @db.Decimal(14, 0)
   createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   receipt      InventoryReceipt     @relation(fields: [receiptId], references: [id], onDelete: Cascade)
   product      Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
@@ -1171,6 +1210,7 @@ model MediaAsset {
 model AuditLog {
   id         String     @id @default(uuid()) @db.Uuid
   adminId    String?    @map("admin_id") @db.Uuid
+  correlationId String? @map("correlation_id") @db.VarChar(80)
   action     String     @db.VarChar(80)
   entityType String     @map("entity_type") @db.VarChar(80)
   entityId   String?    @map("entity_id") @db.VarChar(80)
@@ -1182,6 +1222,7 @@ model AuditLog {
 
   @@index([entityType, entityId, createdAt(sort: Desc)])
   @@index([adminId, createdAt(sort: Desc)])
+  @@index([correlationId])
   @@map("audit_logs")
 }
 

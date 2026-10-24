@@ -45,6 +45,12 @@ export class OperationsController {
     return this.operations.recordRefund(id, request.adminIdentity, body);
   }
 
+  @Post("orders/:orderId/refunds")
+  @RequireAdminPermissions("finance.manage")
+  preShipmentRefund(@Param("orderId") orderId: string, @Req() request: AdminRequest, @Body() body: Record<string, any>) {
+    return this.operations.recordPreShipmentRefund(orderId, request.adminIdentity, body);
+  }
+
   @Get("cod-reconciliations")
   @RequireAdminPermissions("finance.read")
   codReconciliations(@Query("limit") limit?: string) { return this.operations.listCodReconciliations(limit); }
@@ -59,6 +65,12 @@ export class OperationsController {
   @RequireAdminPermissions("finance.manage")
   reconcileCod(@Param("id") id: string, @Req() request: AdminRequest, @Body() body: Record<string, any>) {
     return this.operations.reconcileCod(id, request.adminIdentity, body);
+  }
+
+  @Post("cod-reconciliations/:id/reverse")
+  @RequireAdminPermissions("finance.manage")
+  reverseCod(@Param("id") id: string, @Req() request: AdminRequest, @Body() body: Record<string, any>) {
+    return this.operations.reverseCod(id, request.adminIdentity, body);
   }
 
   @Get("audit-logs")

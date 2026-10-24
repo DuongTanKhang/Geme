@@ -18,9 +18,12 @@ export class OperationsService {
 
   async dashboard() {
     const soon = new Date(Date.now() + 15 * 60_000);
-    const [pendingOrders, activeReservations, availableStock, expiringReservations, openReturns, openCodBatches, codVariance, emailQueue, lowStock] = await Promise.all([
+    const [pendingOrders, activeReservations, inTransitReservations, availableStock, expiringReservations, openReturns, openCodBatches, codVariance, emailQueue, lowStock] = await Promise.all([
       this.prisma.order.count({ where: { status: { in: ["PENDING_CONFIRMATION", "PROCESSING"] } } }),
-      this.prisma.inventoryReservation.aggregate({ where: { status: "ACTIVE" }, _count: { _all: true }, _sum: { quantity: true } }),
+      this.prisma.inventoryReservation.aggregate({ where: { status: "ACTIVE", product: { status: "ACTIVE" }, order: { status: { not: "SHIPPING" } } }, _count: { _all: true }, _sum: { quantity: true } }),
+      // Include legacy active rows for already-shipping orders without rewriting
+      // ambiguous historical reservation records during migration.
+      this.prisma.inventoryReservation.aggregate({ where: { status: { in: ["COMMITTED", "ACTIVE"] }, product: { status: "ACTIVE" }, order: { status: "SHIPPING" } }, _sum: { quantity: true } }),
       this.prisma.product.aggregate({ where: { status: "ACTIVE" }, _sum: { stock: true } }),
       this.prisma.inventoryReservation.count({ where: { status: "ACTIVE", expiresAt: { lte: soon } } }),
       this.prisma.orderReturn.count({ where: { status: { in: ["REQUESTED", "APPROVED", "RECEIVED"] } } }),
@@ -37,6 +40,7 @@ export class OperationsService {
         availableUnits: availableStock._sum.stock || 0,
         reservedUnits: activeReservations._sum.quantity || 0,
         onHandUnits: Number(availableStock._sum.stock || 0) + Number(activeReservations._sum.quantity || 0),
+        inTransitUnits: Number(inTransitReservations._sum.quantity || 0),
         expiringSoon: expiringReservations,
         lowStockProducts: Number(lowStock[0]?.count || 0),
       },
@@ -58,9 +62,9 @@ export class OperationsService {
   async returnEligibleOrders(limitInput?: string) {
     const take = Math.min(Math.max(Number(limitInput) || 100, 1), 200);
     return this.prisma.order.findMany({
-      where: { status: "DELIVERED" },
+      where: { OR: [{ status: "DELIVERED" }, { status: "SHIPPING", carrierShipmentStatus: "RETURNING" }] },
       select: {
-        id: true, code: true, placedAt: true, customerName: true, totalAmount: true,
+        id: true, code: true, placedAt: true, customerName: true, totalAmount: true, carrierShipmentStatus: true,
         items: { select: { id: true, productName: true, productSku: true, quantity: true, unitPrice: true, lineTotal: true } },
         returns: { where: { status: { not: "REJECTED" } }, select: { items: { select: { orderItemId: true, quantity: true } } } },
       },
@@ -72,9 +76,11 @@ export class OperationsService {
     const take = Math.min(Math.max(Number(limitInput) || 100, 1), 200);
     return this.prisma.order.findMany({
       where: {
-        OR: [{ status: "DELIVERED" }, { carrierShipmentStatus: "DELIVERED" }],
-        payments: { some: { method: "COD" } },
-        codReconciliationItem: null,
+        AND: [
+          { OR: [{ status: "DELIVERED" }, { carrierShipmentStatus: "DELIVERED" }] },
+          { payments: { some: { method: "COD" } } },
+          { codReconciliationItems: { none: { batch: { is: { status: { not: "REVERSED" } } } } } },
+        ],
       },
       select: { id: true, code: true, customerName: true, totalAmount: true, carrierCodAmount: true, placedAt: true, payments: { select: { status: true }, where: { method: "COD" }, take: 1 } },
       orderBy: { placedAt: "desc" }, take,
@@ -107,7 +113,9 @@ export class OperationsService {
       await tx.$queryRaw`SELECT "id" FROM "orders" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
       const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true, payments: true } });
       if (!order) throw new NotFoundException("Không tìm thấy đơn hàng.");
-      if (order.status !== "DELIVERED") throw new BadRequestException("Chỉ tiếp nhận trả hàng cho đơn đã giao thành công.");
+      const delivered = order.status === "DELIVERED" || order.carrierShipmentStatus === "DELIVERED";
+      const carrierReturning = order.status === "SHIPPING" && order.carrierShipmentStatus === "RETURNING";
+      if (!delivered && !carrierReturning) throw new BadRequestException("Chỉ tiếp nhận trả hàng cho đơn đã giao, hoặc kiện Viettel Post đang được hãng hoàn về.");
       const selected = order.items.filter((item: Row) => quantities.has(item.id));
       if (selected.length !== quantities.size) throw new BadRequestException("Có dòng sản phẩm không thuộc đơn hàng này.");
       const previous = await tx.orderReturnItem.findMany({
@@ -129,7 +137,7 @@ export class OperationsService {
         },
         include: { items: true, refunds: true },
       });
-      await tx.auditLog.create({ data: { adminId: actor.id, action: "RETURN_REQUESTED", entityType: "ORDER_RETURN", entityId: created.id, after: { orderId, code: created.code, itemCount: created.items.length, reason } } });
+      await tx.auditLog.create({ data: { adminId: actor.id, correlationId: actor.correlationId, action: "RETURN_REQUESTED", entityType: "ORDER_RETURN", entityId: created.id, after: { orderId, code: created.code, itemCount: created.items.length, reason } } });
       return created;
       });
     } catch (error: any) {
@@ -200,7 +208,7 @@ export class OperationsService {
         ...(target === "RECEIVED" ? { receivedAt: new Date() } : {}),
         ...(target === "CLOSED" ? { closedAt: new Date() } : {}),
       }, include: { items: true, refunds: true, order: true } });
-      await tx.auditLog.create({ data: { adminId: actor.id, action: `RETURN_${target}`, entityType: "ORDER_RETURN", entityId: id, before: { status: current.status }, after: { status: target, note: note || null, restockedItemCount: current.items.filter((item: Row) => restockByPlaceholder(item, changeRows)).length } } });
+      await tx.auditLog.create({ data: { adminId: actor.id, correlationId: actor.correlationId, action: `RETURN_${target}`, entityType: "ORDER_RETURN", entityId: id, before: { status: current.status }, after: { status: target, note: note || null, restockedItemCount: current.items.filter((item: Row) => restockByPlaceholder(item, changeRows)).length } } });
       return updated;
     });
     return returnCase;
@@ -210,45 +218,165 @@ export class OperationsService {
     const idempotencyKey = typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "";
     const amount = positiveInt(body.amount, "Số tiền hoàn");
     const note = typeof body.note === "string" ? body.note.trim() : "";
+    const externalReference = typeof body.externalReference === "string" ? body.externalReference.trim() : "";
     if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) throw new BadRequestException("Thiếu Idempotency-Key hợp lệ cho giao dịch hoàn tiền.");
     if (note.length < 5 || note.length > 1000) throw new BadRequestException("Ghi chú hoàn tiền cần từ 5 đến 1.000 ký tự.");
-    const prior = await this.prisma.paymentRefund.findUnique({ where: { idempotencyKey } });
+    if (externalReference.length < 4 || externalReference.length > 160) throw new BadRequestException("Cần mã giao dịch hoàn tiền thực tế từ ngân hàng hoặc cổng thanh toán.");
+    const requestHash = hash({ returnId: id, amount, note, externalReference });
+    const findReplay = async (db: any) => {
+      const grouped = await db.paymentRefund.findMany({ where: { OR: [{ requestKey: idempotencyKey }, { idempotencyKey }] }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] });
+      if (!grouped.length) return null;
+      if (grouped.reduce((sum: number, row: Row) => sum + Number(row.amount), 0) !== amount || grouped.some((row: Row) => row.returnId !== id || (row.requestHash && row.requestHash !== requestHash) || (!row.requestHash && (grouped.length !== 1 || Number(row.amount) !== amount || row.note !== note || row.externalReference !== externalReference)))) {
+        throw new ConflictException("Idempotency-Key đã được dùng cho giao dịch hoàn tiền khác.");
+      }
+      return { requestKey: idempotencyKey, amount, refunds: grouped, replayed: true };
+    };
+    const prior = await findReplay(this.prisma);
+    if (prior) return prior;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const returnIdentity = await tx.orderReturn.findUnique({ where: { id }, select: { orderId: true } });
+        if (!returnIdentity) throw new NotFoundException("Không tìm thấy phiếu trả hàng.");
+        // Serialize refunds for the whole order, even when the order has split
+        // payments or multiple return cases. This is the financial invariant.
+        await tx.$queryRaw`SELECT "id" FROM "orders" WHERE "id" = ${returnIdentity.orderId}::uuid FOR UPDATE`;
+        await tx.$queryRaw`SELECT "id" FROM "order_returns" WHERE "id" = ${id}::uuid FOR UPDATE`;
+        const committedReplay = await findReplay(tx);
+        if (committedReplay) return committedReplay;
+        const returnCase = await tx.orderReturn.findUnique({ where: { id }, include: { order: { include: { items: true } }, items: true } });
+        if (!returnCase) throw new NotFoundException("Không tìm thấy phiếu trả hàng.");
+        if (!["RECEIVED", "CLOSED"].includes(returnCase.status)) throw new BadRequestException("Chỉ ghi nhận hoàn tiền sau khi đã nhận và kiểm tra hàng trả.");
+        const returnCases = await tx.orderReturn.findMany({
+          where: { orderId: returnCase.orderId, status: { in: ["RECEIVED", "CLOSED"] } },
+          include: { items: true, refunds: true },
+          orderBy: [{ receivedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        });
+        const lineById = new Map(returnCase.order.items.map((line: Row) => [line.id, line]));
+        const returnedQuantities = new Map<string, number>();
+        let thisReturnValue = 0;
+        for (const candidate of returnCases) {
+          let candidateValue = 0;
+          for (const line of candidate.items as Row[]) {
+            const orderLine = lineById.get(line.orderItemId) as Row | undefined;
+            if (!orderLine || orderLine.quantity <= 0 || line.quantity <= 0) throw new ConflictException("Dữ liệu dòng trả hàng không còn khớp với đơn gốc; cần rà soát thủ công.");
+            const previousQty = returnedQuantities.get(line.orderItemId) || 0;
+            const nextQty = previousQty + line.quantity;
+            if (nextQty > orderLine.quantity) throw new ConflictException(`Tổng số lượng trả của SKU ${line.productSku} vượt số lượng đã mua.`);
+            const previousValue = Math.floor(Number(orderLine.lineTotal) * previousQty / orderLine.quantity);
+            const cumulativeValue = Math.floor(Number(orderLine.lineTotal) * nextQty / orderLine.quantity);
+            candidateValue += cumulativeValue - previousValue;
+            returnedQuantities.set(line.orderItemId, nextQty);
+          }
+          if (candidate.id === id) thisReturnValue = candidateValue;
+        }
+        const alreadyReturnedOnCase = returnCases.find((candidate) => candidate.id === id)!.refunds.reduce((sum: number, refund: Row) => sum + Number(refund.amount), 0);
+        if (amount > thisReturnValue - alreadyReturnedOnCase) throw new ConflictException(`Số tiền vượt giá trị hàng được trả còn lại của phiếu (${Math.max(0, thisReturnValue - alreadyReturnedOnCase)} ₫).`);
+
+        const payments = await tx.payment.findMany({
+          where: { orderId: returnCase.orderId, status: { in: ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"] } },
+          include: { refunds: true }, orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        });
+        if (!payments.length) throw new BadRequestException("Đơn chưa có khoản thanh toán đã thu để hoàn tiền.");
+        const remainingByPayment = payments.map((payment: Row) => ({
+          payment,
+          refunded: payment.refunds.reduce((sum: number, refund: Row) => sum + Number(refund.amount), 0),
+          remaining: Math.max(0, Number(payment.amount) - payment.refunds.reduce((sum: number, refund: Row) => sum + Number(refund.amount), 0)),
+        }));
+        const remainingCaptured = remainingByPayment.reduce((sum, row) => sum + row.remaining, 0);
+        if (amount > remainingCaptured) throw new ConflictException("Số tiền hoàn vượt tổng số tiền đã thu còn lại của đơn hàng.");
+        const allocations: Array<{ paymentId: string; amount: number; before: number; after: number; total: number }> = [];
+        let toAllocate = amount;
+        for (const row of remainingByPayment) {
+          if (!toAllocate) break;
+          const allocated = Math.min(toAllocate, row.remaining);
+          if (!allocated) continue;
+          allocations.push({ paymentId: row.payment.id, amount: allocated, before: row.refunded, after: row.refunded + allocated, total: Number(row.payment.amount) });
+          toAllocate -= allocated;
+        }
+        const created: Row[] = [];
+        const childIdempotencyPrefix = `refund-${hash(idempotencyKey)}`;
+        for (const [index, allocation] of allocations.entries()) {
+          const refund = await tx.paymentRefund.create({ data: {
+            returnId: id, paymentId: allocation.paymentId, idempotencyKey: `${childIdempotencyPrefix}-${index}`,
+            requestKey: idempotencyKey, requestHash, externalReference, amount: allocation.amount, note, createdByAdminId: actor.id,
+          } });
+          created.push(refund);
+          const status = allocation.after >= allocation.total ? "REFUNDED" : "PARTIALLY_REFUNDED";
+          await tx.payment.update({ where: { id: allocation.paymentId }, data: { status: status as any } });
+        }
+        const totalCaseRefunded = alreadyReturnedOnCase + amount;
+        const returnRefundStatus = totalCaseRefunded >= thisReturnValue ? "REFUNDED" : "PARTIALLY_REFUNDED";
+        await tx.orderReturn.update({ where: { id }, data: { refundStatus: returnRefundStatus } });
+        await tx.auditLog.create({ data: {
+          adminId: actor.id, correlationId: actor.correlationId, action: "PAYMENT_REFUND_RECORDED", entityType: "ORDER_RETURN", entityId: id,
+          before: { refundedAmount: alreadyReturnedOnCase, returnValue: thisReturnValue },
+          after: { refundAmount: amount, refundedAmount: totalCaseRefunded, returnRefundStatus, externalReference, allocations, note },
+        } });
+        return { requestKey: idempotencyKey, amount, refunds: created, replayed: false };
+      });
+    } catch (error: any) {
+      if (error?.code === "P2002") {
+        const raced = await findReplay(this.prisma);
+        if (raced) return raced;
+      }
+      throw error;
+    }
+  }
+
+  async recordPreShipmentRefund(orderId: string, actor: AdminIdentity, body: Row) {
+    const idempotencyKey = typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "";
+    const amount = positiveInt(body.amount, "Số tiền hoàn");
+    const note = typeof body.note === "string" ? body.note.trim() : "";
+    const externalReference = typeof body.externalReference === "string" ? body.externalReference.trim() : "";
+    const paymentIdInput = typeof body.paymentId === "string" ? body.paymentId.trim() : "";
+    if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) throw new BadRequestException("Thiếu Idempotency-Key hợp lệ cho giao dịch hoàn tiền.");
+    if (note.length < 5 || note.length > 1000) throw new BadRequestException("Ghi chú hoàn tiền cần từ 5 đến 1.000 ký tự.");
+    if (externalReference.length < 4 || externalReference.length > 160) throw new BadRequestException("Cần mã giao dịch hoàn tiền thực tế từ cổng thanh toán hoặc ngân hàng.");
+    const prior = await this.prisma.paymentRefund.findUnique({ where: { idempotencyKey }, include: { payment: { select: { orderId: true } } } });
     if (prior) {
-      if (prior.returnId !== id || Number(prior.amount) !== amount || prior.note !== note) throw new ConflictException("Idempotency-Key đã được dùng cho giao dịch hoàn tiền khác.");
+      if (prior.returnId !== null || prior.payment.orderId !== orderId || (paymentIdInput && prior.paymentId !== paymentIdInput) || Number(prior.amount) !== amount || prior.note !== note || prior.externalReference !== externalReference) throw new ConflictException("Idempotency-Key đã được dùng cho giao dịch hoàn tiền khác.");
       return prior;
     }
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const returnCase = await tx.orderReturn.findUnique({ where: { id }, include: { order: { include: { payments: true } } } });
-        if (!returnCase) throw new NotFoundException("Không tìm thấy phiếu trả hàng.");
-        if (!["RECEIVED", "CLOSED"].includes(returnCase.status)) throw new BadRequestException("Chỉ ghi nhận hoàn tiền sau khi đã nhận và kiểm tra hàng trả.");
-        const payment = returnCase.order.payments.find((row: Row) => row.status === "PAID" || row.status === "PARTIALLY_REFUNDED");
-        if (!payment) throw new BadRequestException("Đơn chưa có khoản thanh toán đã thu để hoàn tiền.");
+        await tx.$queryRaw`SELECT "id" FROM "orders" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
+        const order = await tx.order.findUnique({ where: { id: orderId }, include: { payments: true } });
+        if (!order) throw new NotFoundException("Không tìm thấy đơn hàng.");
+        const cancelledBeforeHandoff = order.status === "CANCELLED" && Boolean(order.inventoryReleasedAt) && !order.inventoryCommittedAt;
+        if (!["PENDING_CONFIRMATION", "PROCESSING"].includes(order.status) && !cancelledBeforeHandoff) throw new ConflictException("Chỉ hoàn trước bàn giao, hoặc hoàn khoản tiền đến muộn của đơn đã hủy trước xuất hàng.");
+        if (order.inventoryCommittedAt || (["PENDING_CONFIRMATION", "PROCESSING"].includes(order.status) && order.inventoryReleasedAt)) throw new ConflictException("Đơn đã được xuất hoặc tồn kho đã xử lý theo luồng khác.");
+        if (["IN_TRANSIT", "DELIVERED", "RETURNING"].includes(String(order.carrierShipmentStatus || ""))) throw new ConflictException("Vận đơn đã rời GEME; hãy xử lý theo quy trình trả hàng/hoàn hàng.");
+        const candidates = order.payments.filter((payment: Row) => ["PAID", "PARTIALLY_REFUNDED"].includes(payment.status) && payment.method !== "COD");
+        const payment = candidates.find((row: Row) => paymentIdInput ? row.id === paymentIdInput : true);
+        if (!payment) throw new BadRequestException("Không tìm thấy khoản thanh toán đã thu hợp lệ để hoàn.");
         await tx.$queryRaw`SELECT "id" FROM "payments" WHERE "id" = ${payment.id}::uuid FOR UPDATE`;
-        // Re-check after taking the payment lock so a concurrent replay of the
-        // same key returns the committed refund instead of failing as over-refund.
-        const committedReplay = await tx.paymentRefund.findUnique({ where: { idempotencyKey } });
-        if (committedReplay) {
-          if (committedReplay.returnId !== id || Number(committedReplay.amount) !== amount || committedReplay.note !== note) {
-            throw new ConflictException("Idempotency-Key đã được dùng cho giao dịch hoàn tiền khác.");
-          }
-          return committedReplay;
+        const replay = await tx.paymentRefund.findUnique({ where: { idempotencyKey } });
+        if (replay) {
+          if (replay.returnId !== null || replay.paymentId !== payment.id || Number(replay.amount) !== amount || replay.note !== note || replay.externalReference !== externalReference) throw new ConflictException("Idempotency-Key đã được dùng cho giao dịch hoàn tiền khác.");
+          return replay;
         }
         const sum = await tx.paymentRefund.aggregate({ where: { paymentId: payment.id }, _sum: { amount: true } });
         const refundedBefore = Number(sum._sum.amount || 0);
         if (amount > Number(payment.amount) - refundedBefore) throw new ConflictException("Số tiền hoàn vượt phần tiền đã thu còn lại.");
-        const created = await tx.paymentRefund.create({ data: { returnId: id, paymentId: payment.id, idempotencyKey, amount, note, createdByAdminId: actor.id } });
+        const created = await tx.paymentRefund.create({ data: { returnId: null, paymentId: payment.id, idempotencyKey, externalReference, amount, note, createdByAdminId: actor.id } });
         const refundedAfter = refundedBefore + amount;
         const status = refundedAfter >= Number(payment.amount) ? "REFUNDED" : "PARTIALLY_REFUNDED";
         await tx.payment.update({ where: { id: payment.id }, data: { status: status as any } });
-        await tx.orderReturn.update({ where: { id }, data: { refundStatus: status } });
-        await tx.auditLog.create({ data: { adminId: actor.id, action: "PAYMENT_REFUND_RECORDED", entityType: "PAYMENT", entityId: payment.id, before: { status: payment.status, refundedAmount: refundedBefore }, after: { status, refundAmount: amount, refundedAmount: refundedAfter, returnId: id, note } } });
+        await tx.auditLog.create({ data: {
+          adminId: actor.id,
+          correlationId: actor.correlationId,
+          action: "PRE_SHIPMENT_PAYMENT_REFUND_RECORDED",
+          entityType: "ORDER",
+          entityId: orderId,
+          before: { paymentId: payment.id, paymentStatus: payment.status, refundedAmount: refundedBefore },
+          after: { paymentId: payment.id, paymentStatus: status, refundAmount: amount, refundedAmount: refundedAfter, externalReference, note },
+        } });
         return created;
       });
     } catch (error: any) {
       if (error?.code === "P2002") {
-        const raced = await this.prisma.paymentRefund.findUnique({ where: { idempotencyKey } });
-        if (raced && raced.returnId === id && Number(raced.amount) === amount && raced.note === note) return raced;
+        const raced = await this.prisma.paymentRefund.findUnique({ where: { idempotencyKey }, include: { payment: { select: { orderId: true } } } });
+        if (raced && raced.returnId === null && raced.payment.orderId === orderId && (!paymentIdInput || raced.paymentId === paymentIdInput) && Number(raced.amount) === amount && raced.note === note && raced.externalReference === externalReference) return raced;
         if (raced) throw new ConflictException("Idempotency-Key đã được dùng cho giao dịch hoàn tiền khác.");
       }
       throw error;
@@ -269,16 +397,22 @@ export class OperationsService {
     if (!Number.isFinite(statementDate.getTime())) throw new BadRequestException("Ngày bảng kê không hợp lệ.");
     if (!["VIETTEL_POST", "MANUAL"].includes(carrier)) throw new BadRequestException("Chỉ hỗ trợ đối soát Viettel Post hoặc bảng kê thủ công.");
     if (!rows.length || rows.length > 500) throw new BadRequestException("Bảng kê cần từ 1 đến 500 đơn COD.");
-    const entryByOrderId = new Map<string, { receivedAmount: number; carrierFee: number; note: string | null }>();
+    const entryByOrderId = new Map<string, { receivedAmount: number; carrierFee: number; remittedAmount: number; note: string | null }>();
     for (const value of rows) {
       const row = value && typeof value === "object" ? value as Row : {};
       const orderId = String(row.orderId || "").trim();
       if (!orderId || entryByOrderId.has(orderId)) throw new BadRequestException("Mã đơn COD bị thiếu hoặc trùng trong bảng kê.");
-      entryByOrderId.set(orderId, { receivedAmount: positiveInt(row.receivedAmount, "Tiền COD đã thu", true), carrierFee: positiveInt(row.carrierFee ?? 0, "Phí vận chuyển", true), note: typeof row.note === "string" ? row.note.trim().slice(0, 1000) : null });
+      entryByOrderId.set(orderId, {
+        receivedAmount: positiveInt(row.receivedAmount, "Tiền COD khách đã trả", true),
+        carrierFee: positiveInt(row.carrierFee ?? 0, "Phí vận chuyển", true),
+        remittedAmount: positiveInt(row.remittedAmount, "Tiền hãng đã chuyển về", true),
+        note: typeof row.note === "string" ? row.note.trim().slice(0, 1000) : null,
+      });
     }
     const requestHash = hash({ externalReference, carrier, statementDate: statementDate.toISOString().slice(0, 10), entries: [...entryByOrderId].sort(([a], [b]) => a.localeCompare(b)) });
     const existing = await this.prisma.codReconciliationBatch.findUnique({ where: { externalReference }, include: { items: true } });
     if (existing) {
+      if (existing.status === "REVERSED") throw new ConflictException("Mã bảng kê này đã được đảo. Dùng mã bảng kê mới cho dữ liệu điều chỉnh.");
       if (existing.requestHash !== requestHash) throw new ConflictException("Mã bảng kê đã được dùng cho dữ liệu COD khác.");
       return existing;
     }
@@ -288,6 +422,7 @@ export class OperationsService {
     let expectedTotal = 0;
     let receivedTotal = 0;
     let feeTotal = 0;
+    let remittedTotal = 0;
     const entries = [...entryByOrderId].map(([orderId, data]) => {
       const order = orderById.get(orderId)!;
       const payment = order.payments.find((row: Row) => row.method === "COD");
@@ -295,18 +430,36 @@ export class OperationsService {
       if (order.status !== "DELIVERED" && order.carrierShipmentStatus !== "DELIVERED") throw new BadRequestException(`Đơn ${order.code} chưa được xác nhận giao thành công.`);
       const expectedAmount = Number(order.carrierCodAmount ?? order.totalAmount);
       const varianceAmount = data.receivedAmount - expectedAmount;
+      const expectedRemittedAmount = data.receivedAmount - data.carrierFee;
+      if (expectedRemittedAmount < 0) throw new BadRequestException(`Phí của đơn ${order.code} vượt số tiền COD khách đã trả.`);
+      const remittanceVariance = data.remittedAmount - expectedRemittedAmount;
       expectedTotal += expectedAmount;
       receivedTotal += data.receivedAmount;
       feeTotal += data.carrierFee;
-      return { orderId, expectedAmount, receivedAmount: data.receivedAmount, carrierFee: data.carrierFee, varianceAmount, status: varianceAmount === 0 ? "MATCHED" : "VARIANCE", note: data.note };
+      remittedTotal += data.remittedAmount;
+      return {
+        orderId, expectedAmount, receivedAmount: data.receivedAmount, carrierFee: data.carrierFee,
+        varianceAmount, remittedAmount: data.remittedAmount, remittanceVariance,
+        status: varianceAmount === 0 && remittanceVariance === 0 ? "MATCHED" : "VARIANCE", note: data.note,
+      };
     });
     try {
       return await this.prisma.$transaction(async (tx) => {
+        // Lock in stable order so competing statements for one parcel cannot both
+        // pass the active-batch check after the historical unique index is removed.
+        for (const orderId of [...entryByOrderId.keys()].sort()) {
+          await tx.$queryRaw`SELECT "id" FROM "orders" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
+        }
+        const activeItems = await tx.codReconciliationItem.findMany({
+          where: { orderId: { in: [...entryByOrderId.keys()] }, batch: { is: { status: { not: "REVERSED" } } } },
+          select: { order: { select: { code: true } } },
+        });
+        if (activeItems.length) throw new ConflictException(`Đơn ${activeItems[0].order.code} đã có bảng kê chưa được đảo.`);
         const batch = await tx.codReconciliationBatch.create({ data: {
-          externalReference, carrier, statementDate, requestHash, expectedTotal, receivedTotal, feeTotal, status: "OPEN", createdByAdminId: actor.id,
+          externalReference, carrier, statementDate, requestHash, expectedTotal, receivedTotal, feeTotal, remittedTotal, status: "OPEN", createdByAdminId: actor.id,
           items: { create: entries },
         }, include: { items: true } });
-        await tx.auditLog.create({ data: { adminId: actor.id, action: "COD_RECONCILIATION_CREATED", entityType: "COD_RECONCILIATION", entityId: batch.id, after: { externalReference, carrier, expectedTotal, receivedTotal, feeTotal, varianceLines: entries.filter((item) => item.status === "VARIANCE").length } } });
+        await tx.auditLog.create({ data: { adminId: actor.id, correlationId: actor.correlationId, action: "COD_RECONCILIATION_CREATED", entityType: "COD_RECONCILIATION", entityId: batch.id, after: { externalReference, carrier, expectedTotal, receivedTotal, feeTotal, remittedTotal, varianceLines: entries.filter((item) => item.status === "VARIANCE").length } } });
         return batch;
       });
     } catch (error: any) {
@@ -332,16 +485,46 @@ export class OperationsService {
     const updated = await this.prisma.$transaction(async (tx) => {
       const result = await tx.codReconciliationBatch.updateMany({ where: { id, status: "OPEN" }, data: { status: hasVariance ? "RECONCILED_WITH_VARIANCE" : "RECONCILED", decisionNote: note || null, reconciledAt: new Date() } });
       if (result.count !== 1) throw new ConflictException("Bảng kê vừa được đối soát bởi tài khoản khác.");
-      const matchedOrderIds = batch.items.filter((item: Row) => item.status === "MATCHED").map((item: Row) => item.orderId);
-      if (matchedOrderIds.length) await tx.payment.updateMany({
-        where: { orderId: { in: matchedOrderIds }, method: "COD", status: "PENDING" },
+      const collectedOrderIds = batch.items.filter((item: Row) => Number(item.varianceAmount) === 0).map((item: Row) => item.orderId);
+      if (collectedOrderIds.length) await tx.payment.updateMany({
+        where: { orderId: { in: collectedOrderIds }, method: "COD", status: "PENDING" },
         data: { status: "PAID", paidAt: new Date() },
       });
       const saved = await tx.codReconciliationBatch.findUniqueOrThrow({ where: { id }, include: { items: true } });
-      await tx.auditLog.create({ data: { adminId: actor.id, action: "COD_RECONCILIATION_CLOSED", entityType: "COD_RECONCILIATION", entityId: id, before: { status: "OPEN" }, after: { status: saved.status, decisionNote: note || null } } });
+      await tx.auditLog.create({ data: { adminId: actor.id, correlationId: actor.correlationId, action: "COD_RECONCILIATION_CLOSED", entityType: "COD_RECONCILIATION", entityId: id, before: { status: "OPEN" }, after: { status: saved.status, decisionNote: note || null } } });
       return saved;
     });
     return updated;
+  }
+
+  async reverseCod(id: string, actor: AdminIdentity, body: Row) {
+    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 2000) : "";
+    if (reason.length < 5) throw new BadRequestException("Nhập lý do đảo bảng kê tối thiểu 5 ký tự.");
+    const prior = await this.prisma.codReconciliationBatch.findUnique({ where: { id }, include: { items: true } });
+    if (!prior) throw new NotFoundException("Không tìm thấy bảng đối soát COD.");
+    const reversed = await this.prisma.$transaction(async (tx) => {
+      for (const orderId of prior.items.map((item: Row) => item.orderId).sort()) {
+        await tx.$queryRaw`SELECT "id" FROM "orders" WHERE "id" = ${orderId}::uuid FOR UPDATE`;
+      }
+      await tx.$queryRaw`SELECT "id" FROM "cod_reconciliation_batches" WHERE "id" = ${id}::uuid FOR UPDATE`;
+      const current = await tx.codReconciliationBatch.findUnique({ where: { id }, include: { items: true } });
+      if (!current) throw new NotFoundException("Không tìm thấy bảng đối soát COD.");
+      if (current.status === "REVERSED") return current;
+      const result = await tx.codReconciliationBatch.updateMany({
+        where: { id, status: current.status },
+        data: { status: "REVERSED", decisionNote: reason, reconciledAt: current.reconciledAt || new Date() },
+      });
+      if (result.count !== 1) throw new ConflictException("Bảng kê vừa được thay đổi; tải lại rồi thử lại.");
+      await tx.codReconciliationItem.updateMany({ where: { batchId: id }, data: { status: "REVERSED", note: reason } });
+      const saved = await tx.codReconciliationBatch.findUniqueOrThrow({ where: { id }, include: { items: true } });
+      await tx.auditLog.create({ data: {
+        adminId: actor.id, correlationId: actor.correlationId, action: "COD_RECONCILIATION_REVERSED", entityType: "COD_RECONCILIATION", entityId: id,
+        before: { status: current.status, externalReference: current.externalReference },
+        after: { status: "REVERSED", reason, affectedOrders: current.items.length, note: "Payment states preserve evidence of customer collection; use a new statement reference for corrections." },
+      } });
+      return saved;
+    });
+    return reversed;
   }
 
   async auditLogs(query: Row) {

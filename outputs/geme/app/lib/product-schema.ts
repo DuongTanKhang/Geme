@@ -17,7 +17,7 @@ export function createProductStructuredData(product: StoreProduct | null | undef
     ...(name ? { name } : {}),
     ...(sku ? { itemOffered: { "@type": "Product", name: `${product.name} — ${name || sku}`, sku } } : {}),
   });
-  const variantOffers = product.variants
+  const variantOffers = (product.isPremiumGemstone ? [] : product.variants)
     .map((variant) => {
       const price = getStoreProductPrice(product, promotions, variant).salePrice;
       const name = [variant.quality, variant.beadSize, variant.carat != null ? `${variant.carat} ct` : null, variant.gemstoneQuality].filter(Boolean).join(" · ");
@@ -30,7 +30,7 @@ export function createProductStructuredData(product: StoreProduct | null | undef
   const offers = pricedOffers.length > 1
     ? { "@type": "AggregateOffer", priceCurrency: "VND", lowPrice: Math.min(...prices), highPrice: Math.max(...prices), offerCount: pricedOffers.length, offers: pricedOffers }
     : pricedOffers[0];
-  const variants = product.variants.filter((variant) => variant.price > 0).map((variant) => {
+  const variants = (product.isPremiumGemstone ? [] : product.variants).filter((variant) => variant.price > 0).map((variant) => {
     const name = [variant.quality, variant.beadSize, variant.carat != null ? `${variant.carat} ct` : null, variant.gemstoneQuality].filter(Boolean).join(" · ");
     const price = getStoreProductPrice(product, promotions, variant).salePrice;
     const variantImages = variant.imageUrls.map(absolutePublicImageUrl).filter((image): image is string => Boolean(image));
