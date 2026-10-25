@@ -10,7 +10,7 @@ import { sanitizeBlogHtml } from "./blog-html.js";
 import { calculateCheckoutPrice, getCheckoutPromotionValue, loadActiveStorePromotions, type CheckoutPromotion } from "./checkout-pricing.js";
 import { canTransitionOrder } from "./order-state.js";
 import { getInventoryReservationExpiry } from "./reservation-expiry.js";
-import { synchronizeBangleVariantMedia } from "./bangle-variant-media.js";
+import { assertBangleQualityImages, normalizeBangleQuality, synchronizeBangleVariantMedia } from "./bangle-variant-media.js";
 
 type Input = Record<string, any>;
 const inventoryReceiptDuplicateWindowMs = 5 * 60 * 1000;
@@ -22,12 +22,15 @@ const isRetryableSerializationConflict = (error: any) => [
   error?.meta?.driverAdapterError?.cause?.code,
   error?.meta?.driverAdapterError?.cause?.originalCode,
 ].some((code) => ["P2034", "40001", "40P01"].includes(String(code || "")));
-async function retrySerializationConflict<T>(operation: () => Promise<T>): Promise<T> {
+export async function retrySerializationConflict<T>(operation: () => Promise<T>, maxAttempts = maxSerializationAttempts): Promise<T> {
   for (let attempt = 1; ; attempt += 1) {
     try {
       return await operation();
     } catch (error) {
-      if (attempt >= maxSerializationAttempts || !isRetryableSerializationConflict(error)) throw error;
+      if (!isRetryableSerializationConflict(error)) throw error;
+      if (attempt >= Math.max(1, Math.min(10, maxAttempts))) {
+        throw new ConflictException("Không thể hoàn tất vì dữ liệu liên tục được cập nhật đồng thời. Giao dịch đã được hủy an toàn; tải lại rồi thử lại.");
+      }
       // The callers use row locks and idempotency/state guards, so retrying a
       // serialization/deadlock abort is safe; network/provider work is outside
       // these transactions and will not be repeated.
@@ -894,18 +897,40 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             if (Object.keys(variantData).length) variantUpdates.push({ id: variant.id, data: variantData });
           }
         }
-        if (current.category?.slug === "vong-kieng" && variantUpdates.some((row) => Object.hasOwn(row.data, "imageUrls") || Object.hasOwn(row.data, "videoUrl"))) {
+        const explicitBangleMediaKeys = new Set<string>();
+        if (current.category?.slug === "vong-kieng" && Array.isArray(priceVariants)) for (const raw of priceVariants as Input[]) {
+          if (!raw || typeof raw !== "object") continue;
+          const variant = raw.id ? current.variants.find((item) => item.id === String(raw.id)) : current.variants.find((item) => item.sku === String(raw.sku || ""));
+          if (variant && (Object.hasOwn(raw, "imageUrls") || Object.hasOwn(raw, "videoUrl"))) explicitBangleMediaKeys.add(variant.id);
+        }
+        if (current.category?.slug === "vong-kieng" && explicitBangleMediaKeys.size) {
+          const changedBangleMediaKeys = new Set(variantUpdates.filter((row) => {
+            const existing = current.variants.find((variant) => variant.id === row.id);
+            if (!existing) return false;
+            return (Object.hasOwn(row.data, "imageUrls") && JSON.stringify(row.data.imageUrls) !== JSON.stringify(existing.imageUrls || []))
+              || (Object.hasOwn(row.data, "videoUrl") && String(row.data.videoUrl || "") !== String(existing.videoUrl || ""));
+          }).map((row) => row.id));
           const updatesById = new Map(variantUpdates.map((row) => [row.id, row.data]));
-          const synchronized = synchronizeBangleVariantMedia(current.sku, current.variants.map((variant) => ({
+          const synchronized = changedBangleMediaKeys.size ? synchronizeBangleVariantMedia(current.sku, current.variants.map((variant) => ({
             ...variant,
             ...(updatesById.get(variant.id) || {}),
-          })), { changedVariantKeys: new Set(variantUpdates.filter((row) => Object.hasOwn(row.data, "imageUrls") || Object.hasOwn(row.data, "videoUrl")).map((row) => row.id)) });
+          })), {
+            changedVariantKeys: changedBangleMediaKeys,
+            explicitVariantKeys: explicitBangleMediaKeys,
+            existingVariants: current.variants,
+          }) : current.variants.map((variant) => ({ ...variant, ...(updatesById.get(variant.id) || {}) }));
+          if (current.status === "ACTIVE" && changedBangleMediaKeys.size) {
+            const touchedQualities = new Set(current.variants.filter((variant) => changedBangleMediaKeys.has(variant.id)).map((variant) => normalizeBangleQuality(variant.quality)));
+            const fallbackImageUrls = gallery === undefined ? current.images.map((image) => image.url) : gallery;
+            assertBangleQualityImages(current.sku, synchronized, touchedQualities, fallbackImageUrls);
+          }
           const synchronizedUpdates = new Map(variantUpdates.map((row) => [row.id, { ...row.data }]));
           for (const variant of synchronized) {
             const data = synchronizedUpdates.get(variant.id) || {};
-            data.imageUrls = variant.imageUrls;
-            data.videoUrl = variant.videoUrl;
-            synchronizedUpdates.set(variant.id, data);
+            const existing = current.variants.find((row) => row.id === variant.id);
+            if (existing && JSON.stringify(existing.imageUrls || []) !== JSON.stringify(variant.imageUrls || [])) data.imageUrls = variant.imageUrls;
+            if (existing && String(existing.videoUrl || "") !== String(variant.videoUrl || "")) data.videoUrl = variant.videoUrl;
+            if (Object.keys(data).length) synchronizedUpdates.set(variant.id, data);
           }
           variantUpdates.splice(0, variantUpdates.length, ...[...synchronizedUpdates].map(([variantId, data]) => ({ id: variantId, data })));
         }
@@ -965,13 +990,14 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (!status) throw new BadRequestException("Chỉ có thể đăng bán hoặc ẩn sản phẩm.");
     try {
       const product = await this.prisma.$transaction(async (tx) => {
-        const current = await tx.product.findUnique({ where: { id }, include: { category: { select: { slug: true } }, variants: { select: { sku: true, shape: true, quality: true, beadSize: true, stock: true, price: true } } } });
+          const current = await tx.product.findUnique({ where: { id }, include: { category: { select: { slug: true } }, images: { select: { url: true } }, variants: { select: { sku: true, shape: true, quality: true, beadSize: true, stock: true, price: true, imageUrls: true, videoUrl: true } } } });
         if (!current) throw new NotFoundException("Không tìm thấy sản phẩm.");
         if (status === "ACTIVE") {
           if (current.kind === "JEWELRY" && current.category?.slug === "vong-kieng") {
             if (!current.variants.length) throw new BadRequestException(`Kiềng SKU ${current.sku} chưa có biến thể. Tạo biến thể trong Quản lý tồn kho trước khi đăng bán.`);
             const invalidVariants = current.variants.map((variant) => bangleVariantIssue(current.sku, variant)).filter(Boolean);
             if (invalidVariants.length) throw new BadRequestException(`Không thể đăng bán Kiềng: ${invalidVariants.join(" ")}`);
+            assertBangleQualityImages(current.sku, current.variants, undefined, current.images.map((image) => image.url));
           }
           const availableStock = current.variants.length ? current.variants.reduce((sum, row) => sum + row.stock, 0) : current.stock;
           if (availableStock <= 0) throw new BadRequestException(`Không thể đăng bán SKU ${current.sku}: tồn kho bằng 0. Hãy nhập kho trong Quản lý tồn kho.`);
@@ -1115,13 +1141,19 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     }
     const submittedVariants = Array.isArray(effectiveInput.priceVariants) ? effectiveInput.priceVariants as Input[] : [];
     const changedBangleMediaKeys = new Set<string>();
-    const submittedBangleMediaKeys = new Set<string>();
+    const explicitBangleMediaKeys = new Set<string>();
+    const changedBangleAttributeKeys = new Set<string>();
     if (isBangleProduct && existingProduct) {
       if (Array.isArray(input.priceVariants)) for (const raw of input.priceVariants) {
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
         const row = raw as Input;
         const existing = existingProduct.variants.find((variant) => (row.id && variant.id === String(row.id)) || (row.sku && variant.sku === String(row.sku)));
-        if (existing && (Object.hasOwn(row, "imageUrls") || Object.hasOwn(row, "videoUrl"))) submittedBangleMediaKeys.add(existing.id);
+        if (!existing) continue;
+        if (Object.hasOwn(row, "imageUrls") || Object.hasOwn(row, "videoUrl")) explicitBangleMediaKeys.add(existing.id);
+        if (["shape", "quality", "beadSize"].some((field) => Object.hasOwn(row, field)
+          && String(row[field] ?? "").trim().toLocaleUpperCase("en") !== String((existing as any)[field] ?? "").trim().toLocaleUpperCase("en"))) {
+          changedBangleAttributeKeys.add(existing.id);
+        }
       }
       for (const variant of submittedVariants) {
         const existing = existingProduct.variants.find((row) => (variant.id && row.id === String(variant.id)) || (variant.sku && row.sku === String(variant.sku)));
@@ -1133,9 +1165,40 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         if (JSON.stringify(submittedImages) !== JSON.stringify(existingImages) || submittedVideo !== existingVideo) changedBangleMediaKeys.add(existing.id);
       }
     }
-    const variants = isBangleProduct && (!existingProduct || submittedBangleMediaKeys.size > 0)
-      ? synchronizeBangleVariantMedia(data.sku, submittedVariants, { changedVariantKeys: changedBangleMediaKeys, synchronizeAll: !existingProduct })
+    const newBangleVariantKeys = new Set(isBangleProduct && existingProduct
+      ? submittedVariants.filter((variant) => !existingProduct.variants.some((row) => (variant.id && row.id === String(variant.id)) || (variant.sku && row.sku === String(variant.sku)))).map((variant) => String(variant.id || variant.sku || ""))
+      : []);
+    const bangleSynchronizationQualities = new Set<string>();
+    if (isBangleProduct && existingProduct) for (const id of changedBangleAttributeKeys) {
+      const prior = existingProduct.variants.find((variant) => variant.id === id);
+      const next = submittedVariants.find((variant) => (variant.id && String(variant.id) === id) || (variant.sku && existingProduct.variants.find((row) => row.id === id)?.sku === String(variant.sku)));
+      if (prior) bangleSynchronizationQualities.add(normalizeBangleQuality(prior.quality));
+      if (next) bangleSynchronizationQualities.add(normalizeBangleQuality(next.quality));
+    }
+    const shouldSynchronizeBangle = isBangleProduct && (!existingProduct || changedBangleMediaKeys.size > 0 || newBangleVariantKeys.size > 0 || changedBangleAttributeKeys.size > 0);
+    const variants = shouldSynchronizeBangle
+      ? synchronizeBangleVariantMedia(data.sku, submittedVariants, {
+        changedVariantKeys: changedBangleMediaKeys,
+        explicitVariantKeys: explicitBangleMediaKeys,
+        synchronizeQualities: bangleSynchronizationQualities,
+        existingVariants: existingProduct?.variants,
+        synchronizeAll: !existingProduct,
+      })
       : submittedVariants;
+    const publishingBangle = isBangleProduct && data.status === "ACTIVE" && (!existingProduct || existingProduct.status !== "ACTIVE");
+    const touchedBangleQualities = new Set<string>();
+    if (isBangleProduct && existingProduct) {
+      for (const variant of variants) {
+        const key = String(variant.id || variant.sku || "");
+        if (changedBangleMediaKeys.has(key) || changedBangleAttributeKeys.has(key) || newBangleVariantKeys.has(key)) {
+          touchedBangleQualities.add(normalizeBangleQuality(variant.quality));
+        }
+      }
+      for (const id of changedBangleAttributeKeys) {
+        const previous = existingProduct.variants.find((variant) => variant.id === id);
+        if (previous) touchedBangleQualities.add(normalizeBangleQuality(previous.quality));
+      }
+    }
     const persistedVariantImageReferences = new Map<string, Promise<string>>();
     const variantCreate = await Promise.all(variants.map(async (variant: Input, index: number) => {
       const quality = String(variant.quality || "Standard").trim().slice(0, 40);
@@ -1158,19 +1221,23 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       }));
       const sku = String(variant.sku || "").trim();
       const videoUrl = String(variant.videoUrl || "").trim().slice(0, 2000) || null;
-      if (!quality) throw new BadRequestException("Mỗi biến thể cần có thông tin chất lượng hoặc phân loại.");
+      const existingVariant = existingProduct?.variants.find((row) => (variant.id && row.id === String(variant.id)) || (variant.sku && row.sku === String(variant.sku)));
+      const validateBangleStructure = isBangleProduct && (!existingVariant || publishingBangle || changedBangleAttributeKeys.has(existingVariant.id));
+      if (!quality && (!isBangleProduct || validateBangleStructure)) throw new BadRequestException("Mỗi biến thể cần có thông tin chất lượng hoặc phân loại.");
       if (data.kind === "GEMSTONE") {
         if (isCaratPricing(gemstonePricingMode) && (!caratValue || !Number.isFinite(caratValue) || caratValue <= 0 || caratValue > 1000 || Math.round(caratValue * 1000) !== caratValue * 1000)) throw new BadRequestException("Mỗi biến thể đá quý cần carat lớn hơn 0, tối đa 3 chữ số thập phân.");
         if (gemstonePricingMode === "GEMSTONE_SIZE" && !beadSize) throw new BadRequestException("Biến thể đá quý cần có size mặt đá.");
         if (gemstonePricingMode === "GEMSTONE_CARAT_AND_QUALITY" && !gemstoneQuality) throw new BadRequestException("Biến thể đá quý cần có chất lượng.");
       }
       if (isBangleProduct) {
-        const issue = bangleVariantIssue(data.sku, { sku, shape, quality, beadSize });
-        if (issue) throw new BadRequestException(issue);
+        if (validateBangleStructure) {
+          const issue = bangleVariantIssue(data.sku, { sku, shape, quality, beadSize });
+          if (issue) throw new BadRequestException(issue);
+        }
       } else if (shape) {
         throw new BadRequestException("Chỉ sản phẩm thuộc danh mục Vòng Kiềng mới dùng biến thể dáng.");
       }
-      if (!sku || !sku.startsWith(data.sku) || sku.length > 64 || !/^[A-Za-z0-9]+$/.test(sku)) {
+      if ((!isBangleProduct || validateBangleStructure) && (!sku || !sku.startsWith(data.sku) || sku.length > 64 || !/^[A-Za-z0-9]+$/.test(sku))) {
         throw new BadRequestException(`SKU biến thể ${quality}${beadSize ? ` · ${beadSize}` : ""} phải là mã chữ/số bắt đầu bằng SKU mẹ ${data.sku}.`);
       }
       if (data.kind === "GEMSTONE" && sku.toLocaleUpperCase("en") !== `${data.sku}${gemstoneSkuSuffix(quality, gemstonePricingMode, beadSize || "", carat || "", gemstoneQuality || "")}`.toLocaleUpperCase("en")) {
@@ -1185,6 +1252,15 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         sortOrder: index,
       };
     }));
+    if (isBangleProduct) {
+      const fallbackImageUrls = Object.hasOwn(input, "gallery") || Object.hasOwn(input, "image")
+        ? images
+        : existingProduct?.images.map((image) => image.url) || [];
+      if (publishingBangle) assertBangleQualityImages(data.sku, variantCreate, undefined, fallbackImageUrls);
+      else if (existingProduct?.status === "ACTIVE" && touchedBangleQualities.size) {
+        assertBangleQualityImages(data.sku, variantCreate, touchedBangleQualities, fallbackImageUrls);
+      }
+    }
     if (data.kind === "GEMSTONE") {
       const priceByOption = new Map<string, number>();
       for (const variant of variantCreate) {
@@ -2541,7 +2617,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     catch (error: any) { if (error?.code === "P2025") throw new NotFoundException("Không tìm thấy sản phẩm."); throw error; }
   }
 
-  async createInventoryMovement(input: Input) {
+  async createInventoryMovement(input: Input, actor?: { id: string; correlationId?: string }) {
     const productId = String(input.productId || "");
     const variantId = input.variantId ? String(input.variantId) : null;
     const type = String(input.type || "").toUpperCase();
@@ -2565,10 +2641,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         });
         if (!selectedVariant) throw new BadRequestException("Phiên bản không thuộc sản phẩm đã chọn.");
 
-        // Increment/decrement in SQL so concurrent movements cannot overwrite
-        // one another with a stale absolute stock value. The product total is
-        // changed by the same delta in this transaction, preserving the sum of
-        // its variants and matching checkout's variant-then-product lock order.
+        // Update the variant atomically, then lock and reconcile its product
+        // aggregate in the same variant -> product order used by checkout.
         const variantRows = await tx.$queryRaw<Array<{ stockBefore: number; stockAfter: number }>>`
           UPDATE "product_price_variants"
           SET "stock" = "stock" + ${delta}
@@ -2577,19 +2651,38 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         `;
         if (!variantRows.length) throw new BadRequestException("Số lượng xuất vượt quá tồn kho của phiên bản hoặc tồn vừa thay đổi.");
 
+        const lockedProduct = await tx.$queryRaw<Array<{ id: string; stock: number }>>`
+          SELECT "id", "stock" FROM "products" WHERE "id" = ${productId}::uuid FOR UPDATE
+        `;
+        if (!lockedProduct.length) throw new NotFoundException("Không tìm thấy sản phẩm.");
+        const aggregateRows = await tx.$queryRaw<Array<{ stock: number }>>`
+          SELECT COALESCE(SUM("stock"), 0)::int AS "stock" FROM "product_price_variants" WHERE "product_id" = ${productId}::uuid
+        `;
+        const variantStockAfter = Number(aggregateRows[0]?.stock || 0);
+        const variantStockBefore = variantStockAfter - delta;
+        if (lockedProduct[0].stock !== variantStockBefore) await tx.auditLog.create({ data: {
+          adminId: actor?.id || null,
+          correlationId: actor?.correlationId,
+          action: "INVENTORY_PARENT_STOCK_RECONCILED",
+          entityType: "PRODUCT",
+          entityId: productId,
+          before: { productStock: lockedProduct[0].stock, variantStockTotal: variantStockBefore },
+          after: { reconciledStock: variantStockBefore, movementDelta: delta, productStock: variantStockAfter, variantStockTotal: variantStockAfter },
+        } });
+
         const now = new Date();
-        const productRows = await tx.$queryRaw<Array<{ stockBefore: number; stockAfter: number }>>`
+        const productRows = await tx.$queryRaw<Array<{ stockAfter: number }>>`
           UPDATE "products"
-          SET "stock" = "stock" + ${delta},
+          SET "stock" = ${variantStockAfter},
               "sold_out_at" = CASE
-                WHEN "stock" + ${delta} = 0 THEN COALESCE("sold_out_at", ${now})
-                WHEN "stock" + ${delta} > 0 THEN NULL
+                WHEN ${variantStockAfter} = 0 THEN COALESCE("sold_out_at", ${now})
+                WHEN ${variantStockAfter} > 0 THEN NULL
                 ELSE "sold_out_at"
               END
-          WHERE "id" = ${productId}::uuid AND "stock" + ${delta} >= 0
-          RETURNING ("stock" - ${delta})::int AS "stockBefore", "stock"::int AS "stockAfter"
+          WHERE "id" = ${productId}::uuid
+          RETURNING "stock"::int AS "stockAfter"
         `;
-        if (!productRows.length) throw new BadRequestException("Tồn tổng sản phẩm không đủ hoặc không khớp với tồn biến thể; giao dịch đã được hủy.");
+        if (!productRows.length) throw new BadRequestException("Không thể cập nhật tồn tổng sản phẩm sau khi điều chỉnh biến thể; giao dịch đã được hủy.");
         productName = product.name;
         productSku = selectedVariant.sku || product.sku;
         stockBefore = variantRows[0].stockBefore;

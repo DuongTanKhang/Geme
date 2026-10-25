@@ -139,7 +139,7 @@ export class CommerceController {
   @Post("inventory/reset/preview") @admin("inventory.read") inventoryResetPreview(@Body() body: Record<string, any>) { return this.commerce.inventoryResetPreview(body); }
   @Post("inventory/reset") @admin("inventory.write") resetInventory(@Body() body: Record<string, any>) { return this.commerce.resetInventory(body); }
   @Patch("inventory/products/:id/minimum-stock") @admin("inventory.write") minimumStock(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.updateMinimumStock(id, body.minimumStock); }
-  @Post("inventory/movements") @admin("inventory.write") createInventoryMovement(@Body() body: Record<string, any>) { return this.commerce.createInventoryMovement(body); }
+  @Post("inventory/movements") @admin("inventory.write") createInventoryMovement(@Req() request: AdminRequest, @Body() body: Record<string, any>) { return this.commerce.createInventoryMovement(body, request.adminIdentity); }
 
   @Get("customers") @admin("customers.read") customers(@Query() query: Record<string, string>) { return this.commerce.customers(query); }
   @Post("customers") @admin("customers.write") createCustomer(@Body() body: Record<string, any>) { return this.commerce.saveCustomer(body); }

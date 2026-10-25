@@ -213,6 +213,25 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     assert.equal(afterVariantMoves.stock, 8);
     assert.equal(afterVariantMoves.stock, afterVariantMoves.variants.reduce((sum, row) => sum + row.stock, 0));
     assert.equal(await prisma!.inventoryMovement.count({ where: { productId: variantProductId } }), 3);
+
+    const mismatchId = randomUUID();
+    const mismatchSku = `CI${mismatchId.replaceAll("-", "").slice(0, 12)}`;
+    const mismatched = await prisma!.product.create({ data: {
+      id: mismatchId, sku: mismatchSku, name: "Legacy stock mismatch fixture", slug: `ci-stock-mismatch-${mismatchId}`,
+      kind: "JEWELRY", status: "HIDDEN", price: 10_000, stock: 0,
+      variants: { create: [{ optionKey: "QUALITY::2A", quality: "2A", sku: `${mismatchSku}A`, price: 10_000, stock: 5 }] },
+    }, include: { variants: true } });
+    productIds.push(mismatchId);
+    const reconciledMove = await commerce.createInventoryMovement({ productId: mismatchId, variantId: mismatched.variants[0].id, type: "OUT", quantity: 1 }, actor());
+    const reconciled = await prisma!.product.findUniqueOrThrow({ where: { id: mismatchId }, include: { variants: true } });
+    assert.equal(reconciledMove.stockBefore, 5);
+    assert.equal(reconciledMove.stockAfter, 4);
+    assert.equal(reconciled.stock, 4);
+    assert.equal(reconciled.variants[0].stock, 4);
+    const reconcileAudit = await prisma!.auditLog.findFirstOrThrow({ where: { action: "INVENTORY_PARENT_STOCK_RECONCILED", entityId: mismatchId } });
+    assert.equal((reconcileAudit.before as any).productStock, 0);
+    assert.equal((reconcileAudit.before as any).variantStockTotal, 5);
+    assert.equal((reconcileAudit.after as any).productStock, 4);
   });
 
   await t.test("return refunds split over multiple captures, enforce returned value and replay idempotently", { skip: !shouldRunIntegrationCase("refunds") }, async () => {
@@ -295,6 +314,52 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     }
   });
 
+  await t.test("payment and cancellation behavior is deterministic in both orders and payment replay is idempotent", { skip: !shouldRunIntegrationCase("payment-cancel") }, async () => {
+    const commerce = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any);
+    const makeReservedOrder = async (label: string) => {
+      const productId = randomUUID();
+      await prisma!.product.create({ data: { id: productId, sku: `CI-${productId.slice(0, 10)}`, name: label, slug: `ci-${label.toLocaleLowerCase().replaceAll(" ", "-")}-${productId}`, kind: "JEWELRY", status: "ACTIVE", price: 10_000, stock: 1 } });
+      productIds.push(productId);
+      const result = await commerce.createOrder({
+        customerName: "Payment order fixture", phone: `09${String(Date.now() + Math.random()).replace(/\D/g, "").slice(-8)}`,
+        shippingAddress: "CI local only", paymentMethod: "BANK_TRANSFER", expectedTotalAmount: 10_000,
+        items: [{ productId, quantity: 1 }],
+      }, undefined, false, `checkout-${randomUUID()}`);
+      orderIds.push(result.id);
+      const phone = `09${String(Date.now() + Math.random()).replace(/\D/g, "").slice(-8)}`;
+      customerPhones.push(phone);
+      await prisma!.order.update({ where: { id: result.id }, data: { customerPhone: phone } });
+      return { productId, order: result };
+    };
+
+    const cancelFirst = await makeReservedOrder("Cancel then payment fixture");
+    await commerce.updateOrderStatus(cancelFirst.order.id, "CANCELLED", financeActor, "Khách đã yêu cầu hủy đơn");
+    const latePayment = { amount: 10_000, method: "BANK_TRANSFER", providerRef: `late-${randomUUID()}`, note: "Chuyển khoản đến sau khi đơn hủy" };
+    const lateKey = `late-payment-${randomUUID()}`;
+    const lateRecorded = await commerce.recordOrderPayment(cancelFirst.order.id, financeActor, latePayment, lateKey);
+    await commerce.recordOrderPayment(cancelFirst.order.id, financeActor, latePayment, lateKey);
+    const lateCurrent = await prisma!.order.findUniqueOrThrow({ where: { id: cancelFirst.order.id }, include: { payments: true } });
+    assert.equal(lateCurrent.status, "CANCELLED");
+    assert.equal(lateCurrent.payments.filter((row) => row.idempotencyKey === lateKey).length, 1);
+    assert.equal(lateRecorded.payments.filter((row: any) => row.idempotencyKey === lateKey).length, 1);
+    assert.equal((await prisma!.product.findUniqueOrThrow({ where: { id: cancelFirst.productId } })).stock, 1);
+    assert.equal(await prisma!.inventoryMovement.count({ where: { reference: cancelFirst.order.code, type: "OUT" } }), 1);
+    assert.equal(await prisma!.inventoryMovement.count({ where: { reference: cancelFirst.order.code, type: "IN" } }), 1);
+
+    const paymentFirst = await makeReservedOrder("Payment then cancel fixture");
+    const payment = { amount: 10_000, method: "BANK_TRANSFER", providerRef: `paid-${randomUUID()}`, note: "Đã nhận chuyển khoản đơn hàng" };
+    const paymentKey = `paid-payment-${randomUUID()}`;
+    await commerce.recordOrderPayment(paymentFirst.order.id, financeActor, payment, paymentKey);
+    await commerce.recordOrderPayment(paymentFirst.order.id, financeActor, payment, paymentKey);
+    await assert.rejects(() => commerce.updateOrderStatus(paymentFirst.order.id, "CANCELLED", financeActor, "Yêu cầu hủy sau khi đã thu tiền"), /còn tiền chưa hoàn hết/i);
+    const paidCurrent = await prisma!.order.findUniqueOrThrow({ where: { id: paymentFirst.order.id }, include: { payments: true } });
+    assert.equal(paidCurrent.status, "PENDING_CONFIRMATION");
+    assert.equal(paidCurrent.payments.filter((row) => row.idempotencyKey === paymentKey).length, 1);
+    assert.equal((await prisma!.product.findUniqueOrThrow({ where: { id: paymentFirst.productId } })).stock, 0);
+    assert.equal(await prisma!.inventoryMovement.count({ where: { reference: paymentFirst.order.code, type: "OUT" } }), 1);
+    assert.equal(await prisma!.inventoryMovement.count({ where: { reference: paymentFirst.order.code, type: "IN" } }), 0);
+  });
+
   await t.test("content editor API handler rejects direct price, stock, delete and SKU payloads", { skip: !shouldRunIntegrationCase("permissions") }, async () => {
     const editor = await createAdmin("CONTENT_EDITOR");
     const calls: string[] = [];
@@ -332,12 +397,14 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
       variants: { create: [
         { optionKey: "BANGLE::ROUND::2A::54", quality: "2A", shape: "ROUND", beadSize: "54", sku: variantSku, price: 2_000_000, stock: 2, imageUrls: ["https://cdn.example.test/bangle-2a.webp"] },
         { optionKey: "BANGLE::ROUND::2A::56", quality: "2A", shape: "ROUND", beadSize: "56", sku: `${sku}R02S56`, price: 2_000_000, stock: 3, imageUrls: [] },
+        { optionKey: "BANGLE::OVAL::2A::54", quality: "2A", shape: "OVAL", beadSize: "54", sku: `${sku}O02S54`, price: 2_000_000, stock: 1, imageUrls: [] },
         { optionKey: "BANGLE::ROUND::3A::54", quality: "3A", shape: "ROUND", beadSize: "54", sku: `${sku}R03S54`, price: 2_200_000, stock: 1, imageUrls: ["https://cdn.example.test/bangle-3a.webp"] },
       ] },
     } });
     productIds.push(product.id);
     const variant = await prisma!.productPriceVariant.findUniqueOrThrow({ where: { sku: variantSku } });
     const sameQualitySize = await prisma!.productPriceVariant.findUniqueOrThrow({ where: { sku: `${sku}R02S56` } });
+    const sameQualityShape = await prisma!.productPriceVariant.findUniqueOrThrow({ where: { sku: `${sku}O02S54` } });
     const order = await createOrder({ total: 2_000_000, items: [{ productId: product.id, productSku: variantSku, variantId: variant.id, quantity: 1, unitPrice: 2_000_000, lineTotal: 2_000_000 }] });
     const commerce = new CommerceService(prisma!, {
       isSyncEnabled: () => false,
@@ -370,13 +437,21 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     assert.equal(updatedVariant.beadSize, "54");
     assert.equal(updatedVariant.stock, 2);
     assert.deepEqual(updatedVariant.imageUrls, ["https://cdn.example.test/bangle-2a.webp"]);
-    assert.deepEqual(updatedSameQualitySize.imageUrls, ["https://cdn.example.test/bangle-2a.webp"]);
+    assert.deepEqual(updatedSameQualitySize.imageUrls, [], "unrelated edits preserve a legacy media conflict without silently overwriting it");
     assert.deepEqual(differentQuality.imageUrls, ["https://cdn.example.test/bangle-3a.webp"]);
     assert.equal(updatedSameQualitySize.id, sameQualitySize.id);
     assert.equal(updatedSameQualitySize.sku, `${sku}R02S56`);
     assert.equal(updatedSameQualitySize.stock, 3);
     assert.equal(orderItem.productId, product.id);
     assert.equal(orderItem.variantId, variant.id);
+
+    await commerce.updateProductFields(product.id, { priceVariants: [
+      { id: variant.id, imageUrls: ["https://cdn.example.test/bangle-2a.webp"] },
+      { id: sameQualitySize.id, imageUrls: ["https://cdn.example.test/bangle-2a.webp"] },
+      { id: sameQualityShape.id, imageUrls: ["https://cdn.example.test/bangle-2a.webp"] },
+    ] }, actor());
+    const alignedQuality = await prisma!.productPriceVariant.findMany({ where: { productId: product.id, quality: "2A" }, orderBy: { sku: "asc" } });
+    assert.ok(alignedQuality.every((row) => row.imageUrls.length === 1 && row.imageUrls[0] === "https://cdn.example.test/bangle-2a.webp"));
 
     await commerce.updateProductFields(product.id, { description: "PATCH chỉ sửa mô tả" }, actor());
     const afterOmittedMedia = await prisma!.product.findUniqueOrThrow({ where: { id: product.id }, include: { images: true, variants: true } });
@@ -387,12 +462,38 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     await commerce.updateProductFields(product.id, { priceVariants: [{ id: variant.id, imageUrls: [] }] }, actor());
     const afterExplicitClear = await prisma!.product.findUniqueOrThrow({ where: { id: product.id }, include: { images: true, variants: true } });
     assert.equal(afterExplicitClear.images[0]?.url, "https://cdn.example.test/bangle-original.webp");
-    assert.deepEqual(afterExplicitClear.variants.filter((row) => row.quality === "2A").map((row) => row.imageUrls), [[], []]);
+    assert.deepEqual(afterExplicitClear.variants.filter((row) => row.quality === "2A").map((row) => row.imageUrls), [[], [], []]);
     assert.deepEqual(afterExplicitClear.variants.find((row) => row.sku === `${sku}R03S54`)?.imageUrls, ["https://cdn.example.test/bangle-3a.webp"]);
+    await assert.rejects(() => commerce.updateProductPublication(product.id, "ACTIVE", actor()), /chất lượng: 2A/i);
+    await commerce.updateProductFields(product.id, { priceVariants: [
+      { id: variant.id, imageUrls: ["https://cdn.example.test/bangle-2a.webp"] },
+      { id: sameQualitySize.id, imageUrls: ["https://cdn.example.test/bangle-2a.webp"] },
+      { id: sameQualityShape.id, imageUrls: ["https://cdn.example.test/bangle-2a.webp"] },
+    ] }, actor());
+    await commerce.updateProductPublication(product.id, "ACTIVE", actor());
+    await assert.rejects(() => commerce.updateProductFields(product.id, { priceVariants: [{ id: sameQualitySize.id, imageUrls: [] }] }, actor()), /chất lượng: 2A/i);
+    const activeImages = await prisma!.productPriceVariant.findMany({ where: { productId: product.id, quality: "2A" } });
+    assert.ok(activeImages.every((row) => row.imageUrls.length === 1 && row.imageUrls[0] === "https://cdn.example.test/bangle-2a.webp"));
+
+    const legacyId = randomUUID();
+    const legacySku = `CILEGACY${legacyId.replaceAll("-", "").slice(0, 10)}`;
+    const legacy = await prisma!.product.create({ data: {
+      id: legacyId, sku: legacySku, name: "Kiềng legacy thiếu dáng và size", slug: `ci-bangle-legacy-${legacyId}`,
+      kind: "JEWELRY", status: "ACTIVE", categoryId: category.id, price: 1_000_000, stock: 1,
+      variants: { create: [{ optionKey: "LEGACY::2A", quality: "2A", shape: null, beadSize: null, sku: `${legacySku}BAD`, price: 1_000_000, stock: 1, imageUrls: [] }] },
+    }, include: { variants: true } });
+    productIds.push(legacy.id);
+    const legacySaved = await commerce.saveProduct({ name: "Kiềng legacy tên đã sửa" }, legacy.id);
+    assert.equal(legacySaved.name, "Kiềng legacy tên đã sửa");
+    const legacyVariant = await prisma!.productPriceVariant.findUniqueOrThrow({ where: { id: legacy.variants[0].id } });
+    assert.equal(legacyVariant.shape, null);
+    assert.equal(legacyVariant.beadSize, null);
+    const hiddenLegacy = await commerce.updateProductPublication(legacy.id, "HIDDEN", actor());
+    assert.equal(hiddenLegacy.status, "HIDDEN");
   });
 
   await t.test("report separates pending orders, collections, refunds, returned goods and unverified COD", { skip: !shouldRunIntegrationCase("report") }, async () => {
-    const reportAt = new Date(Date.UTC(2200 + Math.floor(Math.random() * 100), 0, 1 + Math.floor(Math.random() * 365), 12));
+    const reportAt = new Date(Date.UTC(2250, 5, 15, 12));
     const day = reportAt.toISOString().slice(0, 10);
     const reporting = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any);
     const before = await reporting.report({ from: day, to: day });
