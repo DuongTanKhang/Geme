@@ -14,6 +14,27 @@ import { synchronizeBangleVariantMedia } from "./bangle-variant-media.js";
 
 type Input = Record<string, any>;
 const inventoryReceiptDuplicateWindowMs = 5 * 60 * 1000;
+const maxSerializationAttempts = 3;
+const isRetryableSerializationConflict = (error: any) => [
+  error?.code,
+  error?.cause?.code,
+  error?.meta?.code,
+  error?.meta?.driverAdapterError?.cause?.code,
+  error?.meta?.driverAdapterError?.cause?.originalCode,
+].some((code) => ["P2034", "40001", "40P01"].includes(String(code || "")));
+async function retrySerializationConflict<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (attempt >= maxSerializationAttempts || !isRetryableSerializationConflict(error)) throw error;
+      // The callers use row locks and idempotency/state guards, so retrying a
+      // serialization/deadlock abort is safe; network/provider work is outside
+      // these transactions and will not be repeated.
+      await new Promise((resolve) => setTimeout(resolve, attempt * 25));
+    }
+  }
+}
 const slugify = (value: string) => String(value || "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `item-${Date.now()}`;
 const gemstoneSizeSkuToken = (value: string) => value.trim().toLocaleUpperCase("en").replace(/([0-9])[.,]([0-9])/g, "$1P$2").replace(/[^A-Z0-9]/g, "");
 const gemstoneCutSkuToken = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "");
@@ -2528,47 +2549,94 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (!productId || !["IN", "OUT"].includes(type)) throw new BadRequestException("Chọn sản phẩm và loại nhập hoặc xuất kho.");
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000) throw new BadRequestException("Số lượng phải là số nguyên từ 1 đến 100.000.");
 
-    try {
-      const movement = await this.prisma.$transaction(async (tx) => {
-        const product = await tx.product.findUnique({ where: { id: productId }, include: { variants: { orderBy: { sortOrder: "asc" } } } });
+    const movement = await this.prisma.$transaction(async (tx) => {
+      const delta = type === "IN" ? quantity : -quantity;
+      let productName: string;
+      let productSku: string;
+      let stockBefore: number;
+      let stockAfter: number;
+      let variantLabel: string | null = null;
+
+      if (variantId) {
+        const product = await tx.product.findUnique({ where: { id: productId }, select: { id: true, name: true, sku: true } });
         if (!product) throw new NotFoundException("Không tìm thấy sản phẩm.");
-        const selectedVariant = variantId ? product.variants.find((variant) => variant.id === variantId) : null;
-        if (variantId && !selectedVariant) throw new BadRequestException("Phiên bản không thuộc sản phẩm đã chọn.");
+        const selectedVariant = await tx.productPriceVariant.findFirst({
+          where: { id: variantId, productId }, select: { id: true, sku: true, shape: true, quality: true, beadSize: true },
+        });
+        if (!selectedVariant) throw new BadRequestException("Phiên bản không thuộc sản phẩm đã chọn.");
 
-        let stockBefore: number;
-        let stockAfter: number;
-        let variantLabel: string | null = null;
-        if (selectedVariant) {
-          stockBefore = selectedVariant.stock;
-          if (type === "OUT" && stockBefore < quantity) throw new BadRequestException("Số lượng xuất vượt quá tồn kho của phiên bản.");
-          stockAfter = stockBefore + (type === "IN" ? quantity : -quantity);
-          await tx.productPriceVariant.update({ where: { id: selectedVariant.id }, data: { stock: stockAfter } });
-          const nextVariants = await tx.productPriceVariant.findMany({ where: { productId }, select: { stock: true } });
-          const productStock = nextVariants.reduce((sum, item) => sum + item.stock, 0);
-          await tx.product.update({ where: { id: productId }, data: { stock: productStock, soldOutAt: productStock === 0 ? product.soldOutAt ?? new Date() : null } });
-          variantLabel = variantDisplayLabel(selectedVariant);
-        } else {
-          stockBefore = product.stock;
-          if (type === "OUT" && stockBefore < quantity) throw new BadRequestException("Số lượng xuất vượt quá tồn kho hiện tại.");
-          stockAfter = stockBefore + (type === "IN" ? quantity : -quantity);
-          await tx.product.update({ where: { id: productId }, data: { stock: stockAfter, soldOutAt: type === "OUT" && stockAfter === 0 ? product.soldOutAt ?? new Date() : stockAfter > 0 ? null : product.soldOutAt } });
+        // Increment/decrement in SQL so concurrent movements cannot overwrite
+        // one another with a stale absolute stock value. The product total is
+        // changed by the same delta in this transaction, preserving the sum of
+        // its variants and matching checkout's variant-then-product lock order.
+        const variantRows = await tx.$queryRaw<Array<{ stockBefore: number; stockAfter: number }>>`
+          UPDATE "product_price_variants"
+          SET "stock" = "stock" + ${delta}
+          WHERE "id" = ${variantId}::uuid AND "product_id" = ${productId}::uuid AND "stock" + ${delta} >= 0
+          RETURNING ("stock" - ${delta})::int AS "stockBefore", "stock"::int AS "stockAfter"
+        `;
+        if (!variantRows.length) throw new BadRequestException("Số lượng xuất vượt quá tồn kho của phiên bản hoặc tồn vừa thay đổi.");
+
+        const now = new Date();
+        const productRows = await tx.$queryRaw<Array<{ stockBefore: number; stockAfter: number }>>`
+          UPDATE "products"
+          SET "stock" = "stock" + ${delta},
+              "sold_out_at" = CASE
+                WHEN "stock" + ${delta} = 0 THEN COALESCE("sold_out_at", ${now})
+                WHEN "stock" + ${delta} > 0 THEN NULL
+                ELSE "sold_out_at"
+              END
+          WHERE "id" = ${productId}::uuid AND "stock" + ${delta} >= 0
+          RETURNING ("stock" - ${delta})::int AS "stockBefore", "stock"::int AS "stockAfter"
+        `;
+        if (!productRows.length) throw new BadRequestException("Tồn tổng sản phẩm không đủ hoặc không khớp với tồn biến thể; giao dịch đã được hủy.");
+        productName = product.name;
+        productSku = selectedVariant.sku || product.sku;
+        stockBefore = variantRows[0].stockBefore;
+        stockAfter = variantRows[0].stockAfter;
+        variantLabel = variantDisplayLabel(selectedVariant);
+      } else {
+        // Serialize the no-variant check with product edits that add variants.
+        await tx.$queryRaw`SELECT "id" FROM "products" WHERE "id" = ${productId}::uuid FOR UPDATE`;
+        const product = await tx.product.findUnique({
+          where: { id: productId },
+          include: { variants: { select: { id: true }, take: 1 } },
+        });
+        if (!product) throw new NotFoundException("Không tìm thấy sản phẩm.");
+        if (product.variants.length) throw new BadRequestException("Sản phẩm có biến thể; hãy chọn SKU/biến thể cụ thể để điều chỉnh tồn kho.");
+
+        const now = new Date();
+        const productRows = await tx.$queryRaw<Array<{ stockBefore: number; stockAfter: number }>>`
+          UPDATE "products"
+          SET "stock" = "stock" + ${delta},
+              "sold_out_at" = CASE
+                WHEN "stock" + ${delta} = 0 THEN COALESCE("sold_out_at", ${now})
+                WHEN "stock" + ${delta} > 0 THEN NULL
+                ELSE "sold_out_at"
+              END
+          WHERE "id" = ${productId}::uuid AND "stock" + ${delta} >= 0
+          RETURNING ("stock" - ${delta})::int AS "stockBefore", "stock"::int AS "stockAfter"
+        `;
+        if (!productRows.length) {
+          if (type === "OUT") throw new BadRequestException("Số lượng xuất vượt quá tồn kho hiện tại hoặc tồn vừa thay đổi.");
+          throw new NotFoundException("Không tìm thấy sản phẩm.");
         }
+        productName = product.name;
+        productSku = product.sku;
+        stockBefore = productRows[0].stockBefore;
+        stockAfter = productRows[0].stockAfter;
+      }
 
-        const savedMovement = await tx.inventoryMovement.create({ data: {
-          productId, variantId: selectedVariant?.id || null, productName: product.name,
-          productSku: selectedVariant?.sku || product.sku, variantLabel, type, quantity, stockBefore, stockAfter,
-          reference: input.reference ? String(input.reference).trim().slice(0, 120) : null,
-          note: input.note ? String(input.note).trim().slice(0, 2000) : null,
-        } });
-        await this.queueProductStockSync(tx, [productId]);
-        return savedMovement;
-      });
-      this.publishCatalogChange("product", "updated", productId);
-      return movement;
-    } catch (error: any) {
-      if (error?.code === "P2025") throw new NotFoundException("Không tìm thấy sản phẩm hoặc phiên bản.");
-      throw error;
-    }
+      const savedMovement = await tx.inventoryMovement.create({ data: {
+        productId, variantId, productName, productSku, variantLabel, type, quantity, stockBefore, stockAfter,
+        reference: input.reference ? String(input.reference).trim().slice(0, 120) : null,
+        note: input.note ? String(input.note).trim().slice(0, 2000) : null,
+      } });
+      await this.queueProductStockSync(tx, [productId]);
+      return savedMovement;
+    });
+    this.publishCatalogChange("product", "updated", productId);
+    return movement;
   }
 
   customers(query: Record<string, string>) {
@@ -2738,7 +2806,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const changedProductIds = new Set<string>();
     let noOp = false;
     try {
-      const order = await this.prisma.$transaction(async (tx) => {
+      const order = await retrySerializationConflict(() => this.prisma.$transaction(async (tx) => {
+        changedProductIds.clear();
+        noOp = false;
         await tx.$queryRaw`SELECT "id" FROM "orders" WHERE "id" = ${id}::uuid FOR UPDATE`;
         const current = await tx.order.findUnique({ where: { id }, include: { payments: true, items: true } });
         if (!current) throw new NotFoundException("Không tìm thấy đơn hàng.");
@@ -2804,7 +2874,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           after: { status, reason: reason || null, inventoryCommittedAt: inventoryCommittedAt?.toISOString() || current.inventoryCommittedAt?.toISOString() || null },
         } });
         return updatedOrder;
-      });
+      }));
       if (noOp) return order;
       if (changedProductIds.size) {
         await this.queueProductStockSync(this.prisma, changedProductIds).catch(() => undefined);
@@ -2833,7 +2903,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (note.length < 5 || note.length > 1000) throw new BadRequestException("Ghi chú khoản thu cần từ 5 đến 1.000 ký tự.");
     if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) throw new BadRequestException("Thiếu Idempotency-Key hợp lệ cho khoản thu.");
     try {
-      const order = await this.prisma.$transaction(async (tx) => {
+      const order = await retrySerializationConflict(() => this.prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "orders" WHERE "id" = ${id}::uuid FOR UPDATE`;
         const current = await tx.order.findUnique({ where: { id }, include: { payments: { orderBy: { createdAt: "asc" } } } });
         if (!current) throw new NotFoundException("Không tìm thấy đơn hàng.");
@@ -2891,7 +2961,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           after: { amount, method, providerRef, idempotencyKey, note, capturedAmount: totalCapturedAfter, remainingAmount: remaining - amount, latePayment: current.status === "CANCELLED" },
         } });
         return result;
-      }, { isolationLevel: "Serializable", maxWait: 10_000, timeout: 30_000 });
+      }, { isolationLevel: "Serializable", maxWait: 10_000, timeout: 30_000 }));
       if (order.status !== "CANCELLED" && this.pos365.isSyncEnabled() && Number(order.payments.filter((payment: any) => ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"].includes(payment.status)).reduce((sum: number, payment: any) => sum + Number(payment.amount), 0)) >= Number(order.totalAmount)) {
         void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đánh thức hàng đợi POS365 cho đơn ${order.code}.`, error));
       }

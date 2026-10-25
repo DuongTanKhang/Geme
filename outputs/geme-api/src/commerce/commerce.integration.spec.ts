@@ -20,6 +20,7 @@ function isDedicatedLocalTestDatabase(value: string | undefined) {
 }
 
 const enabled = process.env.RUN_POSTGRES_INTEGRATION_TESTS === "1" && isDedicatedLocalTestDatabase(process.env.DATABASE_URL);
+const shouldRunIntegrationCase = (name: string) => !process.env.COMMERCE_INTEGRATION_CASE || process.env.COMMERCE_INTEGRATION_CASE === name;
 let prisma: PrismaService | null = null;
 const orderIds: string[] = [];
 const productIds: string[] = [];
@@ -40,26 +41,32 @@ after(async () => {
   if (!prisma) return;
   const db = prisma;
   const ids = [...orderIds];
+  const cleanupErrors: Error[] = [];
+  const cleanup = async (label: string, operation: () => Promise<unknown>) => {
+    try { await operation(); }
+    catch (error) { cleanupErrors.push(new Error(`Cleanup ${label} thất bại.`, { cause: error })); }
+  };
   if (ids.length) {
-    await db.paymentRefund.deleteMany({ where: { payment: { orderId: { in: ids } } } });
-    await db.codReconciliationBatch.deleteMany({ where: { items: { some: { orderId: { in: ids } } } } });
-    await db.orderReturn.deleteMany({ where: { orderId: { in: ids } } });
-    await db.orderEmailOutbox.deleteMany({ where: { orderId: { in: ids } } });
-    await db.inventoryReservation.deleteMany({ where: { orderId: { in: ids } } });
-    await db.order.deleteMany({ where: { id: { in: ids } } });
+    await cleanup("payment refunds", () => db.paymentRefund.deleteMany({ where: { payment: { orderId: { in: ids } } } }));
+    await cleanup("COD reconciliation batches", () => db.codReconciliationBatch.deleteMany({ where: { items: { some: { orderId: { in: ids } } } } }));
+    await cleanup("returns", () => db.orderReturn.deleteMany({ where: { orderId: { in: ids } } }));
+    await cleanup("order email outbox", () => db.orderEmailOutbox.deleteMany({ where: { orderId: { in: ids } } }));
+    await cleanup("inventory reservations", () => db.inventoryReservation.deleteMany({ where: { orderId: { in: ids } } }));
+    await cleanup("orders", () => db.order.deleteMany({ where: { id: { in: ids } } }));
   }
   if (productIds.length) {
-    await db.inventoryMovement.deleteMany({ where: { productId: { in: productIds } } });
-    await db.product.deleteMany({ where: { id: { in: productIds } } });
+    await cleanup("inventory movements", () => db.inventoryMovement.deleteMany({ where: { productId: { in: productIds } } }));
+    await cleanup("products", () => db.product.deleteMany({ where: { id: { in: productIds } } }));
   }
-  if (categoryIds.length) await db.category.deleteMany({ where: { id: { in: categoryIds } } });
-  if (contactKeys.length) await db.contactInquiry.deleteMany({ where: { idempotencyKey: { in: contactKeys } } });
-  if (customerPhones.length) await db.customer.deleteMany({ where: { phone: { in: customerPhones } } });
+  if (categoryIds.length) await cleanup("categories", () => db.category.deleteMany({ where: { id: { in: categoryIds } } }));
+  if (contactKeys.length) await cleanup("contact inquiries", () => db.contactInquiry.deleteMany({ where: { idempotencyKey: { in: contactKeys } } }));
+  if (customerPhones.length) await cleanup("customers", () => db.customer.deleteMany({ where: { phone: { in: customerPhones } } }));
   if (adminIds.length) {
-    await db.auditLog.deleteMany({ where: { adminId: { in: adminIds } } });
-    await db.adminUser.deleteMany({ where: { id: { in: adminIds } } });
+    await cleanup("audit logs", () => db.auditLog.deleteMany({ where: { adminId: { in: adminIds } } }));
+    await cleanup("admin users", () => db.adminUser.deleteMany({ where: { id: { in: adminIds } } }));
   }
-  await db.$disconnect();
+  await cleanup("disconnect", () => db.$disconnect());
+  if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "PostgreSQL integration test cleanup failed.");
 });
 
 async function createAdmin(role: "ADMIN" | "CONTENT_EDITOR" = "ADMIN") {
@@ -74,6 +81,7 @@ async function createAdmin(role: "ADMIN" | "CONTENT_EDITOR" = "ADMIN") {
 async function createOrder(options: {
   status?: "PENDING_CONFIRMATION" | "PROCESSING" | "SHIPPING" | "DELIVERED" | "CANCELLED";
   total?: number;
+  placedAt?: Date;
   payment?: { method: "COD" | "BANK_TRANSFER"; amount: number; status: "PENDING" | "PAID" | "PARTIALLY_REFUNDED"; paidAt?: Date }[];
   items?: { quantity: number; unitPrice: number; lineTotal: number; productId?: string; productSku?: string; variantId?: string }[];
   carrierShipmentStatus?: string;
@@ -87,7 +95,7 @@ async function createOrder(options: {
     totalAmount: options.total ?? 10_000, status: options.status || "DELIVERED",
     carrierShipmentStatus: options.carrierShipmentStatus,
     carrierCodAmount: options.payment?.some((entry) => entry.method === "COD") ? options.total ?? 10_000 : null,
-    placedAt: now,
+    placedAt: options.placedAt || now,
     payments: { create: (options.payment || []).map((payment) => ({
       method: payment.method, amount: payment.amount, status: payment.status,
       ...(payment.paidAt ? { paidAt: payment.paidAt } : {}),
@@ -107,7 +115,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
   const financeActor = await createAdmin();
   const statementDate = new Date().toISOString().slice(0, 10);
 
-  await t.test("COD variances close at the wider state width, concurrent close is single-writer, and reversal preserves collected payment evidence", async () => {
+  await t.test("COD variances close at the wider state width, concurrent close is single-writer, and reversal preserves collected payment evidence", { skip: !shouldRunIntegrationCase("cod") }, async () => {
     const underCollected = await createOrder({ total: 10_000, payment: [{ method: "COD", amount: 10_000, status: "PENDING" }] });
     const underBatch = await operations.createCodReconciliation(financeActor, {
       externalReference: `ci-under-${randomUUID()}`, statementDate,
@@ -131,13 +139,83 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     const closedExact = await prisma!.codReconciliationBatch.findUniqueOrThrow({ where: { id: exactBatch.id } });
     assert.equal(closedExact.status, "RECONCILED_WITH_VARIANCE");
     assert.equal((await prisma!.payment.findFirstOrThrow({ where: { orderId: exactCustomer.id } })).status, "PAID");
+    const reverseCalls = await Promise.allSettled(Array.from({ length: 3 }, () => operations.reverseCod(exactBatch.id, financeActor, { reason: "Đảo phiếu kiểm thử để nhập lại" })));
+    assert.equal(reverseCalls.filter((result) => result.status === "fulfilled").length, 3);
     const reversed = await operations.reverseCod(exactBatch.id, financeActor, { reason: "Đảo phiếu kiểm thử để nhập lại" });
     assert.equal(reversed.status, "REVERSED");
+    assert.ok(reversed.items.every((item: any) => item.status === "REVERSED"));
+    assert.equal(await prisma!.auditLog.count({ where: { action: "COD_RECONCILIATION_REVERSED", entityType: "COD_RECONCILIATION", entityId: exactBatch.id } }), 1);
     assert.equal((await prisma!.payment.findFirstOrThrow({ where: { orderId: exactCustomer.id } })).status, "PAID");
     assert.ok((await operations.codEligibleOrders("200")).some((row: any) => row.id === exactCustomer.id));
   });
 
-  await t.test("return refunds split over multiple captures, enforce returned value and replay idempotently", async () => {
+  await t.test("manual inventory movements atomically add and subtract stock and require a variant when variants exist", { skip: !shouldRunIntegrationCase("inventory") }, async () => {
+    const commerce = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any);
+    const productId = randomUUID();
+    const sku = `CI${productId.replaceAll("-", "").slice(0, 12)}`;
+    await prisma!.product.create({ data: {
+      id: productId, sku, name: "Inventory movement fixture", slug: `ci-inventory-${productId}`,
+      kind: "JEWELRY", status: "HIDDEN", price: 10_000, stock: 10,
+    } });
+    productIds.push(productId);
+
+    const inbound = await Promise.all([
+      commerce.createInventoryMovement({ productId, type: "IN", quantity: 3 }),
+      commerce.createInventoryMovement({ productId, type: "IN", quantity: 4 }),
+    ]);
+    assert.equal((await prisma!.product.findUniqueOrThrow({ where: { id: productId } })).stock, 17);
+    const inboundRows = inbound.map(({ stockBefore, stockAfter, quantity }) => ({ stockBefore, stockAfter, quantity })).sort((a, b) => a.stockBefore - b.stockBefore);
+    assert.equal(inboundRows[0].stockBefore, 10);
+    assert.equal(inboundRows[0].stockAfter, inboundRows[1].stockBefore);
+    assert.equal(inboundRows[1].stockAfter, 17);
+    assert.ok(inboundRows.every((row) => row.stockAfter - row.stockBefore === row.quantity));
+
+    const outboundId = randomUUID();
+    const outboundSku = `CI${outboundId.replaceAll("-", "").slice(0, 12)}`;
+    await prisma!.product.create({ data: {
+      id: outboundId, sku: outboundSku, name: "Outbound race fixture", slug: `ci-outbound-${outboundId}`,
+      kind: "JEWELRY", status: "HIDDEN", price: 10_000, stock: 5,
+    } });
+    productIds.push(outboundId);
+    const outbound = await Promise.allSettled([
+      commerce.createInventoryMovement({ productId: outboundId, type: "OUT", quantity: 4 }),
+      commerce.createInventoryMovement({ productId: outboundId, type: "OUT", quantity: 4 }),
+    ]);
+    assert.equal(outbound.filter((result) => result.status === "fulfilled").length, 1);
+    assert.equal(outbound.filter((result) => result.status === "rejected").length, 1);
+    assert.equal((await prisma!.product.findUniqueOrThrow({ where: { id: outboundId } })).stock, 1);
+    assert.equal(await prisma!.inventoryMovement.count({ where: { productId: outboundId, type: "OUT" } }), 1);
+
+    const variantProductId = randomUUID();
+    const variantProductSku = `CI${variantProductId.replaceAll("-", "").slice(0, 12)}`;
+    const variantProduct = await prisma!.product.create({ data: {
+      id: variantProductId, sku: variantProductSku, name: "Variant inventory fixture", slug: `ci-variant-inventory-${variantProductId}`,
+      kind: "JEWELRY", status: "HIDDEN", price: 10_000, stock: 5,
+      variants: { create: [
+        { optionKey: "QUALITY::2A", quality: "2A", sku: `${variantProductSku}A`, price: 10_000, stock: 2 },
+        { optionKey: "QUALITY::3A", quality: "3A", sku: `${variantProductSku}B`, price: 11_000, stock: 3 },
+      ] },
+    }, include: { variants: true } });
+    productIds.push(variantProductId);
+    const [firstVariant, secondVariant] = variantProduct.variants;
+    await assert.rejects(() => commerce.createInventoryMovement({ productId: variantProductId, type: "IN", quantity: 1 }), BadRequestException);
+    await Promise.all([
+      commerce.createInventoryMovement({ productId: variantProductId, variantId: firstVariant.id, type: "IN", quantity: 2 }),
+      commerce.createInventoryMovement({ productId: variantProductId, variantId: secondVariant.id, type: "IN", quantity: 4 }),
+    ]);
+    const variantOut = await Promise.allSettled([
+      commerce.createInventoryMovement({ productId: variantProductId, variantId: firstVariant.id, type: "OUT", quantity: 3 }),
+      commerce.createInventoryMovement({ productId: variantProductId, variantId: firstVariant.id, type: "OUT", quantity: 3 }),
+    ]);
+    assert.equal(variantOut.filter((result) => result.status === "fulfilled").length, 1);
+    assert.equal(variantOut.filter((result) => result.status === "rejected").length, 1);
+    const afterVariantMoves = await prisma!.product.findUniqueOrThrow({ where: { id: variantProductId }, include: { variants: true } });
+    assert.equal(afterVariantMoves.stock, 8);
+    assert.equal(afterVariantMoves.stock, afterVariantMoves.variants.reduce((sum, row) => sum + row.stock, 0));
+    assert.equal(await prisma!.inventoryMovement.count({ where: { productId: variantProductId } }), 3);
+  });
+
+  await t.test("return refunds split over multiple captures, enforce returned value and replay idempotently", { skip: !shouldRunIntegrationCase("refunds") }, async () => {
     const order = await createOrder({
       total: 10_000,
       payment: [
@@ -171,7 +249,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     }), /vượt|Vượt/);
   });
 
-  await t.test("two checkouts cannot reserve the last item; payment and cancel serialize without losing stock or money evidence", async () => {
+  await t.test("two checkouts cannot reserve the last item; payment and cancel serialize without losing stock or money evidence", { skip: !shouldRunIntegrationCase("payment-cancel") }, async () => {
     const productId = randomUUID();
     const product = await prisma!.product.create({ data: {
       id: productId, sku: `CI-${productId.slice(0, 10)}`, name: "Fixture ring", slug: `ci-${productId}`,
@@ -185,6 +263,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
       items: [{ productId, quantity: 1 }],
     }, undefined, false, `checkout-${randomUUID()}`);
     const checkoutResults = await Promise.allSettled([makeCheckout(), makeCheckout()]);
+    orderIds.push(...checkoutResults.filter((entry): entry is PromiseFulfilledResult<any> => entry.status === "fulfilled").map((entry) => entry.value.id));
     assert.equal(checkoutResults.filter((entry) => entry.status === "fulfilled").length, 1);
     assert.equal((await prisma!.product.findUniqueOrThrow({ where: { id: productId } })).stock, 0);
     assert.equal(await prisma!.inventoryReservation.count({ where: { productId, status: "ACTIVE" } }), 1);
@@ -193,24 +272,30 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     const phone = `09${String(Date.now()).slice(-8)}`;
     customerPhones.push(phone);
     await prisma!.order.update({ where: { id: order.id }, data: { customerPhone: phone } });
+    const idempotencyKey = `payment-${randomUUID()}`;
     const outcomes = await Promise.allSettled([
-      commerce.recordOrderPayment(order.id, financeActor, { amount: 10_000, method: "BANK_TRANSFER", providerRef: `ci-${randomUUID()}`, note: "Khoản thu kiểm thử race" }, `payment-${randomUUID()}`),
+      commerce.recordOrderPayment(order.id, financeActor, { amount: 10_000, method: "BANK_TRANSFER", providerRef: `ci-${randomUUID()}`, note: "Khoản thu kiểm thử race" }, idempotencyKey),
       commerce.updateOrderStatus(order.id, "CANCELLED", financeActor, "Kiểm thử race giữa hủy và thu tiền"),
     ]);
     assert.ok(outcomes.some((outcome) => outcome.status === "fulfilled"));
+    assert.equal(outcomes[0].status, "fulfilled", "Tiền đã nhận phải được ghi nhận, kể cả khi đơn vừa bị hủy.");
     const current = await prisma!.order.findUniqueOrThrow({ where: { id: order.id }, include: { payments: true, inventoryReservations: true } });
     const paid = current.payments.some((payment) => ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"].includes(payment.status));
+    assert.equal(current.payments.filter((payment) => payment.idempotencyKey === idempotencyKey).length, 1);
+    assert.equal(await prisma!.inventoryMovement.count({ where: { reference: order.code, type: "OUT" } }), 1);
     if (current.status === "CANCELLED") {
       assert.equal(current.inventoryReleasedAt == null, false);
       assert.equal((await prisma!.product.findUniqueOrThrow({ where: { id: productId } })).stock, 1);
+      assert.equal(await prisma!.inventoryMovement.count({ where: { reference: order.code, type: "IN" } }), 1);
       assert.equal(paid, true); // late payment is retained for a separate refund, stock stays released
     } else {
       assert.equal(paid, true);
       assert.equal((await prisma!.product.findUniqueOrThrow({ where: { id: productId } })).stock, 0);
+      assert.equal(await prisma!.inventoryMovement.count({ where: { reference: order.code, type: "IN" } }), 0);
     }
   });
 
-  await t.test("content editor API handler rejects direct price, stock, delete and SKU payloads", async () => {
+  await t.test("content editor API handler rejects direct price, stock, delete and SKU payloads", { skip: !shouldRunIntegrationCase("permissions") }, async () => {
     const editor = await createAdmin("CONTENT_EDITOR");
     const calls: string[] = [];
     const commerceStub = {
@@ -228,7 +313,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     assert.deepEqual(calls, ["id"]);
   });
 
-  await t.test("full bangle edit shares media by shape and quality while preserving omitted fields and inventory links", async () => {
+  await t.test("full bangle edit shares media by shape and quality while preserving omitted fields and inventory links", { skip: !shouldRunIntegrationCase("bangle") }, async () => {
     let category = await prisma!.category.findUnique({ where: { slug: "vong-kieng" } });
     if (!category) {
       category = await prisma!.category.create({ data: {
@@ -238,7 +323,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
       categoryIds.push(category.id);
     }
     const id = randomUUID();
-    const sku = `CI-BANGLE-${id.replaceAll("-", "").slice(0, 12)}`;
+    const sku = `CIBANGLE${id.replaceAll("-", "").slice(0, 12)}`;
     const variantSku = `${sku}R02S54`;
     const product = await prisma!.product.create({ data: {
       id, sku, name: "Kiềng Aquamarine trước sửa", slug: `ci-bangle-${id}`, fullDescription: "<p>Thông tin đầy đủ đã có</p>", seoTitle: "Tiêu đề cũ",
@@ -254,7 +339,11 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     const variant = await prisma!.productPriceVariant.findUniqueOrThrow({ where: { sku: variantSku } });
     const sameQualitySize = await prisma!.productPriceVariant.findUniqueOrThrow({ where: { sku: `${sku}R02S56` } });
     const order = await createOrder({ total: 2_000_000, items: [{ productId: product.id, productSku: variantSku, variantId: variant.id, quantity: 1, unitPrice: 2_000_000, lineTotal: 2_000_000 }] });
-    const commerce = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any);
+    const commerce = new CommerceService(prisma!, {
+      isSyncEnabled: () => false,
+      queueProductImageSync: async () => undefined,
+      syncProductPricesNow: async () => undefined,
+    } as any, {} as any);
 
     const saved = await commerce.saveProduct({
       sku, name: "Kiềng Aquamarine đã sửa", kind: "JEWELRY", categoryId: category.id, status: "HIDDEN",
@@ -302,35 +391,36 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     assert.deepEqual(afterExplicitClear.variants.find((row) => row.sku === `${sku}R03S54`)?.imageUrls, ["https://cdn.example.test/bangle-3a.webp"]);
   });
 
-  await t.test("report separates pending orders, collections, refunds, returned goods and unverified COD", async () => {
-    const now = new Date();
-    const paidAt = now;
-    await createOrder({ status: "PENDING_CONFIRMATION", total: 1_000, payment: [{ method: "BANK_TRANSFER", amount: 1_000, status: "PENDING" }] });
-    await createOrder({ status: "PROCESSING", total: 10_000, payment: [{ method: "BANK_TRANSFER", amount: 10_000, status: "PAID", paidAt }] });
-    await createOrder({ status: "DELIVERED", total: 5_000, payment: [{ method: "COD", amount: 5_000, status: "PENDING" }] });
-    const returned = await createOrder({ status: "DELIVERED", total: 4_000, payment: [{ method: "BANK_TRANSFER", amount: 4_000, status: "PARTIALLY_REFUNDED", paidAt }], items: [{ quantity: 2, unitPrice: 2_000, lineTotal: 4_000 }] });
+  await t.test("report separates pending orders, collections, refunds, returned goods and unverified COD", { skip: !shouldRunIntegrationCase("report") }, async () => {
+    const reportAt = new Date(Date.UTC(2200 + Math.floor(Math.random() * 100), 0, 1 + Math.floor(Math.random() * 365), 12));
+    const day = reportAt.toISOString().slice(0, 10);
+    const reporting = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any);
+    const before = await reporting.report({ from: day, to: day });
+    await createOrder({ status: "PENDING_CONFIRMATION", total: 1_000, placedAt: reportAt, payment: [{ method: "BANK_TRANSFER", amount: 1_000, status: "PENDING" }] });
+    await createOrder({ status: "PROCESSING", total: 10_000, placedAt: reportAt, payment: [{ method: "BANK_TRANSFER", amount: 10_000, status: "PAID", paidAt: reportAt }] });
+    await createOrder({ status: "DELIVERED", total: 5_000, placedAt: reportAt, payment: [{ method: "COD", amount: 5_000, status: "PENDING" }] });
+    const returned = await createOrder({ status: "DELIVERED", total: 4_000, placedAt: reportAt, payment: [{ method: "BANK_TRANSFER", amount: 4_000, status: "PARTIALLY_REFUNDED", paidAt: reportAt }], items: [{ quantity: 2, unitPrice: 2_000, lineTotal: 4_000 }] });
     const returnRow = await prisma!.orderReturn.create({ data: {
-      code: `CI-RET-${randomUUID().slice(0, 8)}`, orderId: returned.id, status: "RECEIVED", reason: "report fixture", receivedAt: now,
+      code: `CI-RET-${randomUUID().slice(0, 8)}`, orderId: returned.id, status: "RECEIVED", reason: "report fixture", receivedAt: reportAt,
       items: { create: [{ orderItemId: returned.items[0].id, productName: "CI fixture item", productSku: returned.items[0].productSku, quantity: 1 }] },
     } });
     await prisma!.paymentRefund.create({ data: {
       returnId: returnRow.id, paymentId: returned.payments[0].id, idempotencyKey: `report-refund-${randomUUID()}`,
-      amount: 1_000, note: "fixture refund", externalReference: `bank-${randomUUID()}`, createdByAdminId: financeActor.id, createdAt: now,
+      amount: 1_000, note: "fixture refund", externalReference: `bank-${randomUUID()}`, createdByAdminId: financeActor.id, createdAt: reportAt,
     } });
-    await createOrder({ status: "CANCELLED", total: 999, payment: [{ method: "BANK_TRANSFER", amount: 999, status: "PENDING" }] });
+    await createOrder({ status: "CANCELLED", total: 999, placedAt: reportAt, payment: [{ method: "BANK_TRANSFER", amount: 999, status: "PENDING" }] });
 
-    const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
-    const report = await new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any).report({ from: day, to: day });
-    assert.equal(report.grossOrderValue, 20_000);
-    assert.equal(report.capturedPayments, 14_000);
-    assert.equal(report.refundAmount, 1_000);
-    assert.equal(report.revenue, 13_000);
-    assert.equal(report.returnedGoodsValue, 2_000);
-    assert.equal(report.codUnreconciled, 5_000);
-    assert.equal(report.orderCount, 4);
+    const report = await reporting.report({ from: day, to: day });
+    assert.equal(report.grossOrderValue - before.grossOrderValue, 20_000);
+    assert.equal(report.capturedPayments - before.capturedPayments, 14_000);
+    assert.equal(report.refundAmount - before.refundAmount, 1_000);
+    assert.equal(report.revenue - before.revenue, 13_000);
+    assert.equal(report.returnedGoodsValue - before.returnedGoodsValue, 2_000);
+    assert.equal(report.codUnreconciled - before.codUnreconciled, 5_000);
+    assert.equal(report.orderCount - before.orderCount, 4);
   });
 
-  await t.test("contact submission persists once, replays the same payload and conflicts on altered replay", async () => {
+  await t.test("contact submission persists once, replays the same payload and conflicts on altered replay", { skip: !shouldRunIntegrationCase("contact") }, async () => {
     const contacts = new ContactService(prisma!);
     const key = `contact-ci-${randomUUID()}`;
     contactKeys.push(key);
