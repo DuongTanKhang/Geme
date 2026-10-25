@@ -1212,6 +1212,7 @@ model MediaAsset {
   mimeType        String   @map("mime_type") @db.VarChar(100)
   isPrivate       Boolean  @default(false) @map("is_private")
   storageProvider String   @default("database") @map("storage_provider") @db.VarChar(24)
+  bucketName      String?  @map("bucket_name") @db.VarChar(128)
   objectKey       String?  @map("object_key") @db.VarChar(700)
   data            Bytes?   @db.ByteA
   size            Int
@@ -1226,7 +1227,26 @@ model MediaAsset {
 
   @@index([createdAt(sort: Desc)])
   @@index([storageProvider, objectKey])
+  @@index([storageProvider, bucketName, objectKey, isPrivate])
   @@map("media_assets")
+}
+
+model MediaObjectCleanup {
+  id              String   @id @default(uuid()) @db.Uuid
+  storageProvider String   @default("r2") @map("storage_provider") @db.VarChar(24)
+  bucketName      String   @map("bucket_name") @db.VarChar(128)
+  objectKey       String   @map("object_key") @db.VarChar(700)
+  isPrivate       Boolean  @default(false) @map("is_private")
+  urlCandidates   String[] @default([]) @map("url_candidates") @db.Text
+  attemptCount    Int      @default(0) @map("attempt_count")
+  nextAttemptAt   DateTime @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  lastErrorCode   String?  @map("last_error_code") @db.VarChar(80)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([storageProvider, bucketName, objectKey, isPrivate])
+  @@index([nextAttemptAt, createdAt])
+  @@map("media_object_cleanups")
 }
 
 model AuditLog {

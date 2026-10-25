@@ -26,6 +26,10 @@ export class MediaStorageService {
     return this.usesR2 && Boolean(this.privateBucket);
   }
 
+  bucketName(isPrivate: boolean) {
+    return isPrivate && this.privateBucket ? this.privateBucket : (process.env.R2_BUCKET_NAME || "").trim();
+  }
+
   publicUrl(objectKey: string) {
     if (!this.publicBaseUrl) return null;
     return `${this.publicBaseUrl}/${objectKey.split("/").map(encodePathPart).join("/")}`;
@@ -35,15 +39,15 @@ export class MediaStorageService {
     const response = await this.request("PUT", objectKey, bytes, mimeType);
     if (!response.ok) {
       this.logger.error(`R2 upload failed with HTTP ${response.status}.`);
-      throw new ServiceUnavailableException("Không thể lưu media vào object storage. Vui lòng thử lại.");
+      throw new ServiceUnavailableException(`Object storage trả lỗi HTTP ${response.status} khi lưu media.`);
     }
   }
 
-  async getPublicObject(objectKey: string) {
-    const response = await this.request("GET", objectKey);
+  async getPublicObject(objectKey: string, bucketName?: string) {
+    const response = await this.request("GET", objectKey, undefined, undefined, bucketName);
     if (!response.ok) {
       this.logger.error(`R2 read failed with HTTP ${response.status}.`);
-      throw new ServiceUnavailableException("Không thể đọc media từ object storage.");
+      throw new ServiceUnavailableException(`Object storage trả lỗi HTTP ${response.status} khi đọc media.`);
     }
     return Buffer.from(await response.arrayBuffer());
   }
@@ -57,31 +61,31 @@ export class MediaStorageService {
     const response = await this.request("PUT", objectKey, bytes, mimeType, this.privateBucket);
     if (!response.ok) {
       this.logger.error(`R2 private upload failed with HTTP ${response.status}.`);
-      throw new ServiceUnavailableException("Không thể lưu media riêng tư vào object storage.");
+      throw new ServiceUnavailableException(`Object storage trả lỗi HTTP ${response.status} khi lưu media riêng tư.`);
     }
   }
 
-  async getPrivateObject(objectKey: string) {
-    if (!this.privateBucket) throw new ServiceUnavailableException("R2_PRIVATE_BUCKET_NAME chưa được cấu hình.");
-    const response = await this.request("GET", objectKey, undefined, undefined, this.privateBucket);
+  async getPrivateObject(objectKey: string, bucketName = this.privateBucket) {
+    if (!bucketName) throw new ServiceUnavailableException("R2_PRIVATE_BUCKET_NAME chưa được cấu hình.");
+    const response = await this.request("GET", objectKey, undefined, undefined, bucketName);
     if (!response.ok) {
       this.logger.error(`R2 private read failed with HTTP ${response.status}.`);
-      throw new ServiceUnavailableException("Không thể đọc media riêng tư từ object storage.");
+      throw new ServiceUnavailableException(`Object storage trả lỗi HTTP ${response.status} khi đọc media riêng tư.`);
     }
     return Buffer.from(await response.arrayBuffer());
   }
 
-  async deletePrivateObject(objectKey: string) {
-    if (!this.privateBucket) throw new ServiceUnavailableException("R2_PRIVATE_BUCKET_NAME chưa được cấu hình.");
-    const response = await this.request("DELETE", objectKey, undefined, undefined, this.privateBucket);
+  async deletePrivateObject(objectKey: string, bucketName = this.privateBucket) {
+    if (!bucketName) throw new ServiceUnavailableException("R2_PRIVATE_BUCKET_NAME chưa được cấu hình.");
+    const response = await this.request("DELETE", objectKey, undefined, undefined, bucketName);
     if (!response.ok && response.status !== 404) {
       this.logger.error(`R2 private delete failed with HTTP ${response.status}.`);
       throw new ServiceUnavailableException("Không thể dọn media riêng tư khỏi object storage.");
     }
   }
 
-  async deletePublicObject(objectKey: string) {
-    const response = await this.request("DELETE", objectKey);
+  async deletePublicObject(objectKey: string, bucketName?: string) {
+    const response = await this.request("DELETE", objectKey, undefined, undefined, bucketName);
     if (!response.ok && response.status !== 404) {
       this.logger.error(`R2 delete failed with HTTP ${response.status}.`);
       throw new ServiceUnavailableException("Không thể dọn media khỏi object storage.");
@@ -121,11 +125,23 @@ export class MediaStorageService {
     };
     if (mimeType) headers["Content-Type"] = mimeType;
 
-    try {
-      return await fetch(url, { method, headers, ...(body ? { body: Buffer.from(body) } : {}) });
-    } catch (error) {
-      this.logger.error("R2 request could not reach Cloudflare.", error instanceof Error ? error.stack : String(error));
-      throw new ServiceUnavailableException("Không kết nối được object storage. Vui lòng thử lại.");
+    const timeoutMs = Math.max(1_000, Math.min(60_000, Number(process.env.R2_REQUEST_TIMEOUT_MS) || 15_000));
+    // All R2 operations exposed here are safe to retry against the same object key:
+    // PUT replaces that exact object, while GET/HEAD/DELETE are naturally idempotent.
+    const maxAttempts = method === "GET" || method === "HEAD" || method === "DELETE" || method === "PUT" ? 3 : 1;
+    let lastFailure: "timeout" | "network" | "http" = "network";
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const response = await fetch(url, { method, headers, ...(body ? { body: Buffer.from(body) } : {}), signal: AbortSignal.timeout(timeoutMs) });
+        if (response.ok || response.status === 404 || response.status < 500 || attempt === maxAttempts) return response;
+        lastFailure = "http";
+      } catch (error) {
+        lastFailure = error instanceof Error && error.name === "TimeoutError" ? "timeout" : "network";
+        if (attempt === maxAttempts) break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100 * 2 ** (attempt - 1)));
     }
+    this.logger.warn(`R2 ${method} failed after ${maxAttempts} attempt(s): ${lastFailure}.`);
+    throw new ServiceUnavailableException(lastFailure === "timeout" ? "Object storage hết thời gian chờ. Vui lòng thử lại." : lastFailure === "http" ? "Object storage tạm thời trả lỗi máy chủ." : "Không kết nối được object storage. Vui lòng thử lại.");
   }
 }

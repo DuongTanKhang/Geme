@@ -3,6 +3,8 @@ interface Env {
 }
 
 const notFound = () => new Response("Not found", { status: 404 });
+const imageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
+const videoTypes = new Set(["video/mp4", "video/webm"]);
 
 function objectKeyFromPath(pathname: string) {
   if (!pathname.startsWith("/media/")) return null;
@@ -15,10 +17,33 @@ function objectKeyFromPath(pathname: string) {
   } catch {
     return null;
   }
-
   const parts = key.split("/");
   if (parts[0] !== "media" || parts.length < 2 || parts.some((part) => !part || part === "." || part === "..")) return null;
   return key;
+}
+
+type ByteRange = { offset: number; length: number };
+function parseRange(header: string | null, size: number): ByteRange | "invalid" | null {
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match || size <= 0) return "invalid";
+  const startText = match[1];
+  const endText = match[2];
+  if (!startText && !endText) return "invalid";
+  let offset: number;
+  let end: number;
+  if (!startText) {
+    const suffix = Number(endText);
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) return "invalid";
+    offset = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    offset = Number(startText);
+    end = endText ? Number(endText) : size - 1;
+    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(end) || offset < 0 || end < offset || offset >= size) return "invalid";
+    end = Math.min(end, size - 1);
+  }
+  return { offset, length: end - offset + 1 };
 }
 
 export default {
@@ -26,28 +51,40 @@ export default {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, HEAD" } });
     }
-
     const key = objectKeyFromPath(new URL(request.url).pathname);
     if (!key) return notFound();
 
-    const object = await env.GEME_MEDIA.get(key);
-    if (!object) return notFound();
+    const rangeHeader = request.headers.get("Range");
+    const metadata = rangeHeader || request.method === "HEAD" ? await env.GEME_MEDIA.head(key) : null;
+    const object = metadata ? null : await env.GEME_MEDIA.get(key);
+    const source = metadata || object;
+    if (!source) return notFound();
 
-    const contentType = object.httpMetadata?.contentType || "";
+    const contentType = source.httpMetadata?.contentType || "";
     const normalizedContentType = contentType.split(";", 1)[0].trim().toLowerCase();
-    // This gateway is for product photography. It cannot expose PDFs, private
-    // AI originals, or executable SVG content even if one is put in the bucket.
-    if (!normalizedContentType.startsWith("image/") || normalizedContentType === "image/svg+xml") return notFound();
+    // The Worker exposes only raster product media under `media/`, never PDFs,
+    // SVG, AI originals, or private bucket paths.
+    if (!imageTypes.has(normalizedContentType) && !videoTypes.has(normalizedContentType)) return notFound();
+
+    const range = parseRange(rangeHeader, source.size);
+    if (range === "invalid") {
+      return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${source.size}`, "Accept-Ranges": "bytes", "Cache-Control": "public, max-age=31536000, immutable" } });
+    }
+    const rangedObject = range ? await env.GEME_MEDIA.get(key, { range: { offset: range.offset, length: range.length } }) : null;
+    const bodyObject = request.method === "HEAD" ? null : (rangedObject || object);
+    if (request.method !== "HEAD" && !bodyObject) return notFound();
 
     const headers = new Headers();
-    object.writeHttpMetadata(headers);
+    source.writeHttpMetadata(headers);
     headers.set("Content-Type", contentType);
-    headers.set("Content-Length", String(object.size));
+    headers.set("Content-Length", String(range ? range.length : source.size));
     headers.set("Cache-Control", "public, max-age=31536000, immutable");
-    headers.set("ETag", object.httpEtag);
+    headers.set("ETag", source.httpEtag);
     headers.set("X-Content-Type-Options", "nosniff");
     headers.set("Access-Control-Allow-Origin", "*");
+    headers.set("Accept-Ranges", "bytes");
+    if (range) headers.set("Content-Range", `bytes ${range.offset}-${range.offset + range.length - 1}/${source.size}`);
 
-    return new Response(request.method === "HEAD" ? null : object.body, { headers });
+    return new Response(request.method === "HEAD" ? null : bodyObject!.body, { status: range ? 206 : 200, headers });
   },
 } satisfies ExportedHandler<Env>;

@@ -118,3 +118,16 @@ jobs:
       - run: pnpm exec tsc --noEmit
       - run: pnpm test:seo
       - run: pnpm test:commerce
+
+  media-worker:
+    name: Public media Worker tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: outputs/geme-media-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test

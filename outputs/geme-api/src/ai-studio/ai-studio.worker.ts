@@ -5,6 +5,7 @@ import { PrismaClient, type Prisma } from "../generated/prisma/client.js";
 import { AI_QUEUE_DEFAULT_JOB_OPTIONS, AI_STUDIO_QUEUE, type AiQueuePayload, redisConnectionOptions } from "./ai-studio.queue.js";
 import { createHash } from "node:crypto";
 import { MediaStorageService } from "../media/media-storage.service.js";
+import { lockMediaObject } from "../media/media-assets.service.js";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL is required for the AI worker.");
@@ -96,6 +97,7 @@ async function processTask(job: Job<AiQueuePayload>) {
   let pendingMarketingDraft: { draftId: string; value: MarketingDraftResult } | null = null;
   let technicalDrawingTask = false;
   let orphanPrivateObjectKey: string | null = null;
+  let orphanPrivateBucketName: string | null = null;
   try {
     let result: Prisma.InputJsonObject;
     if (task.type === "PRODUCT_DRAFT_GENERATION") {
@@ -179,9 +181,7 @@ async function processTask(job: Job<AiQueuePayload>) {
     if (pendingImageOutput && mediaStorage.usesPrivateR2) {
       const digest = createHash("sha256").update(pendingImageOutput.bytes).digest("hex");
       outputObjectKey = `ai-studio/${pendingImageOutput.itemId}/${digest}.png`;
-      orphanPrivateObjectKey = outputObjectKey;
       outputSourceKey = `ai-studio/items/${pendingImageOutput.itemId}/output`;
-      await mediaStorage.putPrivateObject(outputObjectKey, pendingImageOutput.bytes, "image/png");
     }
 
     const committed = await prisma.$transaction(async (transaction) => {
@@ -201,6 +201,14 @@ async function processTask(job: Job<AiQueuePayload>) {
       if (updated.count !== 1) return false;
       if (pendingImageOutput) {
         const { itemId, bytes, report } = pendingImageOutput;
+        if (outputObjectKey) {
+          const bucketName = mediaStorage.bucketName(true);
+          await lockMediaObject(transaction, bucketName, outputObjectKey, true);
+          await mediaStorage.putPrivateObject(outputObjectKey, bytes, "image/png");
+          orphanPrivateObjectKey = outputObjectKey;
+          orphanPrivateBucketName = bucketName;
+          await transaction.mediaObjectCleanup.deleteMany({ where: { storageProvider: "r2", bucketName, objectKey: outputObjectKey, isPrivate: true } });
+        }
         const asset = await transaction.mediaAsset.upsert({
           where: { sourceKey: outputSourceKey || `ai-studio/items/${itemId}/output` },
           create: {
@@ -209,6 +217,7 @@ async function processTask(job: Job<AiQueuePayload>) {
             mimeType: "image/png",
             isPrivate: true,
             storageProvider: outputObjectKey ? "r2" : "database",
+            bucketName: outputObjectKey ? mediaStorage.bucketName(true) : null,
             objectKey: outputObjectKey,
             data: outputObjectKey ? null : new Uint8Array(bytes),
             size: bytes.byteLength,
@@ -218,6 +227,7 @@ async function processTask(job: Job<AiQueuePayload>) {
             mimeType: "image/png",
             isPrivate: true,
             storageProvider: outputObjectKey ? "r2" : "database",
+            bucketName: outputObjectKey ? mediaStorage.bucketName(true) : null,
             objectKey: outputObjectKey,
             data: outputObjectKey ? null : new Uint8Array(bytes),
             size: bytes.byteLength,
@@ -303,16 +313,30 @@ async function processTask(job: Job<AiQueuePayload>) {
       return true;
     });
 
-    if (committed) orphanPrivateObjectKey = null;
-    else if (orphanPrivateObjectKey) {
-      await mediaStorage.deletePrivateObject(orphanPrivateObjectKey).catch(() => undefined);
+    if (committed) {
       orphanPrivateObjectKey = null;
+      orphanPrivateBucketName = null;
+    } else if (orphanPrivateObjectKey && orphanPrivateBucketName) {
+      await prisma.mediaObjectCleanup.upsert({
+        where: { storageProvider_bucketName_objectKey_isPrivate: { storageProvider: "r2", bucketName: orphanPrivateBucketName, objectKey: orphanPrivateObjectKey, isPrivate: true } },
+        create: { storageProvider: "r2", bucketName: orphanPrivateBucketName, objectKey: orphanPrivateObjectKey, isPrivate: true },
+        update: { nextAttemptAt: new Date(), lastErrorCode: null },
+      });
+      orphanPrivateObjectKey = null;
+      orphanPrivateBucketName = null;
     }
 
     console.log(JSON.stringify({ event: committed ? "ai.worker.task_completed" : "ai.worker.task_skipped_after_cancel", taskId, type: task.type, attempt, approvalRequired: requiresApproval, at: new Date().toISOString() }));
     return { taskId, approvalRequired: requiresApproval };
   } catch (error) {
-    if (orphanPrivateObjectKey) await mediaStorage.deletePrivateObject(orphanPrivateObjectKey).catch(() => undefined);
+    if (orphanPrivateObjectKey) {
+      const bucketName = orphanPrivateBucketName || mediaStorage.bucketName(true);
+      await prisma.mediaObjectCleanup.upsert({
+        where: { storageProvider_bucketName_objectKey_isPrivate: { storageProvider: "r2", bucketName, objectKey: orphanPrivateObjectKey, isPrivate: true } },
+        create: { storageProvider: "r2", bucketName, objectKey: orphanPrivateObjectKey, isPrivate: true },
+        update: { nextAttemptAt: new Date(), lastErrorCode: null },
+      }).catch(() => undefined);
+    }
     const maxAttempts = typeof job.opts.attempts === "number" ? job.opts.attempts : 1;
     const failureCode = safeErrorCode(error);
     const permanentImageProviderError = task.type === "IMAGE_STUDIO_PROCESSING" && isPermanentImageProviderError(failureCode);
@@ -513,7 +537,7 @@ async function processStudioImage(task: { id: string; input: Prisma.JsonValue })
   if (!item?.originalAsset) throw new Error("IMAGE_ORIGINAL_NOT_FOUND");
   if (!item.originalAsset.isPrivate) throw new Error("IMAGE_ORIGINAL_NOT_PRIVATE");
   const sourceBytes = item.originalAsset.storageProvider === "r2" && item.originalAsset.objectKey
-    ? await mediaStorage.getPrivateObject(item.originalAsset.objectKey)
+    ? await mediaStorage.getPrivateObject(item.originalAsset.objectKey, item.originalAsset.bucketName || undefined)
     : item.originalAsset.data ? Buffer.from(item.originalAsset.data) : null;
   if (!sourceBytes) throw new Error("IMAGE_ORIGINAL_UNAVAILABLE");
 
@@ -609,7 +633,7 @@ async function processProductDraft(task: { id: string; input: Prisma.JsonValue }
   if (!draft || draft.taskId !== task.id || item?.id !== input.imageItemId) throw new Error("PRODUCT_DRAFT_NOT_FOUND");
   if (item.status !== "APPROVED" || item.batch.purpose !== "PRODUCT_PHOTO" || !asset?.isPrivate) throw new Error("PRODUCT_DRAFT_IMAGE_NOT_APPROVED");
   const imageBytes = asset.storageProvider === "r2" && asset.objectKey
-    ? await mediaStorage.getPrivateObject(asset.objectKey)
+    ? await mediaStorage.getPrivateObject(asset.objectKey, asset.bucketName || undefined)
     : asset.data ? Buffer.from(asset.data) : null;
   if (!imageBytes) throw new Error("PRODUCT_DRAFT_IMAGE_UNAVAILABLE");
   if (imageBytes.byteLength > 8 * 1024 * 1024) throw new Error("PRODUCT_DRAFT_IMAGE_TOO_LARGE");

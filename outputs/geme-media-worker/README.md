@@ -1,6 +1,8 @@
 # GEME public media gateway
 
-This Cloudflare Worker lets the storefront and POS365 read public product images while the R2 bucket stays private. It only serves image objects whose key begins with `media/`; all other paths (including `private-media/`) return 404. It does not list the bucket or accept uploads.
+This Cloudflare Worker lets the storefront and POS365 read public product images and videos while the R2 bucket stays private. It serves allowlisted raster images and MP4/WebM objects whose key begins with `media/`; all other paths (including `private-media/`, PDF, and SVG) return 404. It supports GET, HEAD, byte ranges for video seeking, and immutable caching. It does not list the bucket or accept uploads.
+
+Run the isolated Worker tests with `npm test`; the same command runs in the `media-worker` CI job.
 
 ## Deploy
 
