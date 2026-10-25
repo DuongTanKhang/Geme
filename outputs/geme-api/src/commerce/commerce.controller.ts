@@ -223,7 +223,12 @@ export class CommerceController {
       await this.adminPermissions.assertPermissions(identity, ["content.read"]);
     }
     const publicUrl = this.mediaStore.publicDeliveryUrl(asset);
-    if (publicUrl) {
+    // The public media Worker intentionally does not expose the legacy
+    // product-images/ prefix. Serve these public, DB-verified assets through
+    // this endpoint after the isPrivate authorization check above instead of
+    // widening the Worker’s public bucket paths.
+    const requiresApiDelivery = asset.storageProvider === "r2" && asset.objectKey?.startsWith("product-images/");
+    if (publicUrl && !requiresApiDelivery) {
       response.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400");
       return response.redirect(302, publicUrl);
     }

@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service.js";
 
 type Pos365Status = {
@@ -7,6 +7,7 @@ type Pos365Status = {
   credentialsConfigured: boolean;
   syncEnabled: boolean;
   branchIdConfigured: boolean;
+  mediaPublicUrlConfigured: boolean;
 };
 
 type Pos365Result = {
@@ -27,11 +28,23 @@ type Pos365Config = {
 };
 
 type Pos365Record = Record<string, any>;
+type Pos365ProductPriceSnapshot = {
+  baseUrl: string;
+  loadedAt: number;
+  byCode: Map<string, Pos365Record[]>;
+};
 
 class Pos365HttpError extends Error {
   constructor(message: string, readonly status: number, readonly retryAfterMs: number | null) {
     super(message);
     this.name = "Pos365HttpError";
+  }
+}
+
+class Pos365ImageUrlError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "Pos365ImageUrlError";
   }
 }
 
@@ -64,11 +77,25 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
   private processingProductPriceQueue = false;
   private productPriceSyncQueueRequested = false;
   private processingProductStockQueue = false;
+  private processingProductImageQueue = false;
+  private productImageSyncQueueRequested = false;
+  private readonly productImageSyncRequests = new Set<string>();
   private processingOrderQueue = false;
   private posRequestQueue: Promise<void> = Promise.resolve();
+  private activePosRequests = 0;
   private posRequestNotBefore = 0;
   private posRateLimitStreak = 0;
+  // POS365's tenant throttles overlapping requests even at one request/second.
+  // Keep network concurrency at one; the product worker still prepares two
+  // independent records per turn while the provider gate remains serialized.
+  private readonly maxConcurrentPosRequests = 1;
   private readonly posRequestIntervalMs = 1000;
+  private productPriceCatalogSnapshot: Pos365ProductPriceSnapshot | null = null;
+  // A complete POS catalog scan is 25+ rate-limited requests. Keep the bulk
+  // snapshot for the duration of a normal sync batch; changed SKUs are still
+  // fetched with ProductImages immediately before each write, and the batch
+  // receives a full read-only audit after it drains.
+  private readonly productPriceCatalogSnapshotTtlMs = 30 * 60 * 1000;
   private readonly productPriceSyncRequests = new Set<string>();
   private cachedSession: { baseUrl: string; username: string; sessionId: string; expiresAt: number } | null = null;
 
@@ -80,6 +107,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       void this.processPendingReceipts();
       void this.processPendingProductPrices();
       void this.processPendingProductStocks();
+      void this.processPendingProductImages();
       void this.processPendingOrders();
     }, 15000);
     this.syncTimer.unref?.();
@@ -102,6 +130,11 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     }).then(() => this.processPendingProductStocks()).catch((error) => this.logger.error(`Không thể đưa tồn kho POS365 vào hàng đợi: ${this.safeErrorMessage(error)}`));
     void this.processPendingOrders();
     void this.processPendingProductStocks();
+    void this.prisma.product.updateMany({
+      where: { pos365ImageSyncStatus: "DISABLED" },
+      data: { pos365ImageSyncStatus: "PENDING", pos365ImageSyncNextAttemptAt: new Date(), pos365ImageSyncError: null },
+    }).then(() => this.processPendingProductImages()).catch((error) => this.logger.error(`Không thể đưa ảnh sản phẩm POS365 vào hàng đợi: ${this.safeErrorMessage(error)}`));
+    void this.processPendingProductImages();
   }
 
   onModuleDestroy() {
@@ -116,6 +149,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       credentialsConfigured: Boolean(config.username && config.password),
       syncEnabled: this.isSyncEnabled(),
       branchIdConfigured: config.branchId !== null,
+      mediaPublicUrlConfigured: Boolean(process.env.MEDIA_PUBLIC_BASE_URL?.trim()),
     };
   }
 
@@ -274,6 +308,9 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
 
   async syncProductPricesNow(productId: string) {
     if (!this.isSyncEnabled()) return;
+    // A direct product edit must compare against the latest POS value instead
+    // of a catalog snapshot retained for bulk synchronization.
+    this.productPriceCatalogSnapshot = null;
     await this.processPendingProductPrices(productId);
   }
 
@@ -291,6 +328,134 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       error: row.pos365PriceSyncError,
       syncedAt: row.pos365PriceSyncedAt,
     }));
+  }
+
+  async queueProductImageSync(productId: string) {
+    const enabled = this.isSyncEnabled();
+    await this.prisma.product.updateMany({
+      where: { id: productId },
+      data: {
+        pos365ImageSyncStatus: enabled ? "PENDING" : "DISABLED",
+        pos365ImageSyncAttempts: 0,
+        pos365ImageSyncLastAttemptAt: null,
+        pos365ImageSyncNextAttemptAt: enabled ? new Date() : null,
+        pos365ImageSyncedAt: null,
+        pos365ImageSyncError: null,
+      },
+    });
+    if (enabled) void this.processPendingProductImages(productId);
+  }
+
+  private async queueProductImageSyncIfNeeded(productId: string) {
+    if (!this.isSyncEnabled()) return;
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: {
+        pos365ImageSyncStatus: true,
+        images: { select: { id: true }, take: 1 },
+        variants: { select: { imageUrls: true } },
+      },
+    });
+    if (!product || (!product.images.length && !product.variants.some((variant) => Array.isArray(variant.imageUrls) && variant.imageUrls.length))) return;
+    if (["PENDING", "RETRYING", "SYNCING", "SYNCED"].includes(String(product.pos365ImageSyncStatus || ""))) return;
+    await this.queueProductImageSync(productId);
+  }
+
+  async queueAllProductImageSync() {
+    if (!this.isSyncEnabled()) throw new BadRequestException("Cần bật đồng bộ POS365 trước khi đưa ảnh sản phẩm vào hàng đợi.");
+    const candidates = await this.prisma.product.findMany({
+      select: { id: true, images: { select: { id: true }, take: 1 }, variants: { select: { imageUrls: true } } },
+    });
+    const productIds = candidates.filter((product) => product.images.length > 0 || product.variants.some((variant) => Array.isArray(variant.imageUrls) && variant.imageUrls.length > 0)).map((product) => product.id);
+    if (!productIds.length) return { queued: 0 };
+    const queued = await this.prisma.product.updateMany({
+      where: { id: { in: productIds } },
+      data: {
+        pos365ImageSyncStatus: "PENDING", pos365ImageSyncAttempts: 0,
+        pos365ImageSyncLastAttemptAt: null, pos365ImageSyncNextAttemptAt: new Date(),
+        pos365ImageSyncedAt: null, pos365ImageSyncError: null,
+      },
+    });
+    void this.processPendingProductImages();
+    return { queued: queued.count };
+  }
+
+  async productImageSyncStatuses(productIds: string[]) {
+    const ids = [...new Set(productIds.map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 500);
+    if (!ids.length) return [];
+    const rows = await this.prisma.product.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, sku: true, pos365ImageSyncStatus: true, pos365ImageSyncError: true, pos365ImageSyncedAt: true },
+    });
+    return rows.map((row) => ({ id: row.id, sku: row.sku, status: row.pos365ImageSyncStatus, error: row.pos365ImageSyncError, syncedAt: row.pos365ImageSyncedAt }));
+  }
+
+  private async processPendingProductImages(onlyProductId?: string) {
+    if (this.processingProductImageQueue || !this.isSyncEnabled()) {
+      if (onlyProductId) this.productImageSyncRequests.add(onlyProductId);
+      else this.productImageSyncQueueRequested = true;
+      return;
+    }
+    this.processingProductImageQueue = true;
+    let shouldDrainNextBatch = false;
+    try {
+      const now = new Date();
+      const staleBefore = new Date(now.getTime() - 2 * 60 * 1000);
+      await this.prisma.product.updateMany({
+        where: { pos365ImageSyncStatus: "SYNCING", pos365ImageSyncLastAttemptAt: { lt: staleBefore } },
+        data: { pos365ImageSyncStatus: "RETRYING", pos365ImageSyncNextAttemptAt: now },
+      });
+      const dueWhere: Pos365Record = {
+        pos365ImageSyncStatus: { in: ["PENDING", "RETRYING"] },
+        OR: [{ pos365ImageSyncNextAttemptAt: null }, { pos365ImageSyncNextAttemptAt: { lte: now } }],
+      };
+      if (onlyProductId) dueWhere.id = onlyProductId;
+      const products = await this.prisma.product.findMany({ where: dueWhere, orderBy: [{ pos365ImageSyncNextAttemptAt: "asc" }, { updatedAt: "asc" }], take: 10, select: { id: true } });
+      for (const row of products) {
+        const claimedAt = new Date();
+        const claim = await this.prisma.product.updateMany({
+          where: { id: row.id, pos365ImageSyncStatus: { in: ["PENDING", "RETRYING"] }, OR: [{ pos365ImageSyncNextAttemptAt: null }, { pos365ImageSyncNextAttemptAt: { lte: claimedAt } }] },
+          data: { pos365ImageSyncStatus: "SYNCING", pos365ImageSyncAttempts: { increment: 1 }, pos365ImageSyncLastAttemptAt: claimedAt, pos365ImageSyncNextAttemptAt: null },
+        });
+        if (!claim.count) continue;
+        const product = await this.prisma.product.findUnique({ where: { id: row.id }, include: { images: { orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }] }, variants: { orderBy: { sortOrder: "asc" } } } });
+        if (!product) continue;
+        try {
+          const result = await this.sendProductImages(product);
+          await this.prisma.product.updateMany({
+            where: { id: product.id, pos365ImageSyncStatus: "SYNCING", pos365ImageSyncLastAttemptAt: claimedAt },
+            data: { pos365ImageSyncStatus: result === "SKIPPED" ? "SKIPPED" : "SYNCED", pos365ImageSyncError: null, pos365ImageSyncNextAttemptAt: null, pos365ImageSyncedAt: result === "SKIPPED" ? null : new Date() },
+          });
+        } catch (error) {
+          const attempts = Number(product.pos365ImageSyncAttempts || 0) + 1;
+          const needsPublicUrlConfiguration = error instanceof Pos365ImageUrlError;
+          const delayMs = this.retryDelayMs(error, attempts);
+          const message = this.safeErrorMessage(error).slice(0, 2000);
+          await this.prisma.product.updateMany({
+            where: { id: product.id, pos365ImageSyncStatus: "SYNCING", pos365ImageSyncLastAttemptAt: claimedAt },
+            data: { pos365ImageSyncStatus: needsPublicUrlConfiguration ? "FAILED" : "RETRYING", pos365ImageSyncError: message, pos365ImageSyncNextAttemptAt: needsPublicUrlConfiguration ? null : new Date(Date.now() + delayMs) },
+          });
+          this.logger.warn(`Ảnh SKU ${product.sku} chưa đồng bộ POS365; ${needsPublicUrlConfiguration ? "cần cấu hình URL công khai" : "sẽ tự thử lại"}. ${message}`);
+        }
+      }
+      if (!onlyProductId) {
+        const nextNow = new Date();
+        shouldDrainNextBatch = (await this.prisma.product.count({ where: { pos365ImageSyncStatus: { in: ["PENDING", "RETRYING"] }, OR: [{ pos365ImageSyncNextAttemptAt: null }, { pos365ImageSyncNextAttemptAt: { lte: nextNow } }] } })) > 0;
+      }
+    } catch (error) {
+      this.logger.error(`Không xử lý được hàng đợi ảnh POS365: ${this.safeErrorMessage(error)}`);
+    } finally {
+      this.processingProductImageQueue = false;
+      const nextProductId = this.productImageSyncRequests.values().next().value as string | undefined;
+      if (nextProductId) {
+        this.productImageSyncRequests.delete(nextProductId);
+        if (this.productImageSyncQueueRequested || shouldDrainNextBatch) this.productImageSyncQueueRequested = true;
+        queueMicrotask(() => { void this.processPendingProductImages(nextProductId); });
+      } else if (this.productImageSyncQueueRequested || shouldDrainNextBatch) {
+        this.productImageSyncQueueRequested = false;
+        queueMicrotask(() => { void this.processPendingProductImages(); });
+      }
+    }
   }
 
   private async processPendingProductStocks() {
@@ -471,6 +636,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
 
   async queueAllProductPriceSync() {
     if (!this.isSyncEnabled()) throw new Error("POS365 chưa bật đồng bộ giá hoặc chưa chọn chi nhánh.");
+    this.productPriceCatalogSnapshot = null;
     const products = await this.prisma.product.findMany({ include: { category: { select: { pricingMode: true } }, variants: true } });
     const now = new Date();
     let skippedWithoutPrice = 0;
@@ -532,18 +698,21 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
   }
 
   async syncQueueSummary() {
-    const [receiptPending, receiptFailed, pricePending, priceFailed, stockPending, stockFailed, orderPending, orderFailed, syncedOrders] = await Promise.all([
+    const [receiptPending, receiptFailed, pricePending, priceFailed, stockPending, stockFailed, imagePending, imageFailed, imageSkipped, orderPending, orderFailed, syncedOrders] = await Promise.all([
       this.prisma.inventoryReceipt.count({ where: { pos365SyncStatus: { in: ["PENDING", "RETRYING", "SYNCING"] } } }),
       this.prisma.inventoryReceipt.count({ where: { pos365SyncStatus: "FAILED" } }),
       this.prisma.product.count({ where: { pos365PriceSyncStatus: { in: ["PENDING", "RETRYING", "SYNCING"] } } }),
       this.prisma.product.count({ where: { pos365PriceSyncStatus: "FAILED" } }),
       this.prisma.product.count({ where: { pos365StockSyncStatus: { in: ["PENDING", "RETRYING", "SYNCING"] } } }),
       this.prisma.product.count({ where: { pos365StockSyncStatus: "FAILED" } }),
+      this.prisma.product.count({ where: { pos365ImageSyncStatus: { in: ["PENDING", "RETRYING", "SYNCING"] } } }),
+      this.prisma.product.count({ where: { pos365ImageSyncStatus: "FAILED" } }),
+      this.prisma.product.count({ where: { pos365ImageSyncStatus: "SKIPPED" } }),
       this.prisma.order.count({ where: { pos365SyncStatus: { in: ["PENDING", "RETRYING", "SYNCING"] } } }),
       this.prisma.order.count({ where: { pos365SyncStatus: "BLOCKED" } }),
       this.prisma.order.count({ where: { pos365SyncStatus: "SYNCED" } }),
     ]);
-    return { receipts: { pending: receiptPending, failed: receiptFailed }, prices: { pending: pricePending, failed: priceFailed }, stocks: { pending: stockPending, failed: stockFailed }, orders: { pending: orderPending, blocked: orderFailed, synced: syncedOrders } };
+    return { receipts: { pending: receiptPending, failed: receiptFailed }, prices: { pending: pricePending, failed: priceFailed }, stocks: { pending: stockPending, failed: stockFailed }, images: { pending: imagePending, failed: imageFailed, skipped: imageSkipped }, orders: { pending: orderPending, blocked: orderFailed, synced: syncedOrders } };
   }
 
   private async processPendingOrders(onlyOrderId?: string) {
@@ -799,6 +968,9 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
             where: { id: receipt.id },
             data: { pos365SyncStatus: "SYNCED", pos365SyncCode: syncCode, pos365SyncError: null, pos365SyncNextAttemptAt: null, pos365SyncedAt: new Date() },
           });
+          for (const productId of new Set(receipt.items.map((item) => item.productId).filter((id): id is string => typeof id === "string" && Boolean(id)))) {
+            void this.queueProductImageSyncIfNeeded(productId).catch((error) => this.logger.warn("Không thể đưa ảnh SKU sau khi nhập kho vào hàng đợi POS365.", error));
+          }
         } catch (error) {
           const attempts = Number(receipt.pos365SyncAttempts || 0) + 1;
           const delayMs = this.retryDelayMs(error, attempts);
@@ -841,14 +1013,35 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
         inventoryReceiptItems: { none: { receipt: { pos365SyncStatus: { in: ["PENDING", "RETRYING", "SYNCING"] } } } },
       };
       if (onlyProductId) dueWhere.id = onlyProductId;
+      let priceCatalogSnapshot: Pos365ProductPriceSnapshot | null = null;
+      if (!onlyProductId) {
+        const cached = this.productPriceCatalogSnapshot;
+        if (cached && cached.baseUrl === this.readConfiguration().baseUrl && Date.now() - cached.loadedAt < this.productPriceCatalogSnapshotTtlMs) {
+          priceCatalogSnapshot = cached;
+        } else {
+          this.productPriceCatalogSnapshot = null;
+          const dueCount = await this.prisma.product.count({ where: dueWhere });
+          // A full POS catalog read is cheaper than a per-SKU lookup when a
+          // substantial backlog is queued. Small/interactive edits continue
+          // using exact SKU lookups so they remain fast and fresh.
+          if (dueCount >= 25) {
+            const config = this.readConfiguration();
+            if (!config.baseUrl) throw new Error("Chưa cấu hình host POS365.");
+            const sessionId = await this.authenticate(config);
+            priceCatalogSnapshot = await this.loadProductPriceCatalogSnapshot(config, sessionId);
+          }
+        }
+      }
       const products = await this.prisma.product.findMany({
         where: dueWhere,
         orderBy: { updatedAt: "asc" },
-        // Process a single SKU per turn so a newly saved price can jump ahead
-        // of the rest of a full-catalog sync after the current POS request.
-        take: 1,
+        // Keep two independent products in flight. POS requests are still
+        // globally paced and bounded below, but network latency no longer
+        // serializes every read/write/verify round trip.
+        take: 2,
         select: { id: true },
       });
+      const claimedProducts: { product: NonNullable<Awaited<ReturnType<typeof this.prisma.product.findUnique>>>; claimedAt: Date }[] = [];
       for (const row of products) {
         const claimedAt = new Date();
         const claim = await this.prisma.product.updateMany({
@@ -867,8 +1060,12 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
         if (!claim.count) continue;
         const product = await this.prisma.product.findUnique({ where: { id: row.id }, include: { category: { select: { pricingMode: true } }, variants: { orderBy: { sortOrder: "asc" } } } });
         if (!product) continue;
+        claimedProducts.push({ product, claimedAt });
+      }
+      await Promise.all(claimedProducts.map(async ({ product, claimedAt }) => {
         try {
-          await this.sendProductPrices(product);
+          await this.sendProductPrices(product, priceCatalogSnapshot);
+          void this.queueProductImageSyncIfNeeded(product.id).catch((error) => this.logger.warn("Không thể đưa ảnh SKU sau khi đồng bộ giá vào hàng đợi POS365.", error));
           // Do not overwrite a newer price edit that arrived while the POS call
           // was in flight. The edit resets the status/claim timestamp and must
           // remain pending for the next queue pass.
@@ -886,7 +1083,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
           });
           this.logger.warn(`Giá SKU ${product.sku} chưa đồng bộ POS365; sẽ tự thử lại. ${message}`);
         }
-      }
+      }));
       if (!onlyProductId) {
         const nextNow = new Date();
         shouldDrainNextBatch = (await this.prisma.product.count({
@@ -912,7 +1109,149 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async sendProductPrices(product: Pos365Record) {
+  private async publicProductImageUrl(value: unknown, sku: string): Promise<string> {
+    const raw = String(value || "").trim();
+    const mediaPath = raw.match(/^\/media\/([0-9a-f-]{36})\/?(?:[?#].*)?$/i);
+    if (mediaPath) {
+      const asset = await this.prisma.mediaAsset.findUnique({
+        where: { id: mediaPath[1] },
+        select: { isPrivate: true, storageProvider: true, objectKey: true },
+      });
+      if (!asset || asset.isPrivate || asset.storageProvider !== "r2" || !asset.objectKey) {
+        throw new Pos365ImageUrlError(`Ảnh của SKU ${sku} chưa có object R2 công khai để chuyển sang POS365.`);
+      }
+      const publicBase = process.env.MEDIA_PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
+      if (!publicBase) {
+        throw new Pos365ImageUrlError("Thiếu MEDIA_PUBLIC_BASE_URL: cấu hình domain HTTPS của cổng ảnh công khai để POS365 truy cập ảnh.");
+      }
+      let baseUrl: URL;
+      try { baseUrl = new URL(publicBase); } catch { throw new Pos365ImageUrlError("MEDIA_PUBLIC_BASE_URL chưa phải URL hợp lệ."); }
+      if (baseUrl.protocol !== "https:" || baseUrl.username || baseUrl.password || baseUrl.hostname === "localhost" || baseUrl.hostname.endsWith(".local") || baseUrl.hostname.endsWith(".internal")) {
+        throw new Pos365ImageUrlError("MEDIA_PUBLIC_BASE_URL phải là domain HTTPS công khai của cổng ảnh.");
+      }
+      const encodedObjectKey = asset.objectKey.split("/").map((part) => encodeURIComponent(part)).join("/");
+      baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, "")}/${encodedObjectKey}`;
+      return baseUrl.toString();
+    }
+    let url: URL;
+    try { url = new URL(raw); } catch { throw new Pos365ImageUrlError("Ảnh của SKU " + sku + " chưa có URL công khai hợp lệ."); }
+    const host = url.hostname.toLocaleLowerCase("en");
+    const privateIpv4 = /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
+    if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || host === "localhost" || host.endsWith(".local") || host.endsWith(".internal") || privateIpv4 || host === "::1") {
+      throw new Pos365ImageUrlError("Ảnh của SKU " + sku + " phải dùng URL HTTP/HTTPS công khai để POS365 truy cập.");
+    }
+    return url.toString();
+  }
+
+  private posProductImageRows(product: Pos365Record) {
+    const field = Object.hasOwn(product, "ProductImages") ? product.ProductImages : product.productImages;
+    if (field === undefined) throw new Error("POS365 chưa trả danh sách ảnh hiện tại; dừng đồng bộ để tránh tạo ảnh trùng hoặc xóa nhầm.");
+    return Array.isArray(field) ? field as Pos365Record[] : [];
+  }
+
+  private async sendProductImages(product: Pos365Record): Promise<"SYNCED" | "SKIPPED"> {
+    const config = this.readConfiguration();
+    if (!config.baseUrl) throw new Error("Chưa cấu hình host POS365.");
+    const gallery = (Array.isArray(product.images) ? product.images : []).map((image: Pos365Record) => String(image.url || "").trim()).filter(Boolean);
+    const lines = product.variants?.length
+      ? product.variants.map((variant: Pos365Record) => ({ sku: String(variant.sku || "").trim(), imageUrls: Array.isArray(variant.imageUrls) && variant.imageUrls.length ? variant.imageUrls : gallery }))
+      : [{ sku: String(product.sku || "").trim(), imageUrls: gallery }];
+    const preparedLines = await Promise.all(lines.map(async (line: Pos365Record) => ({
+      ...line,
+      imageUrls: [...new Set(await Promise.all((line.imageUrls as unknown[]).map((url: unknown) => this.publicProductImageUrl(url, line.sku))))],
+    })));
+    const sessionId = await this.authenticate(config);
+    const missingSkus: string[] = [];
+    let synced = 0;
+    for (const line of preparedLines) {
+      if (!line.sku) throw new Error("Sản phẩm " + product.sku + " có biến thể thiếu SKU; chưa đồng bộ ảnh.");
+      const remote = await this.findRemoteProductByCode(config, sessionId, line.sku, true);
+      if (!remote) { missingSkus.push(line.sku); continue; }
+      if (normalizedCode(remote.Code) !== normalizedCode(line.sku)) throw new Error("SKU POS365 của mặt hàng " + line.sku + " không khớp; dừng để tránh gắn ảnh nhầm.");
+      const remoteId = asNumber(remote.Id);
+      if (!remoteId) throw new Error("POS365 không trả mã mặt hàng " + line.sku + " để gắn ảnh.");
+      const currentImages = this.posProductImageRows(remote);
+      const oldLinks = await this.prisma.pos365ProductImageSync.findMany({ where: { productId: product.id, sku: line.sku } });
+      const managedIds = new Set(oldLinks.map((row) => row.pos365ImageId));
+      const desiredUrls = line.imageUrls as string[];
+      const available = [...currentImages];
+      const selectedRemoteIds = new Set<string>();
+      const desiredRows = desiredUrls.map((url, index) => {
+        const matchIndex = available.findIndex((image) => String(image.ImageURL || image.imageUrl || "").trim() === url);
+        const matched = matchIndex >= 0 ? available.splice(matchIndex, 1)[0] : null;
+        const remoteImageId = matched ? String(matched.Id ?? matched.id ?? "").trim() : "";
+        if (matched && !remoteImageId) throw new Error("POS365 trả ảnh không có mã để đồng bộ an toàn cho SKU " + line.sku + ".");
+        if (remoteImageId) selectedRemoteIds.add(remoteImageId);
+        const externalDefaultExists = currentImages.some((image) => {
+          const id = String(image.Id ?? image.id ?? "").trim();
+          return id && !managedIds.has(id) && !selectedRemoteIds.has(id) && Boolean(image.IsDefault ?? image.isDefault);
+        });
+        return {
+          ...(matched || {}),
+          Id: matched ? asNumber(matched.Id ?? matched.id) ?? 0 : 0,
+          ProductId: remoteId,
+          ImageURL: url,
+          ThumbnailUrl: matched ? String(matched.ThumbnailUrl || matched.thumbnailUrl || url) : url,
+          IsDefault: Boolean(matched?.IsDefault ?? matched?.isDefault) || (index === 0 && !externalDefaultExists),
+        };
+      });
+      const retainedExternalImages = currentImages.filter((image) => {
+        const id = String(image.Id ?? image.id ?? "").trim();
+        if (!id) throw new Error("POS365 trả ảnh hiện tại không có mã; dừng để không làm mất ảnh của SKU " + line.sku + ".");
+        return !managedIds.has(id) && !selectedRemoteIds.has(id);
+      });
+      const expectedExternalIds = retainedExternalImages.map((image) => String(image.Id ?? image.id));
+      const expectedRemovedManagedIds = [...managedIds].filter((id) => !selectedRemoteIds.has(id));
+      const productImages = [...desiredRows, ...retainedExternalImages];
+      const expectedStandardPrice = asNumber(remote.Price) ?? 0;
+      const expectedBranchPrice = asNumber(remote.PriceByBranch) ?? 0;
+      const expectedCost = asNumber(remote.Cost) ?? 0;
+      await this.requestJson(new URL("/api/products", config.baseUrl), sessionId, {
+        method: "POST",
+        body: JSON.stringify({ Product: {
+          Id: remoteId,
+          Code: String(remote.Code || line.sku),
+          Name: String(remote.Name || product.name || line.sku).slice(0, 180),
+          ProductType: asNumber(remote.ProductType) ?? 1,
+          Price: Math.max(0, Math.round(expectedStandardPrice)),
+          Cost: Math.max(0, expectedCost),
+          Unit: String(remote.Unit || "Cái"),
+          CategoryId: remote.CategoryId ?? null,
+          ProductImages: productImages,
+        }, PriceByBranch: Math.max(0, Math.round(expectedBranchPrice)) }),
+      });
+      const verified = await this.findRemoteProductByCode(config, sessionId, line.sku, true);
+      if (!verified || asNumber(verified.Id) !== remoteId) throw new Error("POS365 chưa xác nhận lại đúng SKU " + line.sku + " sau khi lưu ảnh.");
+      const standardPricePreserved = Math.round(Number(verified.Price) || 0) === Math.round(expectedStandardPrice);
+      const branchPricePreserved = Math.round(Number(verified.PriceByBranch) || 0) === Math.round(expectedBranchPrice);
+      const costPreserved = Math.abs((Number(verified.Cost) || 0) - expectedCost) < 0.01;
+      if (!standardPricePreserved || !branchPricePreserved || !costPreserved) {
+        throw new Error("POS365 chưa giữ nguyên giá bán, giá theo chi nhánh hoặc giá vốn của SKU " + line.sku + " khi lưu ảnh.");
+      }
+      const verifiedImages = this.posProductImageRows(verified);
+      const savedUrls = verifiedImages.map((image) => String(image.ImageURL || image.imageUrl || "").trim()).filter(Boolean);
+      const verifiedIds = new Set(verifiedImages.map((image) => String(image.Id ?? image.id ?? "").trim()).filter(Boolean));
+      if (desiredUrls.some((url) => !savedUrls.includes(url))) throw new Error("POS365 chưa lưu đủ ảnh GEME của SKU " + line.sku + ".");
+      if (expectedExternalIds.some((id) => !verifiedIds.has(id))) throw new Error("POS365 không giữ nguyên một ảnh có sẵn ngoài GEME của SKU " + line.sku + "; hệ thống dừng và sẽ thử lại.");
+      if (expectedRemovedManagedIds.some((id) => verifiedIds.has(id))) throw new Error("POS365 chưa gỡ ảnh GEME đã bỏ khỏi SKU " + line.sku + ".");
+      const links = desiredUrls.map((url) => {
+        const saved = verifiedImages.find((image) => String(image.ImageURL || image.imageUrl || "").trim() === url);
+        const pos365ImageId = String(saved?.Id ?? saved?.id ?? "").trim();
+        if (!pos365ImageId) throw new Error("POS365 lưu ảnh nhưng không trả mã ảnh cho SKU " + line.sku + ".");
+        return { productId: product.id, sku: line.sku, pos365ImageId, imageUrl: url };
+      });
+      await this.prisma.$transaction(async (tx) => {
+        await tx.pos365ProductImageSync.deleteMany({ where: { productId: product.id, sku: line.sku } });
+        if (links.length) await tx.pos365ProductImageSync.createMany({ data: links, skipDuplicates: true });
+      });
+      synced++;
+    }
+    if (missingSkus.length && synced > 0) throw new Error("Chưa tìm thấy SKU trên POS365: " + missingSkus.join(", ") + ". Ảnh sẽ được thử lại sau khi SKU được đồng bộ.");
+    if (missingSkus.length && synced === 0) return "SKIPPED";
+    return synced ? "SYNCED" : "SKIPPED";
+  }
+
+  private async sendProductPrices(product: Pos365Record, snapshot: Pos365ProductPriceSnapshot | null = null) {
     const config = this.readConfiguration();
     if (!config.baseUrl) throw new Error("Chưa cấu hình host POS365.");
     const sessionId = await this.authenticate(config);
@@ -933,17 +1272,58 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       if (!current) uniqueLines.set(key, line);
     }
 
-    const verifiedLines: { sku: string; name: string; price: number }[] = [];
+    const changedLines: { line: { sku: string; name: string; price: number }; expectedImages: { id: string; url: string }[] | null; expectedBranchPrice: number | null; expectedCost: number | null }[] = [];
     for (const line of uniqueLines.values()) {
-      const existing = await this.findRemoteProductByCode(config, sessionId, line.sku);
+      const key = normalizedCode(line.sku);
+      const cachedRows = snapshot?.byCode.get(key) || [];
+      if (cachedRows.length > 1) throw new Error(`POS365 có nhiều mặt hàng dùng SKU ${line.sku}; dừng để tránh sửa nhầm.`);
+      let existing = cachedRows[0] || null;
+      let fetchedExact = false;
       if (!existing) {
-        await this.createProduct(config, sessionId, line.sku, line.name, line.price);
+        // A catalog snapshot can miss a SKU created by another POS workflow
+        // after the snapshot was taken. Confirm only those misses directly.
+        existing = await this.findRemoteProductByCode(config, sessionId, line.sku, true);
+        fetchedExact = true;
+        if (existing && snapshot) snapshot.byCode.set(key, [existing]);
+      }
+      if (!existing) {
+        const created = await this.createProduct(config, sessionId, line.sku, line.name, line.price);
+        if (snapshot) snapshot.byCode.set(key, [created]);
+        changedLines.push({ line, expectedImages: null, expectedBranchPrice: line.price > 0 ? line.price : null, expectedCost: null });
       } else {
-        const targetPrice = line.price > 0 ? line.price : Math.round(Number(existing.Price) || 0);
-        const currentName = String(existing.Name || "").trim();
-        const currentPrice = Math.round(Number(existing.Price) || 0);
-        if (currentName !== line.name || currentPrice !== targetPrice) {
+        let targetPrice = line.price > 0 ? line.price : Math.round(Number(existing.Price) || 0);
+        let currentName = String(existing.Name || "").trim();
+        let currentPrice = Math.round(Number(existing.Price) || 0);
+        let currentBranchPrice = Math.round(Number(existing.PriceByBranch) || 0);
+        let currentCost = Math.max(0, asNumber(existing.Cost) ?? 0);
+        const branchPriceMatches = line.price <= 0 || currentBranchPrice === targetPrice;
+        if (currentName !== line.name || currentPrice !== targetPrice || !branchPriceMatches) {
+          if (!fetchedExact) {
+            // Fetch the current product with its image collection immediately
+            // before ProductSave. POS365 can replace omitted collections, so
+            // the price writer must carry ProductImages through unchanged.
+            existing = await this.findRemoteProductByCode(config, sessionId, line.sku, true);
+            fetchedExact = true;
+            if (!existing) throw new Error(`POS365 không còn tìm thấy SKU ${line.sku} trong lúc cập nhật giá.`);
+            currentName = String(existing.Name || "").trim();
+            currentPrice = Math.round(Number(existing.Price) || 0);
+            currentBranchPrice = Math.round(Number(existing.PriceByBranch) || 0);
+            currentCost = Math.max(0, asNumber(existing.Cost) ?? 0);
+            targetPrice = line.price > 0 ? line.price : currentPrice;
+            const freshBranchPriceMatches = line.price <= 0 || currentBranchPrice === targetPrice;
+            if (currentName === line.name && currentPrice === targetPrice && freshBranchPriceMatches) {
+              if (snapshot) snapshot.byCode.set(key, [existing]);
+              continue;
+            }
+          }
           if (normalizedCode(existing.Code) !== normalizedCode(line.sku)) throw new Error(`SKU POS365 của mặt hàng ${line.sku} không khớp; dừng để tránh sửa nhầm mã.`);
+          const currentImages = this.posProductImageRows(existing);
+          const expectedImages = currentImages.map((image) => {
+            const id = String(image.Id ?? image.id ?? "").trim();
+            const url = String(image.ImageURL || image.imageUrl || "").trim();
+            if (!id) throw new Error(`Ảnh POS365 của SKU ${line.sku} thiếu mã; dừng cập nhật giá để tránh làm mất ảnh.`);
+            return { id, url };
+          });
           const saved = await this.requestJson(new URL("/api/products", config.baseUrl), sessionId, {
             method: "POST",
             body: JSON.stringify({
@@ -953,33 +1333,72 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
                 Name: String(line.name || existing.Name || line.sku).slice(0, 180),
                 ProductType: asNumber(existing.ProductType) ?? 1,
                 Price: targetPrice,
+                Cost: currentCost,
                 Unit: String(existing.Unit || "Cái"),
                 CategoryId: existing.CategoryId ?? null,
+                ProductImages: currentImages,
               },
               // POS365 ProductSave owns the standard list price and can also
               // set the branch selling price. Do not send this through the
               // custom pricebook import endpoint: the default “Giá niêm yết”
               // book is not a custom PriceBook record in every tenant.
-              PriceByBranch: targetPrice,
+              PriceByBranch: line.price > 0 ? targetPrice : currentBranchPrice,
             }),
           }) as Pos365Record;
           const savedId = asNumber(saved?.Id ?? saved?.Product?.Id);
           if (savedId !== null && savedId !== Number(existing.Id)) throw new Error(`POS365 trả về mã khác khi cập nhật giá SKU ${line.sku}.`);
+          changedLines.push({ line, expectedImages, expectedBranchPrice: line.price > 0 ? targetPrice : null, expectedCost: currentCost });
         }
       }
-      verifiedLines.push(line);
     }
 
-    const mismatches = [] as { sku: string; expectedName: string; actualName: string | null; expectedPrice: number | null; actualPrice: unknown }[];
-    for (const line of verifiedLines) {
-      const remote = await this.findRemoteProductByCode(config, sessionId, line.sku);
+    const mismatches = [] as { sku: string; expectedName: string; actualName: string | null; expectedPrice: number | null; actualPrice: unknown; expectedBranchPrice: number | null; actualBranchPrice: unknown; expectedCost: number | null; actualCost: unknown }[];
+    for (const { line, expectedImages, expectedBranchPrice, expectedCost } of changedLines) {
+      const remote = await this.findRemoteProductByCode(config, sessionId, line.sku, expectedImages !== null);
       const nameMatches = String(remote?.Name || "").trim() === line.name;
       const priceMatches = line.price <= 0 || Math.round(Number(remote?.Price) || 0) === line.price;
-      if (!nameMatches || !priceMatches) mismatches.push({ sku: line.sku, expectedName: line.name, actualName: remote?.Name ?? null, expectedPrice: line.price || null, actualPrice: remote?.Price ?? null });
+      const branchPriceMatches = expectedBranchPrice === null || Math.round(Number(remote?.PriceByBranch) || 0) === expectedBranchPrice;
+      const costMatches = expectedCost === null || Math.abs((Number(remote?.Cost) || 0) - expectedCost) < 0.01;
+      if (!nameMatches || !priceMatches || !branchPriceMatches || !costMatches) mismatches.push({
+        sku: line.sku,
+        expectedName: line.name,
+        actualName: remote?.Name ?? null,
+        expectedPrice: line.price || null,
+        actualPrice: remote?.Price ?? null,
+        expectedBranchPrice,
+        actualBranchPrice: remote?.PriceByBranch ?? null,
+        expectedCost,
+        actualCost: remote?.Cost ?? null,
+      });
+      if (expectedImages !== null) {
+        const actualImages = this.posProductImageRows(remote || {});
+        // POS365 can regenerate ProductImage IDs during ProductSave while
+        // keeping the underlying image URL. Verify the stable URL and its
+        // multiplicity; fall back to the ID only for legacy rows without URL.
+        const actualUrlCounts = new Map<string, number>();
+        const actualIds = new Set<string>();
+        for (const image of actualImages) {
+          const id = String(image.Id ?? image.id ?? "").trim();
+          const url = String(image.ImageURL || image.imageUrl || "").trim();
+          if (id) actualIds.add(id);
+          if (url) actualUrlCounts.set(url, (actualUrlCounts.get(url) || 0) + 1);
+        }
+        const expectedUrlCounts = new Map<string, number>();
+        for (const image of expectedImages) {
+          if (image.url) expectedUrlCounts.set(image.url, (expectedUrlCounts.get(image.url) || 0) + 1);
+        }
+        const lostUrl = [...expectedUrlCounts.entries()].find(([url, count]) => (actualUrlCounts.get(url) || 0) < count);
+        const lostLegacyImage = expectedImages.find((image) => !image.url && !actualIds.has(image.id));
+        if (lostUrl || lostLegacyImage) {
+          const lostImage = lostUrl?.[0] || lostLegacyImage?.id || "không rõ";
+          throw new Error(`POS365 không giữ nguyên ảnh ${lostImage} của SKU ${line.sku} sau khi cập nhật giá; cần kiểm tra ảnh trước khi thử lại.`);
+        }
+      }
+      if (snapshot && remote) snapshot.byCode.set(normalizedCode(line.sku), [remote]);
     }
     if (mismatches.length) {
-      const details = mismatches.map((row) => `${row.sku}: giá POS365 ${row.actualPrice ?? "—"}/${row.expectedPrice ?? "—"}`).join("; ");
-      throw new Error(`POS365 chưa lưu đúng tên hoặc giá cho SKU: ${details}.`);
+      const details = mismatches.map((row) => `${row.sku}: giá chuẩn ${row.actualPrice ?? "—"}/${row.expectedPrice ?? "—"}, giá chi nhánh ${row.actualBranchPrice ?? "—"}/${row.expectedBranchPrice ?? "—"}, giá vốn ${row.actualCost ?? "—"}/${row.expectedCost ?? "—"}`).join("; ");
+      throw new Error(`POS365 chưa lưu đúng tên, giá hoặc giữ nguyên giá vốn cho SKU: ${details}.`);
     }
   }
 
@@ -1061,10 +1480,12 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     return matches[0] || null;
   }
 
-  private async findRemoteProductByCode(config: Pos365Config, sessionId: string, sku: string) {
+  private async findRemoteProductByCode(config: Pos365Config, sessionId: string, sku: string, includeImages = false) {
     const code = sku.trim();
     const filter = encodeURIComponent(`Code eq '${code.replace(/'/g, "''")}'`);
-    const page = await this.requestJson(new URL(`/api/products?format=json&$top=10&$skip=0&$filter=${filter}`, config.baseUrl!), sessionId);
+    const pageUrl = new URL(`/api/products?format=json&$top=10&$skip=0&$filter=${filter}`, config.baseUrl!);
+    if (includeImages) pageUrl.searchParams.append("Includes", "ProductImages");
+    const page = await this.requestJson(pageUrl, sessionId);
     const matches = this.rows(page).filter((product) => normalizedCode(product.Code) === normalizedCode(code)) as Pos365Record[];
     if (matches.length > 1) throw new Error(`POS365 có nhiều mặt hàng dùng SKU ${sku}; dừng để tránh sửa nhầm.`);
     return matches[0] || null;
@@ -1092,6 +1513,22 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       if (skip > 100000) throw new Error("Danh mục POS365 vượt giới hạn phân trang an toàn.");
     }
     return all;
+  }
+
+  private async loadProductPriceCatalogSnapshot(config: Pos365Config, sessionId: string) {
+    if (!config.baseUrl) throw new Error("Chưa cấu hình host POS365.");
+    const products = await this.readProducts(config, sessionId);
+    const byCode = new Map<string, Pos365Record[]>();
+    for (const product of products) {
+      const key = normalizedCode(product.Code);
+      if (!key) continue;
+      const matches = byCode.get(key) || [];
+      matches.push(product);
+      byCode.set(key, matches);
+    }
+    const snapshot: Pos365ProductPriceSnapshot = { baseUrl: config.baseUrl, loadedAt: Date.now(), byCode };
+    this.productPriceCatalogSnapshot = snapshot;
+    return snapshot;
   }
 
   private rows(value: unknown): Pos365Record[] {
@@ -1175,14 +1612,23 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
   }
 
   private async fetchPos365(url: URL, init: RequestInit) {
-    let release = () => {};
-    const previous = this.posRequestQueue;
-    this.posRequestQueue = new Promise<void>((resolve) => { release = resolve; });
-    await previous;
+    let slotReserved = false;
+    while (!slotReserved) {
+      let release = () => {};
+      const previous = this.posRequestQueue;
+      this.posRequestQueue = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      let waitMs = Math.max(0, this.posRequestNotBefore - Date.now());
+      if (this.activePosRequests >= this.maxConcurrentPosRequests) waitMs = Math.max(waitMs, 100);
+      if (waitMs === 0) {
+        this.activePosRequests += 1;
+        this.posRequestNotBefore = Date.now() + this.posRequestIntervalMs;
+        slotReserved = true;
+      }
+      release();
+      if (waitMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    }
     try {
-      const waitMs = Math.max(0, this.posRequestNotBefore - Date.now());
-      if (waitMs) await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
-      this.posRequestNotBefore = Date.now() + this.posRequestIntervalMs;
       // Start the network timeout after the serialized/rate-limit wait, or a
       // request can expire before it reaches POS365 while waiting its turn.
       const response = await fetch(url, { ...init, signal: init.signal || AbortSignal.timeout(20000) });
@@ -1213,7 +1659,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       this.posRequestNotBefore = Math.max(this.posRequestNotBefore, Date.now() + 5000);
       throw error;
     } finally {
-      release();
+      this.activePosRequests = Math.max(0, this.activePosRequests - 1);
     }
   }
 

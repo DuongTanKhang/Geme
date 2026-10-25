@@ -833,6 +833,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const priceVariants = Object.hasOwn(input, "priceVariants") ? input.priceVariants : undefined;
     if (priceVariants !== undefined && (!Array.isArray(priceVariants) || priceVariants.length > 500)) throw new BadRequestException("Danh sách biến thể không hợp lệ.");
     const changedProductIds = new Set<string>();
+    let imageSyncChanged = false;
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
         const current = await tx.product.findUnique({ where: { id }, include: { category: { select: { slug: true } }, images: { orderBy: { sortOrder: "asc" } }, variants: { orderBy: { sortOrder: "asc" } } } });
@@ -888,6 +889,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           variantUpdates.splice(0, variantUpdates.length, ...[...synchronizedUpdates].map(([variantId, data]) => ({ id: variantId, data })));
         }
         const priceChanged = Object.hasOwn(data, "price") || Object.hasOwn(data, "originalPrice") || variantUpdates.some((row) => Object.hasOwn(row.data, "price") || Object.hasOwn(row.data, "originalPrice"));
+        imageSyncChanged = gallery !== undefined || variantUpdates.some((row) => Object.hasOwn(row.data, "imageUrls"));
+        if (imageSyncChanged) Object.assign(data, {
+          pos365ImageSyncStatus: this.pos365.isSyncEnabled() ? "PENDING" : "DISABLED",
+          pos365ImageSyncAttempts: 0, pos365ImageSyncLastAttemptAt: null,
+          pos365ImageSyncNextAttemptAt: this.pos365.isSyncEnabled() ? new Date() : null,
+          pos365ImageSyncedAt: null, pos365ImageSyncError: null,
+        });
         if (priceChanged) Object.assign(data, {
           pos365PriceSyncStatus: this.pos365.isSyncEnabled() ? "PENDING" : "DISABLED",
           pos365PriceSyncAttempts: 0, pos365PriceSyncLastAttemptAt: null,
@@ -895,7 +903,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           pos365PriceSyncedAt: null, pos365PriceSyncError: null,
         });
         if (gallery) data.images = { deleteMany: {}, create: gallery.map((url, index) => ({ url, alt: data.name || current.name, sortOrder: index, isPrimary: index === 0 })) };
-        const meaningful = Object.keys(data).some((key) => !["pos365PriceSyncStatus", "pos365PriceSyncAttempts", "pos365PriceSyncLastAttemptAt", "pos365PriceSyncNextAttemptAt", "pos365PriceSyncedAt", "pos365PriceSyncError"].includes(key)) || variantUpdates.length > 0;
+        const meaningful = Object.keys(data).some((key) => !["pos365PriceSyncStatus", "pos365PriceSyncAttempts", "pos365PriceSyncLastAttemptAt", "pos365PriceSyncNextAttemptAt", "pos365PriceSyncedAt", "pos365PriceSyncError", "pos365ImageSyncStatus", "pos365ImageSyncAttempts", "pos365ImageSyncLastAttemptAt", "pos365ImageSyncNextAttemptAt", "pos365ImageSyncedAt", "pos365ImageSyncError"].includes(key)) || variantUpdates.length > 0;
         if (!meaningful) throw new BadRequestException("Không có trường nội dung hoặc giá hợp lệ để cập nhật.");
         await tx.product.update({ where: { id }, data });
         for (const row of variantUpdates) await tx.productPriceVariant.update({ where: { id: row.id }, data: row.data });
@@ -912,6 +920,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         return result;
       }, { isolationLevel: "Serializable", maxWait: 10_000, timeout: 30_000 });
       if (changedProductIds.size && this.pos365.isSyncEnabled()) await this.pos365.syncProductPricesNow(id);
+      if (imageSyncChanged) await this.pos365.queueProductImageSync(id);
       this.publishCatalogChange("product", "updated", id);
       return updated;
     } catch (error: any) {
@@ -1177,6 +1186,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     }
     try {
       let catalogChanged = !id;
+      let imageSyncChanged = false;
       const result = await this.prisma.$transaction(async (tx) => {
         let record: any;
         const isPublishingNow = data.status === "ACTIVE" && (!existingProduct || existingProduct.status !== "ACTIVE");
@@ -1196,6 +1206,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           if (!currentPriceData) throw new NotFoundException("Không tìm thấy sản phẩm trong kho.");
           if (data.sku !== currentPriceData.sku) throw new BadRequestException("Không được thay đổi SKU trong Hồ sơ sản phẩm.");
           const currentVariantsByKey = new Map(currentPriceData.variants.map((variant) => [variant.optionKey, variant]));
+          const submittedGallery = Object.hasOwn(input, "gallery") || Object.hasOwn(input, "image");
+          const galleryChanged = submittedGallery && JSON.stringify(images) !== JSON.stringify(existingProduct?.images.map((image) => image.url) || []);
+          const variantImagesChanged = variantCreate.some((variant) => {
+            const existing = currentVariantsByKey.get(variant.optionKey);
+            return existing && JSON.stringify(variant.imageUrls) !== JSON.stringify(existing.imageUrls || []);
+          });
+          imageSyncChanged = galleryChanged || variantImagesChanged;
           for (const variant of variantCreate) {
             const existing = currentVariantsByKey.get(variant.optionKey);
             if (existing && variant.sku !== existing.sku) {
@@ -1222,7 +1239,15 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             pos365PriceSyncedAt: null,
             pos365PriceSyncError: null,
           } : {};
-          const productUpdateData: Input = { ...productDataToPersist, ...posPriceSyncFields };
+          const posImageSyncFields = imageSyncChanged ? {
+            pos365ImageSyncStatus: this.pos365.isSyncEnabled() ? "PENDING" : "DISABLED",
+            pos365ImageSyncAttempts: 0,
+            pos365ImageSyncLastAttemptAt: null,
+            pos365ImageSyncNextAttemptAt: this.pos365.isSyncEnabled() ? new Date() : null,
+            pos365ImageSyncedAt: null,
+            pos365ImageSyncError: null,
+          } : {};
+          const productUpdateData: Input = { ...productDataToPersist, ...posPriceSyncFields, ...posImageSyncFields };
           if (Object.hasOwn(input, "gallery") || Object.hasOwn(input, "image")) {
             productUpdateData.images = { deleteMany: {}, create: images.map((url: string, index: number) => ({ url, alt: data.name, sortOrder: index, isPrimary: index === 0 })) };
           }
@@ -1255,6 +1280,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         return record;
       });
       if (catalogChanged && result.pos365PriceSyncStatus === "PENDING") await this.pos365.syncProductPricesNow(result.id);
+      if (imageSyncChanged) await this.pos365.queueProductImageSync(result.id);
       this.publishCatalogChange("product", id ? "updated" : "created", result.id);
       return await this.prisma.product.findUniqueOrThrow({ where: { id: result.id }, include: includeProduct });
     } catch (error: any) {

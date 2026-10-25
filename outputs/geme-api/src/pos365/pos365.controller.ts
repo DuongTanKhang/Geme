@@ -38,6 +38,13 @@ export class Pos365Controller {
     return this.pos365.queueAllProductPriceSync();
   }
 
+  @Post("sync-product-images")
+  @RequireAdminPermissions("integrations.manage")
+  @ApiOperation({ summary: "Đưa ảnh GEME của sản phẩm đã có SKU vào hàng đợi POS365" })
+  syncProductImages() {
+    return this.pos365.queueAllProductImageSync();
+  }
+
   @Post("product-price-status")
   @RequireAdminPermissions("integrations.read")
   @ApiOperation({ summary: "Đọc trạng thái đồng bộ giá theo mã hồ sơ sản phẩm" })

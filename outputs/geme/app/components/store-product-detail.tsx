@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Image from "next/image";
 import type { StoreCategory, StoreProduct, StorePromotion } from "../lib/store-api";
+import { isStoreMediaProxyUrl, storeMediaDeliveryUrl } from "../lib/store-media";
 import { formatStorePrice } from "../lib/store-format";
 import { formatStorePromotionPeriod, getStoreProductPrice } from "../lib/store-promotion";
 import { useWishlist } from "./wishlist-provider";
@@ -17,8 +18,9 @@ function HeartIcon() {
 }
 
 function ProductPhoto({ url, alt, className = "", loading = "lazy", sizes = "(max-width: 760px) 100vw, 50vw" }: { url?: string; alt: string; className?: string; loading?: "eager" | "lazy"; sizes?: string }) {
+  const imageUrl = storeMediaDeliveryUrl(url);
   return url
-    ? <Image className={className} src={url} alt={alt} width={1200} height={1200} sizes={sizes} quality={80} loading={loading} fetchPriority={loading === "eager" ? "high" : undefined} />
+    ? <Image className={className} src={imageUrl || url} alt={alt} width={1200} height={1200} sizes={sizes} quality={80} loading={loading} fetchPriority={loading === "eager" ? "high" : undefined} unoptimized={isStoreMediaProxyUrl(imageUrl || url)} />
     : <div className={`${className} detail-photo-empty`} role="img" aria-label={`${alt} — chưa có ảnh`}>Chưa có ảnh</div>;
 }
 

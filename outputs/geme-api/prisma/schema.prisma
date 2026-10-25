@@ -537,6 +537,12 @@ model Product {
   pos365StockSyncNextAttemptAt DateTime?          @map("pos365_stock_sync_next_attempt_at") @db.Timestamptz(3)
   pos365StockSyncedAt DateTime?                   @map("pos365_stock_synced_at") @db.Timestamptz(3)
   pos365StockSyncError String?                    @map("pos365_stock_sync_error") @db.Text
+  pos365ImageSyncStatus String?                   @map("pos365_image_sync_status") @db.VarChar(20)
+  pos365ImageSyncAttempts Int                      @default(0) @map("pos365_image_sync_attempts")
+  pos365ImageSyncLastAttemptAt DateTime?          @map("pos365_image_sync_last_attempt_at") @db.Timestamptz(3)
+  pos365ImageSyncNextAttemptAt DateTime?          @map("pos365_image_sync_next_attempt_at") @db.Timestamptz(3)
+  pos365ImageSyncedAt DateTime?                   @map("pos365_image_synced_at") @db.Timestamptz(3)
+  pos365ImageSyncError String?                    @map("pos365_image_sync_error") @db.Text
   seoTitle              String?                @map("seo_title") @db.VarChar(180)
   seoDescription        String?                @map("seo_description") @db.VarChar(320)
   kiotVietProductId     String?                @unique @map("kiot_viet_product_id") @db.VarChar(80)
@@ -546,6 +552,7 @@ model Product {
   gemstoneType          Category?              @relation("GemstoneType", fields: [gemstoneTypeId], references: [id], onDelete: SetNull)
   materialOption        MaterialOption?        @relation(fields: [materialOptionId], references: [id], onDelete: SetNull)
   images                ProductImage[]
+  pos365ImageLinks       Pos365ProductImageSync[]
   aiImageItems          AiImageItem[]
   variants              ProductPriceVariant[]
   reviews               ProductReview[]
@@ -574,6 +581,7 @@ model Product {
   @@index([createdAt(sort: Desc), id(sort: Desc)])
   @@index([pos365PriceSyncStatus, pos365PriceSyncNextAttemptAt])
   @@index([pos365StockSyncStatus, pos365StockSyncNextAttemptAt])
+  @@index([pos365ImageSyncStatus, pos365ImageSyncNextAttemptAt])
   @@map("products")
 }
 
@@ -589,6 +597,20 @@ model ProductImage {
 
   @@index([productId, sortOrder])
   @@map("product_images")
+}
+
+model Pos365ProductImageSync {
+  id            String   @id @default(uuid()) @db.Uuid
+  productId     String   @map("product_id") @db.Uuid
+  sku           String   @db.VarChar(64)
+  pos365ImageId String   @map("pos365_image_id") @db.VarChar(32)
+  imageUrl      String   @map("image_url") @db.Text
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([sku, pos365ImageId])
+  @@index([productId, sku])
+  @@map("pos365_product_image_sync")
 }
 
 model ProductMediaAsset {

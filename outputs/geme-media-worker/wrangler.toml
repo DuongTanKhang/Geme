@@ -1,0 +1,11 @@
+name = "geme-public-media"
+main = "src/index.ts"
+compatibility_date = "2026-10-24"
+workers_dev = true
+preview_urls = false
+
+# Bind the existing bucket privately. Do not enable R2's public bucket domain:
+# this Worker is the only public path and only serves the `media/` prefix.
+[[r2_buckets]]
+binding = "GEME_MEDIA"
+bucket_name = "geme-media"

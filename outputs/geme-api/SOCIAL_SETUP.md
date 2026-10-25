@@ -15,7 +15,7 @@ Quyền Meta có thể cần App Review/Advanced Access hoặc điều kiện kh
 
 ## Bản nháp, duyệt và lịch đăng
 
-- Chọn sản phẩm đang ACTIVE, còn hàng; ảnh phải đã được duyệt/QC đạt, gắn với sản phẩm, và có URL CDN R2 công khai. Ảnh riêng tư, ảnh gốc đang chờ duyệt và URL nhập tự do bị từ chối. Trước khi đăng ảnh cần `MEDIA_STORAGE_PROVIDER=r2` và `MEDIA_PUBLIC_BASE_URL`.
+- Chọn sản phẩm đang ACTIVE, còn hàng; ảnh phải đã được duyệt/QC đạt, gắn với sản phẩm, và có URL công khai từ media gateway. Ảnh riêng tư, ảnh gốc đang chờ duyệt và URL nhập tự do bị từ chối. Trước khi đăng ảnh cần `MEDIA_STORAGE_PROVIDER=r2` và `MEDIA_PUBLIC_BASE_URL`; giữ bucket R2 riêng tư và chỉ xuất ảnh qua Worker `outputs/geme-media-worker`.
 - Facebook Page hỗ trợ nội dung text/link hoặc một ảnh. Instagram Professional hỗ trợ một ảnh JPEG tối đa 8 MB và caption. Luồng này không tự tạo carousel hoặc Story.
 - Mỗi kênh có nội dung riêng. Có thể lưu bản nháp trước khi Meta được cấu hình; phải chọn tài khoản trước khi duyệt. Thời gian được lưu UTC; trường datetime-local trong Admin được hiểu là giờ Việt Nam (`Asia/Ho_Chi_Minh`).
 - Duyệt gắn với một revision và snapshot nội dung/media/tài khoản. Mọi chỉnh sửa tạo revision mới và cần duyệt lại. Kết quả được lưu theo từng kênh để không đăng lại Page đã thành công khi Instagram thất bại.
