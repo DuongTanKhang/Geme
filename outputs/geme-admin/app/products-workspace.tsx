@@ -5,6 +5,7 @@ import type { AdminCategory } from "./categories-workspace";
 import type { MaterialOption } from "./materials-workspace";
 import { uploadProductImage, uploadProductVideo, MAX_PRODUCT_IMAGES, MAX_VARIANT_MEDIA_ITEMS, parsePriceInput } from "./product-images";
 import { TechnicalImagePicker } from "./technical-image-picker";
+import NewArrivalsAdminWorkspace, { type AdminJewelryStoneGroup } from "./new-arrivals-admin-workspace";
 
 export type AdminProduct = {
   id: string;
@@ -17,6 +18,12 @@ export type AdminProduct = {
   stock: number;
   status: string;
   isNew?: boolean;
+  newLabelActive?: boolean;
+  newUntil?: string | null;
+  firstPublishedAt?: string | null;
+  publicationHistoryKnown?: boolean;
+  jewelryStoneGroupId?: string | null;
+  jewelryStoneGroup?: Pick<AdminJewelryStoneGroup, "id" | "slug" | "name" | "active"> | null;
   isPremiumGemstone?: boolean;
   productType?: "Trang sức" | "Đá quý";
   category?: string;
@@ -66,16 +73,18 @@ export type ProductPriceVariant = {
 
 type Props = {
   products: AdminProduct[];
-  onSave: (product: AdminProduct) => Promise<AdminProduct | void> | AdminProduct | void;
+  onSave: (product: AdminProduct) => Promise<AdminProduct>;
   onDelete: (product: AdminProduct) => Promise<void>;
   onAdd: () => void;
   onNotify: (message: string) => void;
   categories: AdminCategory[];
   materials: MaterialOption[];
+  request: (path: string, method?: string, body?: unknown) => Promise<any>;
   onLoadDetails: (apiId: string) => Promise<void>;
   permissions: string[];
   isAdmin?: boolean;
-  onSetNewLabel: (product: AdminProduct, isNew: boolean) => Promise<AdminProduct>;
+  onSetNewLabel: (product: AdminProduct, isNew: boolean, newUntil?: string | null) => Promise<AdminProduct>;
+  onAssignProductGroup: (product: AdminProduct, groupId: string | null) => Promise<void>;
   onSetPublication: (product: AdminProduct, status: "ACTIVE" | "HIDDEN", reason: string) => Promise<AdminProduct>;
 };
 
@@ -112,6 +121,12 @@ function money(value: number) {
   return `${new Intl.NumberFormat("vi-VN").format(value)} ₫`;
 }
 
+function toHcmDateTimeLocal(value?: string | null) {
+  if (!value) return "";
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? new Date(timestamp + 7 * 60 * 60 * 1000).toISOString().slice(0, 16) : "";
+}
+
 function Status({ children }: { children: string }) {
   const tone = children === "Đang hoạt động" ? "green" : children === "Tạm ẩn" || children === "Bản nháp" ? "muted" : "red";
   return <span className={`product-status ${tone}`}><i />{children}</span>;
@@ -125,7 +140,7 @@ const tabs = [
   { key: "history", label: "Lịch sử", icon: "clock" },
 ];
 
-export default function ProductsWorkspace({ products, categories: categoryRecords, materials, onSave, onDelete, onAdd, onNotify, onLoadDetails, permissions, isAdmin = false, onSetNewLabel, onSetPublication }: Props) {
+export default function ProductsWorkspace({ products, categories: categoryRecords, materials, request, onSave, onDelete, onAdd, onNotify, onLoadDetails, permissions, isAdmin = false, onSetNewLabel, onAssignProductGroup, onSetPublication }: Props) {
   const canFullCatalog = isAdmin || permissions.includes("catalog.write");
   const canEditContent = canFullCatalog || permissions.includes("catalog.content.write");
   const canEditPrice = canFullCatalog || permissions.includes("catalog.price.write");
@@ -133,6 +148,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   // omits its permission list. The status endpoint remains the authority and
   // enforces catalog.publish before making any change.
   const canPublish = isAdmin || canFullCatalog || permissions.includes("catalog.publish");
+  const canManageNewArrivals = isAdmin || permissions.includes("catalog.write") || permissions.includes("settings.manage");
   const canDelete = (canFullCatalog || permissions.includes("catalog.delete")) && permissions.includes("integrations.manage");
   const [catalogKind, setCatalogKind] = useState<"Trang sức" | "Đá quý">(products.some((item) => item.productType === "Trang sức") ? "Trang sức" : "Đá quý");
   const [selectedId, setSelectedId] = useState(products.find((item) => item.productType === "Trang sức")?.id ?? products[0]?.id ?? "");
@@ -158,6 +174,18 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState("");
   const [detailsRetry, setDetailsRetry] = useState(0);
+  const [stoneGroups, setStoneGroups] = useState<AdminJewelryStoneGroup[]>([]);
+  const [stoneGroupWorkspaceOpen, setStoneGroupWorkspaceOpen] = useState(false);
+  const [savingStoneGroup, setSavingStoneGroup] = useState(false);
+
+  useEffect(() => {
+    if (!canFullCatalog) return;
+    let active = true;
+    void request("admin/catalog/jewelry-stone-groups").then((result) => {
+      if (active && Array.isArray(result?.groups)) setStoneGroups(result.groups);
+    }).catch(() => { /* The group manager provides a visible retry state. */ });
+    return () => { active = false; };
+  }, [canFullCatalog, request]);
 
   useEffect(() => {
     if (!previewVariantImage) return;
@@ -219,9 +247,8 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     return filtered
       .map((item, index) => ({ item, index }))
       .sort((left, right) => {
-        const leftActive = left.item.status === "Đang hoạt động";
-        const rightActive = right.item.status === "Đang hoạt động";
-        if (leftActive !== rightActive) return leftActive ? -1 : 1;
+        const newOrder = Number(Boolean(right.item.isNew)) - Number(Boolean(left.item.isNew));
+        if (newOrder) return newOrder;
 
         const leftGroup = stoneGroup(left.item);
         const rightGroup = stoneGroup(right.item);
@@ -230,7 +257,12 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
         if (leftUnclassified !== rightUnclassified) return leftUnclassified ? 1 : -1;
 
         const groupOrder = leftGroup.localeCompare(rightGroup, "vi", { sensitivity: "base" });
-        return groupOrder || left.index - right.index;
+        if (groupOrder) return groupOrder;
+
+        const leftActive = left.item.status === "Đang hoạt động";
+        const rightActive = right.item.status === "Đang hoạt động";
+        if (leftActive !== rightActive) return leftActive ? -1 : 1;
+        return left.index - right.index;
       })
       .map(({ item }) => item);
   }, [products, deferredSearch, catalogKind, categoryFilter, typeFilter, statusFilter]);
@@ -341,10 +373,25 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   };
   const save = async () => {
     if (!product || saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)) return;
-    if (Object.keys(draft).length === 1 && Object.prototype.hasOwnProperty.call(draft, "isNew")) {
+    const hasNewLabelDraft = Object.prototype.hasOwnProperty.call(draft, "isNew") || Object.prototype.hasOwnProperty.call(draft, "newUntil");
+    const contentDraft = { ...draft };
+    delete contentDraft.isNew;
+    delete contentDraft.newUntil;
+    const newLabelDraft = {
+      ...(Object.prototype.hasOwnProperty.call(draft, "isNew") ? { isNew: Boolean(draft.isNew) } : {}),
+      ...(Object.prototype.hasOwnProperty.call(draft, "newUntil") ? { newUntil: draft.newUntil } : {}),
+    };
+    const saveLabel = async (savedProduct: AdminProduct) => {
+      const localDeadline = typeof newLabelDraft.newUntil === "string" ? newLabelDraft.newUntil : undefined;
+      const deadline = localDeadline === undefined ? undefined : localDeadline === "" ? null : new Date(`${localDeadline}:00+07:00`).toISOString();
+      return onSetNewLabel(savedProduct, newLabelDraft.isNew === undefined ? Boolean(product.isNew) : newLabelDraft.isNew, deadline);
+    };
+    if (Object.keys(draft).length > 0 && Object.keys(draft).every((key) => key === "isNew" || key === "newUntil")) {
       setSaving(true);
       try {
-        const saved = await onSetNewLabel(product, Boolean(product.isNew));
+        const localDeadline = typeof draft.newUntil === "string" ? draft.newUntil : undefined;
+        const deadline = localDeadline === undefined ? undefined : localDeadline === "" ? null : new Date(`${localDeadline}:00+07:00`).toISOString();
+        const saved = await onSetNewLabel(product, draft.isNew === undefined ? Boolean(product.isNew) : Boolean(draft.isNew), deadline);
         setDraft({});
         onNotify(saved.isNew ? `Đã gắn nhãn “Mới” cho ${saved.id}.` : `Đã bỏ nhãn “Mới” khỏi ${saved.id}.`);
       } catch (error) {
@@ -354,12 +401,27 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       }
       return;
     }
+    if (hasNewLabelDraft && !canFullCatalog && !permissions.includes("catalog.publish")) {
+      onNotify("Bạn chưa được cấp quyền quản lý nhãn sản phẩm mới.");
+      return;
+    }
     if (!canFullCatalog) {
       setSaving(true);
       try {
-        await onSave({ ...product, ...draft });
-        onNotify(`Đã lưu thay đổi được cấp quyền cho ${product.id}.`);
-        setDraft({});
+        const savedProduct = await onSave({ ...product, ...contentDraft });
+        if (hasNewLabelDraft) {
+          setDraft(newLabelDraft);
+          try {
+            const labeled = await saveLabel(savedProduct);
+            setDraft({});
+            onNotify(`Đã lưu nội dung và nhãn “Mới” cho ${labeled.id}.`);
+          } catch (error) {
+            onNotify(`Đã lưu nội dung, nhưng chưa cập nhật được nhãn: ${error instanceof Error ? error.message : "Lỗi không xác định."}`);
+          }
+        } else {
+          onNotify(`Đã lưu thay đổi được cấp quyền cho ${product.id}.`);
+          setDraft({});
+        }
       } catch (error) {
         onNotify(error instanceof Error ? error.message : "Không thể lưu sản phẩm.");
       } finally {
@@ -387,7 +449,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       setActiveTab("variants");
       return;
     }
-    const saved = { ...product, ...draft, category: isGemstone ? selectedCategory?.name ?? product.category : product.category, categoryId: isGemstone ? product.gemstoneTypeId ?? selectedCategory?.id : product.categoryId ?? selectedCategory?.id, gemstoneTypeId: isGemstone ? product.gemstoneTypeId ?? selectedCategory?.id : product.gemstoneTypeId, categoryPricingMode: pricingMode };
+    const saved = { ...product, ...contentDraft, category: isGemstone ? selectedCategory?.name ?? product.category : product.category, categoryId: isGemstone ? product.gemstoneTypeId ?? selectedCategory?.id : product.categoryId ?? selectedCategory?.id, gemstoneTypeId: isGemstone ? product.gemstoneTypeId ?? selectedCategory?.id : product.gemstoneTypeId, categoryPricingMode: pricingMode };
     if (combinationRows(saved).length && !saved.isPremiumGemstone) {
       saved.priceVariants = combinationRows(saved);
       if (saved.priceVariants.some((variant) => variant.price <= 0)) {
@@ -404,9 +466,20 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     }
     setSaving(true);
     try {
-      await onSave({ ...saved, gallery: saved.gallery ?? [], image: saved.gallery?.[0] ?? saved.image ?? "" });
-      onNotify(`Đã lưu ${saved.id} vào database.`);
-      setDraft({});
+      const savedProduct = await onSave({ ...saved, gallery: saved.gallery ?? [], image: saved.gallery?.[0] ?? saved.image ?? "" });
+      if (hasNewLabelDraft) {
+        setDraft(newLabelDraft);
+        try {
+          const labeled = await saveLabel(savedProduct);
+          setDraft({});
+          onNotify(`Đã lưu sản phẩm và nhãn “Mới” cho ${labeled.id}.`);
+        } catch (error) {
+          onNotify(`Đã lưu sản phẩm, nhưng chưa cập nhật được nhãn: ${error instanceof Error ? error.message : "Lỗi không xác định."}`);
+        }
+      } else {
+        onNotify(`Đã lưu ${saved.id} vào database.`);
+        setDraft({});
+      }
     } catch (error) {
       onNotify(error instanceof Error ? error.message : "Không thể lưu sản phẩm.");
     } finally {
@@ -551,6 +624,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       <div className="products-heading">
         <div><h1>Sản phẩm</h1><p>Quản lý bài đăng trên website. SKU, biến thể và số lượng lấy từ mục Quản lý tồn kho.</p></div>
         <div className="products-actions">
+          {canManageNewArrivals && <button className="button button-quiet" type="button" onClick={() => setStoneGroupWorkspaceOpen(true)}>Nhóm đá / New Arrivals</button>}
           {canFullCatalog && <button className="button button-quiet" onClick={() => onNotify("Nhập Excel sẽ được kết nối ở bước backend.")}><Icon name="upload"/>Nhập Excel</button>}
           <button className="button button-quiet" onClick={exportCsv}><Icon name="download"/>Xuất Excel</button>
           {canFullCatalog && <button className="button button-primary" onClick={onAdd}><Icon name="plus"/>Thêm bài đăng</button>}
@@ -583,7 +657,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
               <td>{item.image ? <img className="product-row-image" src={item.image} alt="" loading="lazy" decoding="async"/> : <span className="product-row-image product-image-placeholder">◇</span>}</td>
               <td><span className="product-name-cell">{item.name}</span><small>SKU: {item.id}</small></td>
               <td><span className="category-cell">{item.category ?? "Chưa phân loại"}</span><small>{item.productType ?? "Trang sức"} · {item.subcategory ?? "—"}</small></td>
-              <td className="product-price-cell">{item.isPremiumGemstone ? "Liên hệ" : money(item.price)}</td><td>{item.stock}</td><td><span className="product-row-status"><Status>{item.status}</Status>{item.isNew && <span className="new-product-badge">Mới</span>}{item.isPremiumGemstone && <span className="premium-product-badge">Cao cấp</span>}</span></td>
+              <td className="product-price-cell">{item.isPremiumGemstone ? "Liên hệ" : money(item.price)}</td><td>{item.stock}</td><td><span className="product-row-status"><Status>{item.status}</Status>{(item.newLabelActive ?? item.isNew) && <span className="new-product-badge">Mới</span>}{item.isPremiumGemstone && <span className="premium-product-badge">Cao cấp</span>}</span></td>
               <td className="product-row-actions" onClick={(event) => event.stopPropagation()}>{canPublish && <button disabled={busyActionId === item.id} aria-label={(item.status === "Đang hoạt động" ? "Ẩn " : "Hiện ") + item.name} title={(item.status === "Đang hoạt động" ? "Ẩn" : "Hiện") + " sản phẩm trên website"} onClick={() => void toggleVisibility(item)}><Icon name={item.status === "Đang hoạt động" ? "eye" : "eyeOff"}/></button>}{canDelete && <button className="danger" disabled={busyActionId === item.id} aria-label={`Xóa ${item.name}`} title="Xóa sản phẩm khỏi GEME và POS365" onClick={() => void deleteProduct(item)}><Icon name="trash"/></button>}</td>
             </tr>) : <tr><td className="table-empty" colSpan={8}>{products.length ? "Không tìm thấy sản phẩm phù hợp." : "Chưa có sản phẩm."}</td></tr>}</tbody>
           </table>
@@ -598,7 +672,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       <div className="product-detail-title"><h2>Chi tiết sản phẩm</h2><button className="product-close" aria-label="Đóng chi tiết" onClick={() => setSelectedId("")}><Icon name="close"/></button></div>
       <div className="product-overview">
         <div className="product-gallery-preview">{product.coverVideoUrl ? <video className="product-large-image" src={product.coverVideoUrl} muted autoPlay loop playsInline preload="metadata" aria-label={`${product.name} · video bìa`}/> : gallery.length ? <img className="product-large-image" src={gallery[imageIndex % gallery.length]} alt={product.name || "Ảnh sản phẩm"}/> : <div className="product-image-placeholder product-large-image">Chưa có ảnh sản phẩm</div>}<div className="product-gallery-thumbs">{gallery.slice(0, 4).map((src, index) => <button key={`${src}-${index}`} className={!product.coverVideoUrl && index === imageIndex ? "active" : ""} onClick={() => setImageIndex(index)} aria-label={`Xem ảnh ${index + 1}`}><img src={src} alt=""/></button>)}</div></div>
-        <div className="product-overview-copy"><h3>{product.name}</h3><small>SKU: {product.id}</small><div className="product-overview-price"><strong>{product.isPremiumGemstone ? "Liên hệ" : money(product.price)}</strong><Status>{product.status}</Status>{product.isNew && <span className="new-product-badge">Mới</span>}{product.isPremiumGemstone && <span className="premium-product-badge">Cao cấp</span>}</div><p className="product-crumb">{product.productType ?? "Trang sức"}{product.category ? `　›　${product.category}` : "　›　Chưa chọn danh mục"}{product.subcategory ? `　›　${product.subcategory}` : ""}</p><div className="product-meta-line"><span>Tồn kho · quản lý riêng</span><strong>{product.stock}</strong></div><div className="product-meta-line"><span>Đã bán</span><strong>{product.sold}</strong></div><div className="product-rating"><span>Đánh giá</span><b>{product.reviews ? `${product.rating ?? ""} (${product.reviews})` : "Chưa có đánh giá"}</b></div></div>
+        <div className="product-overview-copy"><h3>{product.name}</h3><small>SKU: {product.id}</small><div className="product-overview-price"><strong>{product.isPremiumGemstone ? "Liên hệ" : money(product.price)}</strong><Status>{product.status}</Status>{(product.newLabelActive ?? product.isNew) && <span className="new-product-badge">Mới</span>}{product.isPremiumGemstone && <span className="premium-product-badge">Cao cấp</span>}</div><p className="product-crumb">{product.productType ?? "Trang sức"}{product.category ? `　›　${product.category}` : "　›　Chưa chọn danh mục"}{product.subcategory ? `　›　${product.subcategory}` : ""}</p><div className="product-meta-line"><span>Tồn kho · quản lý riêng</span><strong>{product.stock}</strong></div><div className="product-meta-line"><span>Đã bán</span><strong>{product.sold}</strong></div><div className="product-rating"><span>Đánh giá</span><b>{product.reviews ? `${product.rating ?? ""} (${product.reviews})` : "Chưa có đánh giá"}</b></div></div>
       </div>
 
       <div className="product-tabs" role="tablist" aria-label="Chi tiết sản phẩm">{tabs.filter((tab)=>tab.key!=="variants"||canEditPrice).map((tab) => <button key={tab.key} role="tab" aria-selected={activeTab === tab.key} className={activeTab === tab.key ? "active" : ""} onClick={() => setActiveTab(tab.key)}>{tab.label}</button>)}</div>
@@ -609,6 +683,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
           <div className="product-field-grid product-catalog-grid"><label className="product-field"><span>Nhóm sản phẩm <b>*</b></span><select disabled={!canFullCatalog} value={product.productType ?? "Trang sức"} onChange={(event) => categoryTypeChanged(event.target.value as "Trang sức" | "Đá quý")}><option>Trang sức</option><option>Đá quý</option></select></label><label className="product-field"><span>{isGemstone ? "Loại đá / danh mục cấp 2" : "Danh mục sản phẩm"} <b>*</b></span><select disabled={!canFullCatalog} value={isGemstone ? product.gemstoneTypeId ?? product.categoryId ?? "" : product.categoryId ?? selectedCategory?.id ?? ""} onChange={(event) => categoryChanged(event.target.value)}><option value="">{isGemstone ? "Chọn loại đá" : "Chọn danh mục"}</option>{productCategories.map((category) => {const parent = categoryRecords.find((item) => item.id === category.parentId);return <option key={category.id} value={category.id}>{!isGemstone && parent && parent.id !== productRoot?.id ? parent.name + " / " + category.name : category.name}</option>;})}</select></label></div>
           {isGemstone ? <div className="product-category-guidance" role="note"><span className="product-category-guidance-icon" aria-hidden="true">◇</span><div className="product-category-guidance-copy"><strong>Quản lý theo danh mục đá</strong><span>Dạng cắt, kích thước hoặc carat/chất lượng được cấu hình trong tab <b>Biến thể &amp; Giá</b>.</span></div></div> : <label className="product-field product-material-field"><span>Đá gắn / Chất liệu</span><select disabled={!canFullCatalog} value={product.materialOptionId ?? ""} onChange={(event) => { const option = materials.find((item) => item.id === event.target.value); update("materialOptionId", option?.id ?? ""); update("subcategory", option?.name ?? ""); }}><option value="">Chọn đá gắn hoặc chất liệu</option>{materialOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>}
         </div>
+        {!isGemstone && <section className="new-arrivals-product-metadata" aria-label="Dữ liệu New Arrivals"><div className="product-field"><span>Nhóm đá chính</span><select disabled={!canFullCatalog || savingStoneGroup} value={product.jewelryStoneGroupId ?? ""} onChange={async (event) => { setSavingStoneGroup(true); try { await onAssignProductGroup(product, event.target.value || null); onNotify("Đã cập nhật nhóm đá chính cho sản phẩm."); } catch (error) { onNotify(error instanceof Error ? error.message : "Không cập nhật được nhóm đá."); } finally { setSavingStoneGroup(false); } }}><option value="">Chưa gán trực tiếp · dùng mapping đã xác nhận</option>{stoneGroups.filter((group) => group.active || group.id === product.jewelryStoneGroupId).map((group) => <option key={group.id} value={group.id}>{group.name}{group.active ? "" : " (tạm dừng)"}</option>)}</select><small>{product.jewelryStoneGroup?.name ? `Đang gán trực tiếp: ${product.jewelryStoneGroup.name}` : "Chưa xác định nhóm đá chính; hệ thống chỉ dùng mapping đã quản lý."}</small></div><div className="product-field"><span>Ngày đăng lần đầu</span><div className="new-arrivals-readonly-date">{product.firstPublishedAt ? new Intl.DateTimeFormat("vi-VN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Ho_Chi_Minh" }).format(new Date(product.firstPublishedAt)) : product.publicationHistoryKnown ? "Chưa đăng lần nào" : "Chưa xác định · dữ liệu lịch sử cũ"}</div></div></section>}
         {isGemstone && canPublish && <div className="product-new-flag"><div><strong>Hàng cao cấp</strong><small>Website luôn hiển thị “Liên hệ” và không nhận đặt hàng trực tiếp. Giá lưu nội bộ không bị thay đổi.</small></div><label className="product-switch"><input type="checkbox" checked={Boolean(product.isPremiumGemstone)} onChange={(event) => update("isPremiumGemstone", event.target.checked)}/><span/><small>{product.isPremiumGemstone ? "Đang gắn nhãn" : "Chưa gắn nhãn"}</small></label></div>}
         <label className="product-field"><span>Khối lượng</span><div className="price-input"><input disabled={!canFullCatalog} aria-label="Khối lượng (gram)" type="number" min="0" step="0.01" value={product.weightGrams ?? ""} onChange={(event) => update("weightGrams", event.target.value === "" ? undefined : Number(event.target.value))}/><i>g</i></div></label>
         <div className="product-field"><span>Kích thước (dài × rộng × cao, cm)</span><div className="product-dimension-fields"><input disabled={!canFullCatalog} aria-label="Dài (cm)" type="number" min="0" step="0.01" value={product.lengthCm ?? ""} onChange={(event) => update("lengthCm", event.target.value === "" ? undefined : Number(event.target.value))}/><b>×</b><input disabled={!canFullCatalog} aria-label="Rộng (cm)" type="number" min="0" step="0.01" value={product.widthCm ?? ""} onChange={(event) => update("widthCm", event.target.value === "" ? undefined : Number(event.target.value))}/><b>×</b><input disabled={!canFullCatalog} aria-label="Cao (cm)" type="number" min="0" step="0.01" value={product.heightCm ?? ""} onChange={(event) => update("heightCm", event.target.value === "" ? undefined : Number(event.target.value))}/></div></div>
@@ -616,7 +691,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
         <div className="product-field"><span>Mô tả chi tiết</span><div className="rich-toolbar"><button type="button"><b>B</b></button><button type="button"><i>I</i></button><button type="button"><u>U</u></button><button type="button">☷</button><button type="button">☰</button><button type="button">↔</button><button type="button">↗</button><button type="button"><Icon name="image"/></button><button type="button">ⓘ</button></div><textarea disabled={!canEditContent} className="detail-description" rows={4} maxLength={1000} value={product.fullDescription ?? ""} onChange={(event) => update("fullDescription", event.target.value)}/><small className="field-counter">{(product.fullDescription ?? "").length}/1000</small></div>
         <div className="product-section-caption">Giá bán</div>{product.isPremiumGemstone && <div className="variant-price-note">Website luôn hiển thị “Liên hệ”; giá trong hồ sơ Admin được giữ làm dữ liệu nội bộ và không hiện cho khách.</div>}{product.priceVariants?.length || usesQualityPricing ? <div className="variant-price-note">Giá bán được nhập cho từng biến thể trong tab <b>Biến thể &amp; Giá</b>. Các lựa chọn và số lượng chỉ được tạo/cập nhật tại Quản lý tồn kho.</div> : <div className="product-field-grid price-stock-grid"><label className="product-field"><span>Giá bán <b>*</b></span><div className="price-input"><input disabled={!canEditPrice} type="text" inputMode="numeric" value={product.price || ""} onChange={(event) => update("price", parsePriceInput(event.target.value))}/><i>₫</i></div></label><label className="product-field"><span>Giá gốc</span><div className="price-input"><input disabled={!canEditPrice} type="text" inputMode="numeric" value={product.originalPrice || ""} onChange={(event) => update("originalPrice", parsePriceInput(event.target.value))}/><i>₫</i></div></label></div>}{!product.priceVariants?.length && !usesQualityPricing && <small className="inventory-management-hint">Số lượng tồn kho được quản lý riêng trong mục Quản lý tồn kho.</small>}
         <div className="product-publish"><div><strong>Trạng thái</strong><small>{canPublish ? "Thay đổi trạng thái tại thao tác đăng/ẩn ở danh sách sản phẩm." : "Tài khoản chỉ có thể chỉnh sửa nội dung được cấp."}</small></div><strong>{product.status}</strong></div>
-        {canPublish && <div className="product-new-flag"><div><strong>Sản phẩm mới</strong><small>Hiện nhãn “Mới” riêng trong danh sách sản phẩm</small></div><label className="product-switch"><input type="checkbox" checked={Boolean(product.isNew)} onChange={(event) => update("isNew", event.target.checked)}/><span/><small>{product.isNew ? "Đang gắn nhãn" : "Không gắn nhãn"}</small></label></div>}
+        {canPublish && <div className="product-new-flag"><div><strong>Sản phẩm mới</strong><small>Hiện nhãn “Mới” độc lập với ngày đăng. Nhãn hết hạn tự động mà không cần tắt cờ.</small></div><label className="product-switch"><input type="checkbox" checked={Boolean(product.isNew)} onChange={(event) => update("isNew", event.target.checked)}/><span/><small>{product.newLabelActive ? "Nhãn đang hiển thị" : product.isNew ? "Đã hết hạn" : "Không gắn nhãn"}</small></label><label className="new-arrivals-until-field"><span>Hạn nhãn (giờ Việt Nam)</span><input type="datetime-local" value={Object.prototype.hasOwnProperty.call(draft, "newUntil") ? String(draft.newUntil ?? "") : toHcmDateTimeLocal(product.newUntil)} onChange={(event) => update("newUntil", event.target.value)}/><small>Để trống để giữ nhãn không thời hạn. Bấm “Lưu thay đổi” để áp dụng.</small></label></div>}
       </section>}
 
       {activeTab === "variants" && canEditPrice && <section className="product-tab-content">
@@ -638,6 +713,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       <div className="workspace-loading">{detailsLoading ? "Đang tải chi tiết sản phẩm…" : detailsError || "Đang chuẩn bị dữ liệu sản phẩm…"}</div>
       {!detailsLoading && detailsError && <button type="button" className="button button-quiet" onClick={() => setDetailsRetry((value) => value + 1)}>Thử tải lại</button>}
     </aside>)}
+    {stoneGroupWorkspaceOpen && canManageNewArrivals && <NewArrivalsAdminWorkspace request={request} categories={categoryRecords} materials={materials} canReadCatalog={isAdmin || permissions.includes("catalog.read") || canFullCatalog} canWriteCatalog={canFullCatalog} onClose={() => setStoneGroupWorkspaceOpen(false)} onNotify={onNotify} onGroupsLoaded={setStoneGroups}/>}
   </div>;
 }
 

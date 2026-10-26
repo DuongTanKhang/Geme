@@ -467,6 +467,7 @@ model Category {
   seoTitle         String?             @map("seo_title") @db.VarChar(180)
   seoDescription   String?             @map("seo_description") @db.VarChar(320)
   isHot            Boolean             @default(false) @map("is_hot")
+  jewelryStoneGroupId String?             @map("jewelry_stone_group_id") @db.Uuid
   createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
   parent           Category?           @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
@@ -474,6 +475,7 @@ model Category {
   products         Product[]           @relation("ProductCategory")
   gemstoneProducts Product[]           @relation("GemstoneType")
   promotionTargets PromotionTarget[]
+  jewelryStoneGroup   JewelryStoneGroup?  @relation(fields: [jewelryStoneGroupId], references: [id], onDelete: SetNull)
 
   @@index([parentId, level, status, sortOrder])
   @@index([kind, usage, status])
@@ -489,13 +491,32 @@ model MaterialOption {
   active    Boolean             @default(true)
   imageUrl  String?             @map("image_url") @db.Text
   sortOrder Int                 @default(0) @map("sort_order")
+  jewelryStoneGroupId String?             @map("jewelry_stone_group_id") @db.Uuid
   createdAt DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
   products  Product[]
+  jewelryStoneGroup   JewelryStoneGroup?  @relation(fields: [jewelryStoneGroupId], references: [id], onDelete: SetNull)
 
   @@unique([scope, slug])
   @@index([scope, kind, active, sortOrder])
   @@map("material_options")
+}
+
+model JewelryStoneGroup {
+  id          String           @id @default(uuid()) @db.Uuid
+  slug        String           @unique @db.VarChar(120)
+  name        String           @db.VarChar(120)
+  active      Boolean          @default(true)
+  sortOrder   Int              @default(0) @map("sort_order")
+  pinnedOrder Int?             @map("pinned_order")
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  products    Product[]
+  categories  Category[]
+  materials   MaterialOption[]
+
+  @@index([active, pinnedOrder, sortOrder])
+  @@map("jewelry_stone_groups")
 }
 
 model Product {
@@ -518,6 +539,10 @@ model Product {
   heightCm              Decimal?               @map("height_cm") @db.Decimal(8, 2)
   status                ProductStatus          @default(DRAFT)
   isNew                 Boolean                @default(false) @map("is_new")
+  newUntil                     DateTime?                 @map("new_until") @db.Timestamptz(3)
+  firstPublishedAt             DateTime?                 @map("first_published_at") @db.Timestamptz(3)
+  publicationHistoryKnown      Boolean                   @default(false) @map("publication_history_known")
+  jewelryStoneGroupId          String?                   @map("jewelry_stone_group_id") @db.Uuid
   isFeatured            Boolean                @default(false) @map("is_featured")
     isPremiumGemstone      Boolean                @default(false) @map("is_premium_gemstone")
   price                 Decimal?               @db.Decimal(14, 0)
@@ -551,6 +576,7 @@ model Product {
   category              Category?              @relation("ProductCategory", fields: [categoryId], references: [id], onDelete: SetNull)
   gemstoneType          Category?              @relation("GemstoneType", fields: [gemstoneTypeId], references: [id], onDelete: SetNull)
   materialOption        MaterialOption?        @relation(fields: [materialOptionId], references: [id], onDelete: SetNull)
+  jewelryStoneGroup            JewelryStoneGroup?        @relation(fields: [jewelryStoneGroupId], references: [id], onDelete: SetNull)
   images                ProductImage[]
   pos365ImageLinks       Pos365ProductImageSync[]
   aiImageItems          AiImageItem[]
@@ -572,6 +598,9 @@ model Product {
 
   @@index([kind, status, createdAt(sort: Desc)])
   @@index([status, isNew, createdAt(sort: Desc)])
+  @@index([kind, status, firstPublishedAt(sort: Desc), id])
+  @@index([kind, status, isNew, newUntil, firstPublishedAt(sort: Desc)])
+  @@index([jewelryStoneGroupId, status, firstPublishedAt(sort: Desc)])
   @@index([categoryId, status, createdAt(sort: Desc)])
   @@index([gemstoneTypeId, status, createdAt(sort: Desc)])
   @@index([materialOptionId, status, createdAt(sort: Desc)])

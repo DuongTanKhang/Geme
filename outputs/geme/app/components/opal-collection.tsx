@@ -19,6 +19,8 @@ type CollectionProps = {
   bestSellerOrder?: string[];
 };
 
+const PRODUCT_BATCH_SIZE = 40;
+
 const priceOptions = [
   ["under2", "Dưới 2.000.000 ₫"],
   ["2to5", "2.000.000 – 5.000.000 ₫"],
@@ -43,14 +45,6 @@ function compareNewestByGemstone(a: StoreProduct, b: StoreProduct) {
   return dateB - dateA || a.id.localeCompare(b.id);
 }
 
-function compareNewestFirst(a: StoreProduct, b: StoreProduct) {
-  const newProductOrder = Number(b.isNew) - Number(a.isNew);
-  if (newProductOrder) return newProductOrder;
-  const dateA = new Date(a.createdAt || 0).getTime() || 0;
-  const dateB = new Date(b.createdAt || 0).getTime() || 0;
-  return dateB - dateA || a.id.localeCompare(b.id);
-}
-
 function FilterChevron() {
   return <svg className="catalog-facet-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.25" /></svg>;
 }
@@ -65,6 +59,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
   const [draftSizes, setDraftSizes] = useState<string[]>([]);
   const [draftPriceRange, setDraftPriceRange] = useState("");
   const [sort, setSort] = useState(initialSort);
+  const [visibleCount, setVisibleCount] = useState(PRODUCT_BATCH_SIZE);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const filterPanelRef = useRef<HTMLDivElement>(null);
@@ -168,8 +163,13 @@ export function OpalCollection({ products, categories, materials, connected, pro
       const matchesPrice = !priceRange || (!product.isPremiumGemstone && (priceRange === "under2" ? product.price < 2_000_000 : priceRange === "2to5" ? product.price >= 2_000_000 && product.price <= 5_000_000 : priceRange === "5to10" ? product.price > 5_000_000 && product.price <= 10_000_000 : product.price > 10_000_000));
       return matchesType && matchesStone && matchesSize && matchesPrice;
     });
-    return filtered.sort((a, b) => sort === "price-asc" ? Number(a.isPremiumGemstone) - Number(b.isPremiumGemstone) || a.price - b.price : sort === "price-desc" ? Number(a.isPremiumGemstone) - Number(b.isPremiumGemstone) || b.price - a.price : sort === "best-selling" ? (bestSellerRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (bestSellerRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER) : selectedTypes.length ? compareNewestByGemstone(a, b) : compareNewestFirst(a, b));
+    return filtered.sort((a, b) => sort === "price-asc" ? Number(a.isPremiumGemstone) - Number(b.isPremiumGemstone) || a.price - b.price : sort === "price-desc" ? Number(a.isPremiumGemstone) - Number(b.isPremiumGemstone) || b.price - a.price : sort === "best-selling" ? (bestSellerRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (bestSellerRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER) : compareNewestByGemstone(a, b));
   }, [products, categoryDescendants, selectedTypes, selectedStones, selectedSizes, priceRange, sort, bestSellerRanks]);
+  const visibleProducts = useMemo(() => filteredProducts.slice(0, visibleCount), [filteredProducts, visibleCount]);
+
+  useEffect(() => {
+    setVisibleCount(PRODUCT_BATCH_SIZE);
+  }, [selectedTypes, selectedStones, selectedSizes, priceRange, sort]);
 
   const toggle = (value: string, current: string[], update: (next: string[]) => void) => update(current.includes(value) ? current.filter((item) => item !== value) : [...current, value]);
   const openFilters = () => {
@@ -184,11 +184,13 @@ export function OpalCollection({ products, categories, materials, connected, pro
     setSelectedStones(draftStones);
     setSelectedSizes(draftSizes);
     setPriceRange(draftPriceRange);
+    setVisibleCount(PRODUCT_BATCH_SIZE);
     setFiltersOpen(false);
   };
   const reset = () => {
     setSelectedTypes([]); setSelectedStones([]); setSelectedSizes([]); setPriceRange("");
     setDraftTypes([]); setDraftStones([]); setDraftSizes([]); setDraftPriceRange("");
+    setVisibleCount(PRODUCT_BATCH_SIZE);
   };
   const activeFilterCount = selectedTypes.length + selectedStones.length + selectedSizes.length + Number(Boolean(priceRange));
   const selectedCategoryName = selectedTypes.length === 1 ? categories.find((category) => category.id === selectedTypes[0])?.name || initialCategory : undefined;
@@ -202,17 +204,17 @@ export function OpalCollection({ products, categories, materials, connected, pro
         <p role="status" aria-live="polite">{connected ? `${filteredProducts.length} sản phẩm` : "Không thể tải dữ liệu sản phẩm"}</p>
       </div>
       <div className="new-arrivals-tabs" role="group" aria-label="Lọc theo loại trang sức">
-        <button type="button" className={!selectedTypes.length ? "is-selected" : ""} aria-pressed={!selectedTypes.length} onClick={() => { setSelectedTypes([]); setDraftTypes([]); }}>Tất cả</button>
+        <button type="button" className={!selectedTypes.length ? "is-selected" : ""} aria-pressed={!selectedTypes.length} onClick={() => { setSelectedTypes([]); setDraftTypes([]); setVisibleCount(PRODUCT_BATCH_SIZE); }}>Tất cả</button>
         {tabs.map(({ category }) => {
           const selected = selectedTypes.includes(category.id) || selectedTypes.some((id) => categoryDescendants.get(category.id)?.has(id));
-          return <button type="button" key={category.id} className={selected ? "is-selected" : ""} aria-pressed={selected} onClick={() => { setSelectedTypes([category.id]); setDraftTypes([category.id]); }}>{category.name}</button>;
+          return <button type="button" key={category.id} className={selected ? "is-selected" : ""} aria-pressed={selected} onClick={() => { setSelectedTypes([category.id]); setDraftTypes([category.id]); setVisibleCount(PRODUCT_BATCH_SIZE); }}>{category.name}</button>;
         })}
       </div>
       <div className="new-arrivals-actions">
         <button type="button" className="new-arrivals-filter-toggle" aria-expanded={filtersOpen} aria-controls="catalog-filter-panel" onClick={openFilters}>
           Bộ lọc{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}<span aria-hidden="true">{filtersOpen ? "−" : "+"}</span>
         </button>
-        <label className="new-arrivals-sort"><span>Sắp xếp</span><select value={sort} onChange={(event) => setSort(event.target.value)}>
+        <label className="new-arrivals-sort"><span>Sắp xếp</span><select value={sort} onChange={(event) => { setSort(event.target.value); setVisibleCount(PRODUCT_BATCH_SIZE); }}>
           <option value="newest">Mới nhất ↓</option><option value="best-selling">Bán chạy</option><option value="price-asc">Giá tăng dần</option><option value="price-desc">Giá giảm dần</option>
         </select></label>
       </div>
@@ -249,7 +251,10 @@ export function OpalCollection({ products, categories, materials, connected, pro
     <div className="catalog-results">
       {filteredProducts.length === 0 && products.length > 0 && activeFilterCount > 0
         ? <CatalogEditorialGrid products={[]} promotions={promotions} connected={connected} editorialPromos={editorialPromos} activeFilters catalogProductCount={products.length} />
-        : <CatalogEditorialGrid products={filteredProducts} promotions={promotions} connected={connected} editorialPromos={editorialPromos} activeFilters={activeFilterCount > 0} catalogProductCount={products.length} />}
+        : <CatalogEditorialGrid products={visibleProducts} promotions={promotions} connected={connected} editorialPromos={editorialPromos} activeFilters={activeFilterCount > 0} catalogProductCount={products.length} />}
     </div>
+    {visibleProducts.length < filteredProducts.length && <button type="button" className="new-arrivals-load-more" onClick={() => setVisibleCount((count) => Math.min(count + PRODUCT_BATCH_SIZE, filteredProducts.length))}>
+      Xem thêm sản phẩm ({visibleProducts.length}/{filteredProducts.length}) <span aria-hidden="true">→</span>
+    </button>}
   </section>;
 }

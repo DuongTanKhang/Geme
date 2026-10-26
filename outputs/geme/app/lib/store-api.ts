@@ -75,6 +75,11 @@ export type StoreProduct = {
   heightCm?: number | null;
   status: "DRAFT" | "ACTIVE" | "HIDDEN";
   isNew: boolean;
+  newLabelActive?: boolean;
+  newUntil?: string | null;
+  firstPublishedAt?: string | null;
+  jewelryStoneGroupId?: string | null;
+  jewelryStoneGroup?: StoreJewelryStoneGroup | null;
   isFeatured: boolean;
   isPremiumGemstone: boolean;
   price: number;
@@ -88,6 +93,48 @@ export type StoreProduct = {
   reviews?: StoreReview[];
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type StoreJewelryStoneGroup = {
+  id: string;
+  slug: string;
+  name: string;
+  pinnedOrder?: number | null;
+  sortOrder?: number;
+};
+
+export type StoreNewArrivalsGroup = StoreJewelryStoneGroup & {
+  latestPublishedAt: string | null;
+  total: number;
+  products: StoreProduct[];
+  hasMore: boolean;
+};
+
+export type StoreNewArrivalsResponse = {
+  connected: boolean;
+  mode: "all" | "tagged" | "published";
+  recentDays: number;
+  facets?: StoreNewArrivalsFacets;
+  totalProducts: number;
+  groups: StoreNewArrivalsGroup[];
+  pageInfo?: { groupPage: number; groupPageSize: number; totalGroups: number; hasNextGroup: boolean; nextGroupPage: number | null };
+};
+
+export type StoreNewArrivalsGroupProductsResponse = {
+  connected: boolean;
+  mode: "all" | "tagged" | "published";
+  recentDays: number;
+  facets?: StoreNewArrivalsFacets;
+  group: StoreJewelryStoneGroup;
+  total: number;
+  products: StoreProduct[];
+  pageInfo: { page: number; pageSize: number; hasNextPage: boolean; nextPage: number | null };
+};
+
+export type StoreNewArrivalsFacets = {
+  categories: Array<{ id: string; count: number }>;
+  stones: Array<{ id: string | null; slug: string; name: string; count: number }>;
+  sizes: Array<{ size: string; count: number }>;
 };
 
 export type StorePromotion = {
@@ -352,6 +399,11 @@ function asStoreProduct(value: any): StoreProduct {
     heightCm: value.heightCm == null ? null : Number(value.heightCm),
     status: value.status,
     isNew: Boolean(value.isNew),
+    newLabelActive: typeof value.newLabelActive === "boolean" ? value.newLabelActive : undefined,
+    newUntil: value.newUntil ?? null,
+    firstPublishedAt: value.firstPublishedAt ?? null,
+    jewelryStoneGroupId: value.jewelryStoneGroupId ?? null,
+    jewelryStoneGroup: value.jewelryStoneGroup ? { id: String(value.jewelryStoneGroup.id), slug: String(value.jewelryStoneGroup.slug), name: String(value.jewelryStoneGroup.name), pinnedOrder: value.jewelryStoneGroup.pinnedOrder ?? null, sortOrder: Number(value.jewelryStoneGroup.sortOrder) || 0 } : null,
     isFeatured: Boolean(value.isFeatured),
     isPremiumGemstone,
     price: isPremiumGemstone ? 0 : variants.length && variantPrices.length ? Math.min(...variantPrices) : Number(value.price) || 0,
@@ -396,6 +448,67 @@ export async function getStoreProducts(options: {
   if (options.search?.trim()) params.set("search", options.search.trim());
   const result = await readApi<any[]>(`/products?${params.toString()}`, { cacheTag: STOREFRONT_CACHE_TAG });
   return { products: (result.data ?? []).map(asStoreProduct), connected: result.connected };
+}
+
+type StoreNewArrivalsQuery = {
+  mode?: "all" | "tagged" | "published";
+  categoryIds?: string[];
+  stoneGroupId?: string;
+  stoneGroupIds?: string[];
+  sizes?: string[];
+  search?: string;
+  minPrice?: number | null;
+  maxPrice?: number | null;
+  sort?: "recommended" | "newest" | "best_selling" | "price_asc" | "price_desc";
+  page?: number;
+  groupPage?: number;
+};
+
+function newArrivalsQuery(options: StoreNewArrivalsQuery) {
+  const params = new URLSearchParams();
+  if (options.mode) params.set("mode", options.mode);
+  for (const categoryId of options.categoryIds || []) params.append("categoryId", categoryId);
+  for (const id of options.stoneGroupIds || []) params.append("stoneGroupId", id);
+  if (options.stoneGroupId) params.set("stoneGroupId", options.stoneGroupId);
+  for (const size of options.sizes || []) params.append("size", size);
+  if (options.search?.trim()) params.set("search", options.search.trim());
+  if (options.minPrice != null) params.set("minPrice", String(options.minPrice));
+  if (options.maxPrice != null) params.set("maxPrice", String(options.maxPrice));
+  if (options.sort) params.set("sort", options.sort);
+  if (options.page && options.page > 1) params.set("page", String(Math.floor(options.page)));
+  if (options.groupPage && options.groupPage > 1) params.set("groupPage", String(Math.floor(options.groupPage)));
+  return params.toString();
+}
+
+export async function getStoreNewArrivals(options: StoreNewArrivalsQuery = {}) {
+  const query = newArrivalsQuery(options);
+  const result = await readApi<any>(`/catalog/new-arrivals${query ? `?${query}` : ""}`, { revalidateSeconds: 5, cacheTag: STOREFRONT_CACHE_TAG });
+  return {
+    connected: result.connected,
+    status: result.status,
+    data: result.data ? {
+      ...result.data,
+      groups: Array.isArray(result.data.groups) ? result.data.groups.map((group: any) => ({ ...group, products: Array.isArray(group.products) ? group.products.map(asStoreProduct) : [] })) : [],
+    } as Omit<StoreNewArrivalsResponse, "connected"> : null,
+  };
+}
+
+export async function getStoreNewArrivalsGroup(slug: string, options: StoreNewArrivalsQuery = {}) {
+  const query = newArrivalsQuery(options);
+  const result = await readApi<any>(`/catalog/new-arrivals/groups/${encodeURIComponent(slug)}/products${query ? `?${query}` : ""}`, { revalidateSeconds: 5, cacheTag: STOREFRONT_CACHE_TAG });
+  return {
+    connected: result.connected,
+    status: result.status,
+    data: result.data ? {
+      ...result.data,
+      products: Array.isArray(result.data.products) ? result.data.products.map(asStoreProduct) : [],
+    } as Omit<StoreNewArrivalsGroupProductsResponse, "connected"> : null,
+  };
+}
+
+export async function getStoreJewelryStoneGroups() {
+  const result = await readApi<StoreJewelryStoneGroup[]>("/catalog/jewelry-stone-groups", { revalidateSeconds: 30, cacheTag: STOREFRONT_CACHE_TAG });
+  return { groups: result.data ?? [], connected: result.connected };
 }
 
 export async function getStoreSitemapProducts(limit = 500, offset = 0) {

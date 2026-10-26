@@ -94,5 +94,3 @@ test("a video alone does not satisfy the published photo requirement", () => {
     /chất lượng: 2A/,
   );
 });
-
-\n

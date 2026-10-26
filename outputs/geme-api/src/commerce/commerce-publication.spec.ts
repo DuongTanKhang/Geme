@@ -12,6 +12,9 @@ function publicationFixture(overrides: Record<string, unknown> = {}) {
     kind: "JEWELRY",
     status: "ACTIVE",
     isNew: false,
+    newUntil: null,
+    firstPublishedAt: null,
+    publicationHistoryKnown: true,
     category: { slug: "vong-kieng" },
     price: 2_000_000,
     stock: 5,
@@ -33,6 +36,7 @@ function publicationFixture(overrides: Record<string, unknown> = {}) {
   const updatePayloads: Record<string, unknown>[] = [];
   const auditRows: Record<string, unknown>[] = [];
   const tx = {
+    $queryRaw: async () => [],
     product: {
       findUnique: async () => structuredClone(product),
       update: async ({ data }: { data: Record<string, unknown> }) => {
@@ -64,12 +68,22 @@ test("hiding a legacy bangle changes only publication status and keeps its catal
   assert.equal(fixture.product.sku, before.sku);
   assert.deepEqual(fixture.product.images, before.images);
   assert.deepEqual(fixture.product.variants, before.variants);
-  assert.deepEqual(fixture.auditRows[0].before, { status: "ACTIVE" });
+  assert.deepEqual(fixture.auditRows[0].before, { status: "ACTIVE", firstPublishedAt: null });
 });
 
 test("publishing a complete bangle succeeds, while invalid legacy variants report SKU and missing fields", async () => {
   const complete = publicationFixture({ status: "HIDDEN" });
-  assert.equal((await complete.service.updateProductPublication("product-1", "ACTIVE", { id: "admin-1" }, "Đủ hồ sơ để đăng bán")).status, "ACTIVE");
+  const published = await complete.service.updateProductPublication("product-1", "ACTIVE", { id: "admin-1" }, "Đủ hồ sơ để đăng bán");
+  assert.equal(published.status, "ACTIVE");
+  assert.ok(complete.product.firstPublishedAt instanceof Date);
+  const firstPublishedAt = complete.product.firstPublishedAt;
+  await complete.service.updateProductPublication("product-1", "HIDDEN", { id: "admin-1" });
+  await complete.service.updateProductPublication("product-1", "ACTIVE", { id: "admin-1" });
+  assert.equal((complete.product.firstPublishedAt as Date).getTime(), firstPublishedAt.getTime(), "a later republication retains the first publication date");
+
+  const legacy = publicationFixture({ status: "HIDDEN", publicationHistoryKnown: false, firstPublishedAt: null });
+  await legacy.service.updateProductPublication("product-1", "ACTIVE", { id: "admin-1" });
+  assert.equal(legacy.product.firstPublishedAt, null, "unknown legacy history must not be inferred from a status transition");
 
   const incomplete = publicationFixture({
     status: "HIDDEN",
@@ -96,6 +110,14 @@ test("publishing still supports gemstone products and rejects invalid state valu
   assert.equal((await gemstone.service.updateProductPublication("gem-1", "HIDDEN", { id: "admin-1" })).status, "HIDDEN");
 });
 
+test("repeating the current publication status does not create a false publication audit event", async () => {
+  const fixture = publicationFixture({ status: "ACTIVE", firstPublishedAt: null, publicationHistoryKnown: false });
+  await fixture.service.updateProductPublication("product-1", "ACTIVE", { id: "admin-1" });
+  assert.deepEqual(fixture.updatePayloads, []);
+  assert.deepEqual(fixture.auditRows, []);
+  assert.equal(fixture.product.firstPublishedAt, null);
+});
+
 function productEditFixture(status: "ACTIVE" | "HIDDEN") {
   const product: Record<string, any> = {
     id: "product-edit-1", sku: "NSBR01", name: "Nhẫn trước khi sửa", slug: "nhan-truoc-khi-sua",
@@ -103,10 +125,11 @@ function productEditFixture(status: "ACTIVE" | "HIDDEN") {
     category: { pricingMode: "FIXED" }, variants: [], images: [],
   };
   const updatePayloads: Record<string, any>[] = [];
+  const auditRows: Record<string, any>[] = [];
   const txProduct = {
     findUnique: async ({ select }: { select?: Record<string, unknown> }) => {
       if (select?.status && select?.stock && select?.variants) return { status: product.status, stock: product.stock, variants: [] };
-      return { sku: product.sku, name: product.name, kind: product.kind, categoryId: product.categoryId, price: product.price, category: product.category, variants: [] };
+      return { sku: product.sku, name: product.name, kind: product.kind, categoryId: product.categoryId, status: product.status, publicationHistoryKnown: true, firstPublishedAt: null, isPremiumGemstone: false, price: product.price, originalPrice: null, category: product.category, variants: [] };
     },
     update: async ({ data }: { data: Record<string, any> }) => {
       updatePayloads.push(data);
@@ -115,7 +138,7 @@ function productEditFixture(status: "ACTIVE" | "HIDDEN") {
     },
     findUniqueOrThrow: async () => product,
   };
-  const tx = { product: txProduct, productPriceVariant: { findMany: async () => [] } };
+  const tx = { $queryRaw: async () => [], product: txProduct, productPriceVariant: { findMany: async () => [] }, auditLog: { create: async ({ data }: { data: Record<string, unknown> }) => { auditRows.push(data); return data; } } };
   const prisma = {
     product: {
       findUnique: async () => ({ ...product, images: [], variants: product.variants || [] }),
@@ -124,7 +147,7 @@ function productEditFixture(status: "ACTIVE" | "HIDDEN") {
     category: { findUnique: async () => ({ slug: "nhan" }) },
     $transaction: async (work: (value: typeof tx) => unknown) => work(tx),
   };
-  return { product, updatePayloads, service: new CommerceService(prisma as any, { isSyncEnabled: () => false } as any, {} as any) };
+  return { product, updatePayloads, auditRows, service: new CommerceService(prisma as any, { isSyncEnabled: () => false } as any, {} as any) };
 }
 
 test("editing product content without a status field preserves its current publication state", async () => {
@@ -138,6 +161,8 @@ test("editing product content without a status field preserves its current publi
     assert.equal(saved.status, initialStatus);
     assert.equal(fixture.product.status, initialStatus);
     assert.equal(Object.hasOwn(fixture.updatePayloads[0], "status"), false);
+    assert.equal(Object.hasOwn(fixture.updatePayloads[0], "firstPublishedAt"), false);
+    assert.deepEqual(fixture.auditRows, []);
     assert.equal(saved.name, "Nhẫn sau khi sửa");
   }
 });
@@ -147,7 +172,7 @@ test("updating the new-product badge only changes isNew and does not validate or
     isNew: false,
     variants: [{ id: "legacy-variant", sku: "LEGACY-R", shape: null, quality: "Standard", beadSize: null, price: 0, stock: 0, imageUrls: [], videoUrl: null }],
   });
-  const saved = await fixture.service.updateProductNewLabel("product-1", true, { id: "admin-1", correlationId: "request-1" });
+  const saved = await fixture.service.updateProductNewLabel("product-1", true, undefined, { id: "admin-1", correlationId: "request-1" });
 
   assert.equal(saved.isNew, true);
   assert.deepEqual(fixture.updatePayloads, [{ isNew: true }]);
@@ -160,8 +185,8 @@ test("updating the new-product badge only changes isNew and does not validate or
     action: "PRODUCT_NEW_LABEL_UPDATED",
     entityType: "PRODUCT",
     entityId: "product-1",
-    before: { isNew: false },
-    after: { isNew: true },
+    before: { isNew: false, newUntil: null },
+    after: { isNew: true, newUntil: null },
   });
 });
 

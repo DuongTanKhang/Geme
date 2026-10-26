@@ -54,7 +54,6 @@ services:
       - ./outputs/geme-admin/proxy.ts:/app/proxy.ts
       - ./outputs/geme-admin/next.config.ts:/app/next.config.ts
       - ./outputs/geme-admin/tsconfig.json:/app/tsconfig.json
-      - ./outputs/geme-admin/next-env.d.ts:/app/next-env.d.ts
       - admin_next_v2:/app/.next
     depends_on:
       geme-api:

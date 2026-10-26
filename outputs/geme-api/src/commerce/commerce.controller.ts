@@ -59,9 +59,9 @@ export class CommerceController {
   @Patch("products/:id/unpublish") @admin("catalog.read") async unpublishProduct(@Req() request: AdminRequest, @Param("id") id: string, @Body() body: Record<string, any> = {}) { await this.assertProductMutation(request.adminIdentity, body, "publish"); return this.commerce.updateProductPublication(id, "HIDDEN", request.adminIdentity, body.reason); }
   @Patch("products/:id/publication") @admin("catalog.read") async updateProductPublication(@Req() request: AdminRequest, @Param("id") id: string, @Body() body: Record<string, any>) { await this.assertProductMutation(request.adminIdentity, body, "publish"); return this.commerce.updateProductPublication(id, body.status, request.adminIdentity, body.reason); }
   @Patch("products/:id/new-label") @admin("catalog.publish") async updateProductNewLabel(@Req() request: AdminRequest, @Param("id") id: string, @Body() body: Record<string, any>) {
-    if (!body || Object.keys(body).length !== 1 || typeof body.isNew !== "boolean") throw new BadRequestException("Chỉ gửi trường isNew dạng true/false để cập nhật nhãn sản phẩm mới.");
+    if (!body || typeof body.isNew !== "boolean" || Object.keys(body).some((key) => !["isNew", "newUntil"].includes(key))) throw new BadRequestException("Chỉ gửi isNew dạng true/false và tùy chọn newUntil (ISO-8601 hoặc null) để cập nhật nhãn sản phẩm mới.");
     await this.adminPermissions.assertPermissions(request.adminIdentity, ["catalog.publish"]);
-    return this.commerce.updateProductNewLabel(id, body.isNew, request.adminIdentity);
+    return this.commerce.updateProductNewLabel(id, body.isNew, body.newUntil, request.adminIdentity);
   }
 
   private async assertProductMutation(identity: AdminIdentity, body: Record<string, any>, operation: "write" | "create" | "delete" | "publish" = "write"): Promise<boolean> {

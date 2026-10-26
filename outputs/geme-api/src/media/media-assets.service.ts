@@ -18,7 +18,7 @@ type MediaReferenceShape = { id: string; isPrivate: boolean; storageProvider: st
 
 export async function lockMediaObject(tx: any, bucketName: string, objectKey: string, isPrivate: boolean) {
   const lockKey = `geme-media:${bucketName}:${isPrivate ? "private" : "public"}:${objectKey}`;
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))::text AS locked`;
 }
 
 @Injectable()

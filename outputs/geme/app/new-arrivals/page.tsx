@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import { NewArrivals, type NewArrivalsFilters } from "../components/new-arrivals";
+import { NewArrivalsGrouped, type NewArrivalsFilters } from "../components/new-arrivals-grouped";
 import { SiteFooter } from "../components/site-footer";
 import { SiteHeader } from "../components/site-header";
-import { getStoreBanner, getStoreFacets, getStoreNewArrivalsMedia, getStoreProducts, getStorePromotions, getStoreSiteSettings } from "../lib/store-api";
+import { getStoreBanner, getStoreFacets, getStoreJewelryStoneGroups, getStoreNewArrivals, getStoreNewArrivalsGroup, getStorePromotions, getStoreSiteSettings } from "../lib/store-api";
 
 type SearchValue = string | string[] | undefined;
 type SearchParams = Record<string, SearchValue>;
@@ -11,8 +11,8 @@ export async function generateMetadata({ searchParams }: { searchParams: Promise
   const query = await searchParams;
   const hasFilters = Object.values(query).some((value) => values(value).length > 0);
   return {
-    title: "Thiết kế mới",
-    description: "Khám phá những thiết kế trang sức và đá quý mới nhất từ GEME.",
+    title: "Mới tại GEME",
+    description: "Khám phá trang sức GEME đang mang nhãn Mới, được tuyển chọn theo từng nhóm đá.",
     alternates: { canonical: "/new-arrivals" },
     ...(hasFilters ? { robots: { index: false, follow: true } } : {}),
   };
@@ -22,64 +22,62 @@ function values(value: SearchValue) {
   return (Array.isArray(value) ? value : value ? [value] : []).map((item) => item.trim()).filter(Boolean);
 }
 
-function descendants(categoryIds: string[], categories: Awaited<ReturnType<typeof getStoreFacets>>["categories"]) {
-  const all = new Set(categoryIds);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const category of categories) {
-      if (category.parentId && all.has(category.parentId) && !all.has(category.id)) {
-        all.add(category.id);
-        changed = true;
-      }
-    }
-  }
-  return [...all];
-}
-
 export default async function NewArrivalsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
-  const [query, facets, promotions, site] = await Promise.all([
+  const [query, facets, promotions, site, stoneGroups] = await Promise.all([
     searchParams,
     getStoreFacets(),
     getStorePromotions(),
     getStoreSiteSettings(),
+    getStoreJewelryStoneGroups(),
   ]);
-
-  const categoryIds = values(query.categoryId).filter((id) => facets.categories.some((category) => category.id === id && category.status === "ACTIVE"));
-  const stoneKeys = values(query.stone);
-  const stoneQueries: Array<{ materialOptionId?: string; gemstoneTypeId?: string }> = [];
-  for (const key of stoneKeys) {
-    const [prefix, id] = key.split(":", 2);
-    if (!id) continue;
-    if (prefix === "m" && facets.materials.some((item) => item.id === id && item.active && item.kind === "STONE")) stoneQueries.push({ materialOptionId: id });
-    if (prefix === "g" && facets.categories.some((item) => item.id === id && item.status === "ACTIVE" && item.usage === "GEMSTONE_TYPE")) stoneQueries.push({ gemstoneTypeId: id });
-  }
-  const categoryQueries = descendants(categoryIds, facets.categories);
-  const categoryBranches: Array<string | undefined> = categoryQueries.length ? categoryQueries : [undefined];
-  const stoneBranches: Array<{ materialOptionId?: string; gemstoneTypeId?: string } | undefined> = stoneQueries.length ? stoneQueries : [undefined];
-  const search = (Array.isArray(query.search) ? query.search[0] : query.search || "").trim();
-  const requests = categoryBranches.flatMap((categoryId) => stoneBranches.map((stone) => ({ categoryId, ...stone })));
-  const productResults = await Promise.all((requests.length ? requests : [{}]).map((filters) => getStoreProducts({
-    newOnly: true,
-    limit: 500,
-    search,
-    ...filters,
-  })));
-  const connected = productResults.every((result) => result.connected);
-  if (!connected || !facets.catalogConnected) throw new Error("Không thể tải danh sách thiết kế mới từ GEME API.");
-  const mergedProducts = new Map<string, (typeof productResults)[number]["products"][number]>();
-  for (const result of productResults) for (const product of result.products) if (!mergedProducts.has(product.id)) mergedProducts.set(product.id, product);
-  // Preserve the API's ordering within each branch while deduplicating products
-  // that match more than one selected category/material branch.
-  const products = productResults.length === 1 ? productResults[0].products : [...mergedProducts.values()];
-
-  const filters: NewArrivalsFilters = {
-    categoryIds,
-    stoneKeys: stoneQueries.length ? stoneKeys : [],
-    priceRange: "",
-    sort: "newest",
-    search,
+  const one = (value: SearchValue) => values(value)[0] || "";
+  const sortValue = one(query.sort);
+  const mode: NewArrivalsFilters["mode"] = "tagged";
+  const allowedSorts = new Set(["recommended", "newest", "best_selling", "price_asc", "price_desc"]);
+  const sort: NewArrivalsFilters["sort"] = allowedSorts.has(sortValue) ? sortValue as NewArrivalsFilters["sort"] : "recommended";
+  const categoryIds = values(query.categoryId).filter((id) => facets.categories.some((category) => category.id === id && category.status === "ACTIVE" && category.kind === "JEWELRY"));
+  const requestedStoneGroupIds = values(query.stoneGroupId);
+  const stoneGroupIds = [...new Set(requestedStoneGroupIds.filter((id) => id === "other" || stoneGroups.groups.some((group) => group.id === id)))];
+  const sizes = [...new Set(values(query.size).filter((size) => size.length <= 24))];
+  const parsePrice = (value: SearchValue) => {
+    const raw = one(value);
+    if (!raw) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
   };
+  let minPrice = parsePrice(query.minPrice);
+  let maxPrice = parsePrice(query.maxPrice);
+  if (minPrice != null && maxPrice != null && minPrice > maxPrice) { minPrice = null; maxPrice = null; }
+  const search = one(query.search).trim().slice(0, 120);
+  const groupSlug = one(query.group);
+  const page = Math.max(1, Math.min(100_000, Number.parseInt(one(query.page), 10) || 1));
+  const groupPage = Math.max(1, Math.min(100_000, Number.parseInt(one(query.groupPage), 10) || 1));
+  const filters: NewArrivalsFilters = {
+    mode,
+    categoryIds,
+    stoneGroupIds,
+    sizes,
+    minPrice,
+    maxPrice,
+    sort,
+    search,
+    page,
+    groupPage,
+  };
+  const apiFilters = { mode, categoryIds, stoneGroupIds, sizes, minPrice, maxPrice, sort, search, page, groupPage };
+  const [listResult, detailResult] = groupSlug
+    ? [null, await getStoreNewArrivalsGroup(groupSlug, apiFilters)]
+    : [await getStoreNewArrivals(apiFilters), null];
+  const catalogConnected = Boolean((listResult?.connected ?? detailResult?.connected) && facets.catalogConnected && stoneGroups.connected);
+  const connected = catalogConnected && promotions.connected;
+  const errorMessage = !catalogConnected
+    ? detailResult?.status === 404
+      ? "Nhóm đá này không còn hoạt động hoặc đường dẫn không hợp lệ. Hãy quay lại danh sách nhóm đá."
+      : "Chưa tải được danh sách trang sức. Lỗi kết nối không được xem là danh sách rỗng."
+    : "Chưa tải được dữ liệu khuyến mãi nên GEME đang tạm ẩn giá để tránh hiển thị sai giá sản phẩm.";
+  const groups = listResult?.data?.groups || [];
+  const selectedGroup = detailResult?.data || null;
+  const totalProducts = listResult?.data?.totalProducts ?? selectedGroup?.total ?? 0;
   const configuredHeroImage = getStoreBanner(site.settings, "New Arrivals - Hero", "");
   const fallbackHeroImage = "/assets/new-arrivals-hero.png";
   const heroImage = !configuredHeroImage || configuredHeroImage === "/assets/collection-jewelry-banner-1.png"
@@ -88,15 +86,19 @@ export default async function NewArrivalsPage({ searchParams }: { searchParams: 
 
   return <>
     <SiteHeader activePage="new-arrivals" />
-    <NewArrivals
-      products={products}
+    <NewArrivalsGrouped
+      groups={groups}
+      selectedGroup={selectedGroup}
       categories={facets.categories}
-      materials={facets.materials}
+      stoneGroups={stoneGroups.groups}
+      facets={listResult?.data?.facets ?? detailResult?.data?.facets}
       promotions={promotions.promotions}
-      media={getStoreNewArrivalsMedia(site.settings)}
-      connected={connected && facets.catalogConnected}
+      connected={connected}
+      errorMessage={errorMessage}
       heroImage={heroImage}
       filters={filters}
+      totalProducts={totalProducts}
+      groupPageInfo={listResult?.data?.pageInfo}
     />
     <SiteFooter variant="catalog" />
   </>;

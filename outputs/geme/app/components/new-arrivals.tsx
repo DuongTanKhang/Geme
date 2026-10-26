@@ -26,6 +26,20 @@ export type NewArrivalsFilters = {
 
 type StoneFilterOption = { value: string; label: string };
 
+function compareNewestByGemstone(a: StoreProduct, b: StoreProduct) {
+  const stoneA = (a.materialOption?.kind === "STONE" ? a.materialOption.name : a.gemstoneType?.name || "").trim();
+  const stoneB = (b.materialOption?.kind === "STONE" ? b.materialOption.name : b.gemstoneType?.name || "").trim();
+  if (!stoneA && stoneB) return 1;
+  if (stoneA && !stoneB) return -1;
+
+  const gemstoneOrder = stoneA.localeCompare(stoneB, "vi", { sensitivity: "base", numeric: true });
+  if (gemstoneOrder) return gemstoneOrder;
+
+  const dateA = new Date(a.createdAt || 0).getTime() || 0;
+  const dateB = new Date(b.createdAt || 0).getTime() || 0;
+  return dateB - dateA || a.id.localeCompare(b.id);
+}
+
 function isLocalOrPublicMediaUrl(value: string) {
   const url = value.trim();
   if (url.startsWith("/") && !url.startsWith("//")) return true;
@@ -192,7 +206,7 @@ export function NewArrivals({
 
   const activeFilterCount = filters.categoryIds.length + filters.stoneKeys.length + Number(Boolean(filters.priceRange)) + Number(Boolean(filters.search));
   const activeFilters = activeFilterCount > 0;
-  const uniqueProducts = useMemo(() => [...new Map(products.map((product) => [product.id, product] as const)).values()], [products]);
+  const uniqueProducts = useMemo(() => [...new Map(products.map((product) => [product.id, product] as const)).values()].sort(compareNewestByGemstone), [products]);
   const visibleProducts = uniqueProducts.slice(0, visibleCount);
   const featureProducts = activeFilters ? [] : visibleProducts.slice(0, 4);
   const nextRowProducts = activeFilters ? [] : visibleProducts.slice(4, 8);

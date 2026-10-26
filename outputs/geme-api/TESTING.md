@@ -9,7 +9,7 @@ pnpm test
 pnpm build
 ```
 
-PostgreSQL integration tests require a dedicated local database whose name includes
+PostgreSQL integration tests (including the New Arrivals query suite) require a dedicated local database whose name includes
 `test`, `integration`, or `ci`. The tests deliberately skip unless
 `RUN_POSTGRES_INTEGRATION_TESTS=1` and the database host is local. For example:
 

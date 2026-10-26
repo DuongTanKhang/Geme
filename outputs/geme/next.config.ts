@@ -36,6 +36,9 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Keep an isolated output directory available for production builds while
+  // the mounted local container is running `next dev` against `.next`.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   poweredByHeader: false,
   devIndicators: false,
   allowedDevOrigins: ["127.0.0.1", "localhost"],

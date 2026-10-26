@@ -131,5 +131,3 @@ export function assertBangleQualityImages(
     throw new BadRequestException(`Kiềng SKU ${productSku} chưa có ảnh cho chất lượng: ${missing.join(", ")}. Hãy thêm ít nhất một ảnh cho mỗi chất lượng trong Hồ sơ sản phẩm.`);
   }
 }
-
-\n

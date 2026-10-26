@@ -11,6 +11,7 @@ import { calculateCheckoutPrice, getCheckoutPromotionValue, loadActiveStorePromo
 import { canTransitionOrder } from "./order-state.js";
 import { getInventoryReservationExpiry } from "./reservation-expiry.js";
 import { assertBangleQualityImages, normalizeBangleQuality, synchronizeBangleVariantMedia } from "./bangle-variant-media.js";
+import { isNewLabelActive } from "./new-arrivals.rules.js";
 
 type Input = Record<string, any>;
 const inventoryReceiptDuplicateWindowMs = 5 * 60 * 1000;
@@ -154,10 +155,10 @@ const requiredJewelryCategories = [
 const requiredJewelryCategorySlugs = new Set<string>(requiredJewelryCategories.map((category) => category.slug));
 const isRequiredJewelryRoot = (category: { slug: string; kind: string; level: number }) => category.slug === "trang-suc" && category.kind === "JEWELRY" && category.level === 1;
 const isRequiredJewelryChild = (category: { slug: string; kind: string; level: number; parentId?: string | null }, rootId: string) => category.kind === "JEWELRY" && category.level === 2 && category.parentId === rootId && requiredJewelryCategorySlugs.has(category.slug);
-const includeProduct = { category: true, gemstoneType: true, materialOption: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { orderBy: { sortOrder: "asc" as const } } };
+const includeProduct = { category: true, gemstoneType: true, materialOption: true, jewelryStoneGroup: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { orderBy: { sortOrder: "asc" as const } } };
 const selectAdminProductSummary = {
   id: true, sku: true, name: true, kind: true, categoryId: true, gemstoneTypeId: true, materialOptionId: true,
-  status: true, isNew: true, isPremiumGemstone: true, price: true, originalPrice: true, stock: true,
+  jewelryStoneGroupId: true, status: true, isNew: true, newUntil: true, firstPublishedAt: true, publicationHistoryKnown: true, isPremiumGemstone: true, price: true, originalPrice: true, stock: true,
   pos365PriceSyncStatus: true, pos365PriceSyncError: true, pos365PriceSyncedAt: true,
   category: { select: { id: true, name: true, kind: true, level: true, parentId: true, pricingMode: true } },
   gemstoneType: { select: { id: true, name: true } },
@@ -184,10 +185,13 @@ const selectStorefrontListing = {
   categoryId: true,
   gemstoneTypeId: true,
   materialOptionId: true,
+  jewelryStoneGroupId: true,
   status: true,
   seoTitle: true,
   seoDescription: true,
   isNew: true,
+  newUntil: true,
+  firstPublishedAt: true,
   isFeatured: true,
   isPremiumGemstone: true,
   price: true,
@@ -203,6 +207,7 @@ const selectStorefrontListing = {
   category: { select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true, status: true, sortOrder: true, pricingMode: true } },
   gemstoneType: { select: { id: true, name: true, slug: true } },
   materialOption: { select: { id: true, name: true, slug: true, scope: true, kind: true, active: true, sortOrder: true } },
+  jewelryStoneGroup: { select: { id: true, name: true, slug: true, active: true, sortOrder: true, pinnedOrder: true } },
   images: { orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }], take: 2, select: { url: true, alt: true, sortOrder: true, isPrimary: true } },
   variants: { select: { quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true, price: true } },
 } satisfies Prisma.ProductSelect;
@@ -222,6 +227,13 @@ const withoutPublicPriceForPremiumGemstone = (product: any) => product?.kind ===
       variants: Array.isArray(product.variants) ? product.variants.map((variant: any) => ({ ...variant, price: 0, originalPrice: null })) : product.variants,
     }
   : product;
+const mapStorefrontProducts = (products: any[]) => {
+  const now = new Date();
+  return products.map((product) => withoutPublicPriceForPremiumGemstone({
+    ...product,
+    newLabelActive: isNewLabelActive(product.isNew, product.newUntil, now),
+  }));
+};
 const selectAdminOrder = {
   id: true, code: true, status: true, customerName: true, customerEmail: true, customerPhone: true,
   shippingAddress: true, shippingMethod: true, trackingCode: true, shippingProvider: true,
@@ -427,6 +439,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
 
   notifyProductImagesUpdated(productId: string) {
     this.publishCatalogChange("product", "updated", productId);
+  }
+
+  notifyNewArrivalsConfigurationUpdated() {
+    this.publishCatalogChange("category", "updated");
   }
 
   private cachedPublicProductRead(key: string, load: () => Promise<any[]>) {
@@ -736,12 +752,12 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       return this.cachedPublicProductRead(cacheKey, loadSitemapEntries);
     }
     const load = () => query.view === "storefront-list"
-      ? this.prisma.product.findMany({ where, select: selectStorefrontListing, orderBy, take, skip }).then((rows) => rows.map(withoutPublicPriceForPremiumGemstone))
+      ? this.prisma.product.findMany({ where, select: selectStorefrontListing, orderBy, take, skip }).then(mapStorefrontProducts)
       : query.view === "admin-summary"
         ? this.prisma.product.findMany({ where, select: selectAdminProductSummary, orderBy, take, skip }).then((records) => records.map((record) => ({ ...record, adminSummary: true })))
         : query.view === "admin-list"
           ? this.prisma.product.findMany({ where, select: selectAdminProductList, orderBy, take, skip }).then((records) => records.map((record) => ({ ...record, adminSummary: true })))
-        : this.prisma.product.findMany({ where, include: query.view === "storefront" ? includeStorefrontProduct : includeProduct, orderBy, take, skip }).then((records) => query.view === "storefront" ? records.map(withoutPublicPriceForPremiumGemstone) : records);
+        : this.prisma.product.findMany({ where, include: query.view === "storefront" ? includeStorefrontProduct : includeProduct, orderBy, take, skip }).then((records) => query.view === "storefront" ? mapStorefrontProducts(records) : records);
     if (query.all === "true" || query.search || !["storefront", "storefront-list"].includes(query.view)) return load();
     const cacheKey = JSON.stringify(Object.entries(query).sort(([left], [right]) => left.localeCompare(right)));
     return this.cachedPublicProductRead(cacheKey, load);
@@ -757,7 +773,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const visibility = await this.storefrontProductVisibilityWhere();
     const record = await this.prisma.product.findFirst({ where: { slug, status: "ACTIVE", ...visibility }, include: includeStorefrontProductDetail });
     if (!record) throw new NotFoundException("Không tìm thấy sản phẩm.");
-    return withoutPublicPriceForPremiumGemstone(record);
+    return mapStorefrontProducts([record])[0];
   }
 
   async relatedProducts(slug: string, limitInput?: string) {
@@ -778,7 +794,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       orderBy: [{ isNew: "desc" }, { createdAt: "desc" }],
       take: limit,
     });
-    return records.map(withoutPublicPriceForPremiumGemstone);
+    return mapStorefrontProducts(records);
   }
 
   private productData(input: Input) {
@@ -990,7 +1006,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (!status) throw new BadRequestException("Chỉ có thể đăng bán hoặc ẩn sản phẩm.");
     try {
       const product = await this.prisma.$transaction(async (tx) => {
-          const current = await tx.product.findUnique({ where: { id }, include: { category: { select: { slug: true } }, images: { select: { url: true } }, variants: { select: { sku: true, shape: true, quality: true, beadSize: true, stock: true, price: true, imageUrls: true, videoUrl: true } } } });
+        await tx.$queryRaw`SELECT "id" FROM "products" WHERE "id" = ${id}::uuid FOR UPDATE`;
+        const current = await tx.product.findUnique({ where: { id }, include: { category: { select: { slug: true } }, images: { select: { url: true } }, variants: { select: { sku: true, shape: true, quality: true, beadSize: true, stock: true, price: true, imageUrls: true, videoUrl: true } } } });
         if (!current) throw new NotFoundException("Không tìm thấy sản phẩm.");
         if (status === "ACTIVE") {
           if (current.kind === "JEWELRY" && current.category?.slug === "vong-kieng") {
@@ -1007,8 +1024,15 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             if (!current.variants.length && Number(current.price || 0) <= 0) throw new BadRequestException(`Không thể đăng bán SKU ${current.sku}: chưa có giá bán hợp lệ. Cập nhật tại Hồ sơ giá.`);
           }
         }
-        const saved = await tx.product.update({ where: { id }, data: { status: status as any } });
-        await tx.auditLog.create({ data: { adminId: actor.id, correlationId: actor.correlationId, action: status === "ACTIVE" ? "PRODUCT_PUBLISHED" : "PRODUCT_UNPUBLISHED", entityType: "PRODUCT", entityId: id, before: { status: current.status }, after: { status, ...(reason ? { reason } : {}) } } });
+        const statusChanged = current.status !== status;
+        if (!statusChanged) return current;
+        const firstPublishedAt = status === "ACTIVE" && current.publicationHistoryKnown && !current.firstPublishedAt
+          ? new Date()
+          : current.firstPublishedAt;
+        const publicationUpdate: Input = { status: status as any };
+        if (firstPublishedAt && !current.firstPublishedAt) publicationUpdate.firstPublishedAt = firstPublishedAt;
+        const saved = await tx.product.update({ where: { id }, data: publicationUpdate });
+        await tx.auditLog.create({ data: { adminId: actor.id, correlationId: actor.correlationId, action: status === "ACTIVE" ? "PRODUCT_PUBLISHED" : "PRODUCT_UNPUBLISHED", entityType: "PRODUCT", entityId: id, before: { status: current.status, firstPublishedAt: current.firstPublishedAt }, after: { status, firstPublishedAt, ...(reason ? { reason } : {}) } } });
         return saved;
       });
       this.publishCatalogChange("product", "updated", id);
@@ -1019,21 +1043,31 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async updateProductNewLabel(id: string, isNewInput: unknown, actor: { id: string; correlationId?: string }) {
+  async updateProductNewLabel(id: string, isNewInput: unknown, newUntilInput: unknown, actor: { id: string; correlationId?: string }) {
     if (typeof isNewInput !== "boolean") throw new BadRequestException("Nhãn sản phẩm mới phải là true hoặc false.");
+    const hasNewUntil = newUntilInput !== undefined;
+    let newUntil: Date | null = null;
+    if (hasNewUntil && newUntilInput !== null && newUntilInput !== "") {
+      if (typeof newUntilInput !== "string" || !Number.isFinite(Date.parse(newUntilInput))) throw new BadRequestException("Hạn nhãn Mới phải là ngày giờ hợp lệ (ISO-8601). ");
+      newUntil = new Date(newUntilInput);
+      if (newUntil.getTime() <= Date.now()) throw new BadRequestException("Hạn nhãn Mới phải nằm trong tương lai.");
+    }
     const changed = await this.prisma.$transaction(async (tx) => {
-      const current = await tx.product.findUnique({ where: { id }, select: { id: true, isNew: true } });
+      await tx.$queryRaw`SELECT "id" FROM "products" WHERE "id" = ${id}::uuid FOR UPDATE`;
+      const current = await tx.product.findUnique({ where: { id }, select: { id: true, isNew: true, newUntil: true } });
       if (!current) throw new NotFoundException("Không tìm thấy sản phẩm.");
-      if (current.isNew === isNewInput) return false;
-      await tx.product.update({ where: { id }, data: { isNew: isNewInput } });
+      const resolvedNewUntil = hasNewUntil ? newUntil : current.newUntil;
+      const sameUntil = current.newUntil?.getTime() === resolvedNewUntil?.getTime();
+      if (current.isNew === isNewInput && sameUntil) return false;
+      await tx.product.update({ where: { id }, data: { isNew: isNewInput, ...(hasNewUntil ? { newUntil: resolvedNewUntil } : {}) } });
       await tx.auditLog.create({ data: {
         adminId: actor.id,
         correlationId: actor.correlationId,
         action: "PRODUCT_NEW_LABEL_UPDATED",
         entityType: "PRODUCT",
         entityId: id,
-        before: { isNew: current.isNew },
-        after: { isNew: isNewInput },
+        before: { isNew: current.isNew, newUntil: current.newUntil },
+        after: { isNew: isNewInput, newUntil: resolvedNewUntil },
       } });
       return true;
     });
@@ -1286,7 +1320,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       let imageSyncChanged = false;
       const result = await this.prisma.$transaction(async (tx) => {
         let record: any;
-        const isPublishingNow = data.status === "ACTIVE" && (!existingProduct || existingProduct.status !== "ACTIVE");
+        const hasExplicitStatus = Object.hasOwn(input, "status");
+        const isPublishingNow = hasExplicitStatus && data.status === "ACTIVE" && (!existingProduct || existingProduct.status !== "ACTIVE");
         if (isPublishingNow) {
           if (!id) throw new BadRequestException("Để đăng bán, hãy chọn một SKU đã có trong kho.");
           const current = await tx.product.findUnique({ where: { id }, select: { status: true, stock: true, variants: { select: { stock: true } } } });
@@ -1299,7 +1334,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           }
         }
         if (id) {
-          const currentPriceData = await tx.product.findUnique({ where: { id }, select: { sku: true, name: true, kind: true, categoryId: true, isPremiumGemstone: true, price: true, originalPrice: true, category: { select: { pricingMode: true } }, variants: { select: { id: true, optionKey: true, sku: true, quality: true, shape: true, beadSize: true, price: true, originalPrice: true, carat: true, gemstoneQuality: true, imageUrls: true, videoUrl: true } } } });
+          await tx.$queryRaw`SELECT "id" FROM "products" WHERE "id" = ${id}::uuid FOR UPDATE`;
+          const currentPriceData = await tx.product.findUnique({ where: { id }, select: { sku: true, name: true, kind: true, status: true, publicationHistoryKnown: true, firstPublishedAt: true, categoryId: true, isPremiumGemstone: true, price: true, originalPrice: true, category: { select: { pricingMode: true } }, variants: { select: { id: true, optionKey: true, sku: true, quality: true, shape: true, beadSize: true, price: true, originalPrice: true, carat: true, gemstoneQuality: true, imageUrls: true, videoUrl: true } } } });
           if (!currentPriceData) throw new NotFoundException("Không tìm thấy sản phẩm trong kho.");
           if (data.sku !== currentPriceData.sku) throw new BadRequestException("Không được thay đổi SKU trong Hồ sơ sản phẩm.");
           const currentVariantsByKey = new Map(currentPriceData.variants.map((variant) => [variant.optionKey, variant]));
@@ -1345,10 +1381,18 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             pos365ImageSyncError: null,
           } : {};
           const productUpdateData: Input = { ...productDataToPersist, ...posPriceSyncFields, ...posImageSyncFields };
+          const statusChanged = hasExplicitStatus && currentPriceData.status !== data.status;
+          const firstPublishedAt = statusChanged && data.status === "ACTIVE" && currentPriceData.publicationHistoryKnown && !currentPriceData.firstPublishedAt
+            ? new Date()
+            : currentPriceData.firstPublishedAt;
+          if (statusChanged && data.status === "ACTIVE" && currentPriceData.publicationHistoryKnown && !currentPriceData.firstPublishedAt) productUpdateData.firstPublishedAt = firstPublishedAt;
           if (Object.hasOwn(input, "gallery") || Object.hasOwn(input, "image")) {
             productUpdateData.images = { deleteMany: {}, create: images.map((url: string, index: number) => ({ url, alt: data.name, sortOrder: index, isPrimary: index === 0 })) };
           }
           await tx.product.update({ where: { id }, data: productUpdateData });
+          if (statusChanged && data.status === "ACTIVE") {
+            await tx.auditLog.create({ data: { action: "PRODUCT_PUBLISHED", entityType: "PRODUCT", entityId: id, before: { status: currentPriceData.status, firstPublishedAt: currentPriceData.firstPublishedAt }, after: { status: data.status, firstPublishedAt } } });
+          }
           const existingVariants = await tx.productPriceVariant.findMany({ where: { productId: id }, select: { id: true, optionKey: true } });
           const existingByKey = new Map(existingVariants.map((variant) => [variant.optionKey, variant]));
           for (const variant of variantCreate) {
@@ -2506,7 +2550,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
                 product = await tx.product.create({ data: {
                   sku, name: productName, slug: `${slugify(productName).slice(0, 180)}-${sku.toLocaleLowerCase("en")}`,
                   kind: category.kind, categoryId: category.id, gemstoneTypeId, materialOptionId,
-                  status: "DRAFT", stock: 0, price: profilePrice, ...profilePriceSync,
+                  status: "DRAFT", publicationHistoryKnown: true, stock: 0, price: profilePrice, ...profilePriceSync,
                   variants: { create: variantCreate },
                 }, include: { category: true, materialOption: true, gemstoneType: true, variants: true } });
               }
@@ -2524,7 +2568,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
                 product = await tx.product.create({ data: {
                   sku, name: productName, slug: `${slugify(productName).slice(0, 180)}-${sku.toLocaleLowerCase("en")}`,
                   kind: category.kind, categoryId: category.id, gemstoneTypeId, materialOptionId,
-                  status: "DRAFT", stock: 0, price: profilePrice,
+                  status: "DRAFT", publicationHistoryKnown: true, stock: 0, price: profilePrice,
                   ...(standalonePremiumGemstone ? { isPremiumGemstone: true, lengthCm, widthCm } : {}),
                   ...profilePriceSync,
                 }, include: { category: true, materialOption: true, gemstoneType: true, variants: true } });
