@@ -26,6 +26,17 @@ export function requiresSameOrigin(method) {
   return !READ_ONLY_METHODS.has(method.toUpperCase());
 }
 
+/** @param {Request} request */
+export function isAdminEventStreamRequest(request) {
+  return request.method.toUpperCase() === "GET"
+    && request.headers.get("accept")?.split(",").some((value) => value.trim().split(";", 1)[0].toLowerCase() === "text/event-stream") === true;
+}
+
+/** @param {string[]} segments */
+export function adminProxyTimeoutMs(segments) {
+  return segments.join("/") === "ai-studio/product-agent/direct-upload" ? 120_000 : 30_000;
+}
+
 /** @param {{ headers: Headers; nextUrl: URL }} request */
 export function hasSameOrigin(request) {
   const origin = request.headers.get("origin");

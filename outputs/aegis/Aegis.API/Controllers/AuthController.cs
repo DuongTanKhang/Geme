@@ -1,6 +1,7 @@
 using Aegis.Application.Auth.Login;
 using Aegis.Application.Auth.Logout;
 using Aegis.Application.Auth.Models;
+using Aegis.Application.Auth.PasswordReset;
 using Aegis.Application.Auth.Refresh;
 using Aegis.Application.Auth.Register;
 using Aegis.Application.Auth.ResendVerification;
@@ -94,6 +95,33 @@ public class AuthController : ControllerBase
             lifetimeMinutes = result.LifetimeMinutes,
             resendCooldownSeconds = result.ResendCooldownSeconds
         });
+    }
+
+    [HttpPost("forgot-password")]
+    [EnableRateLimiting("password-reset")]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request)
+    {
+        var result = await _mediator.Send(new RequestPasswordResetCommand(request.Email));
+        return Ok(new
+        {
+            message = "Nếu tài khoản với email này tồn tại và đã xác minh, mã đặt lại mật khẩu sẽ được gửi đến email.",
+            result.CodeLength,
+            result.LifetimeMinutes,
+            result.ResendCooldownSeconds
+        });
+    }
+
+    [HttpPost("reset-password")]
+    [EnableRateLimiting("password-reset")]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
+    {
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        await _mediator.Send(new ResetPasswordCommand(
+            request.Email,
+            request.Otp,
+            request.NewPassword,
+            ip));
+        return Ok(new { message = "Mật khẩu đã được đặt lại. Vui lòng đăng nhập bằng mật khẩu mới." });
     }
 
     [HttpPost("verify-2fa")]
@@ -221,3 +249,5 @@ public class AuthController : ControllerBase
 public sealed record VerifyRegistrationEmailCodeRequest(string Email, string Otp);
 public sealed record ResendEmailVerificationRequest(string Email);
 public sealed record ResendLoginOtpRequest(Guid UserId);
+public sealed record ForgotPasswordRequest(string Email);
+public sealed record ResetPasswordRequest(string Email, string Otp, string NewPassword);

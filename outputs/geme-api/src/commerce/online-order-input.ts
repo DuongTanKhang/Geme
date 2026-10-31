@@ -1,13 +1,12 @@
 import { BadRequestException } from "@nestjs/common";
 
-const ONLINE_PAYMENT_METHODS = new Set(["COD", "BANK_TRANSFER", "MOMO", "CREDIT_CARD"]);
+const ONLINE_PAYMENT_METHODS = new Set(["COD", "BANK_TRANSFER", "BANK_TRANSFER_QR", "MOMO", "CREDIT_CARD"]);
 
-/** Accept only checkout fields; validate instead of silently truncating buyer data. */
-export function onlineOrderInput(body: Record<string, any>) {
+function onlineOrderItems(body: Record<string, any>) {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new BadRequestException("Thông tin đặt hàng không hợp lệ.");
   if (!Array.isArray(body.items) || body.items.length < 1) throw new BadRequestException("Đơn hàng cần ít nhất một sản phẩm.");
   if (body.items.length > 30) throw new BadRequestException("Giỏ hàng tối đa 30 dòng sản phẩm. Hãy gộp các dòng SKU trùng nhau rồi thử lại.");
-  const items = body.items.map((line: Record<string, unknown>) => {
+  return body.items.map((line: Record<string, unknown>) => {
     if (!line || typeof line !== "object" || Array.isArray(line)) throw new BadRequestException("Một dòng sản phẩm trong giỏ hàng không hợp lệ.");
     const productId = typeof line.productId === "string" ? line.productId.trim() : "";
     const variantId = typeof line.variantId === "string" ? line.variantId.trim() : "";
@@ -15,11 +14,23 @@ export function onlineOrderInput(body: Record<string, any>) {
     if (productId.length > 64 || variantId.length > 64 || sku.length > 64) throw new BadRequestException("Mã sản phẩm hoặc SKU trong giỏ hàng quá dài.");
     return { productId, variantId: variantId || undefined, sku, quantity: line.quantity };
   });
+}
 
-  const paymentMethod = typeof body.paymentMethod === "string" && body.paymentMethod.trim()
+/** A price/stock quote only needs cart lines. Contact details are required when creating the order. */
+export function onlineOrderQuoteInput(body: Record<string, any>) {
+  return { items: onlineOrderItems(body), shippingFee: 0 };
+}
+
+/** Accept only checkout fields; validate instead of silently truncating buyer data. */
+export function onlineOrderInput(body: Record<string, any>) {
+  const items = onlineOrderItems(body);
+
+  const requestedPaymentMethod = typeof body.paymentMethod === "string" && body.paymentMethod.trim()
     ? body.paymentMethod.trim()
     : "COD";
-  if (!ONLINE_PAYMENT_METHODS.has(paymentMethod)) throw new BadRequestException("Phương thức thanh toán không được hỗ trợ.");
+  if (!ONLINE_PAYMENT_METHODS.has(requestedPaymentMethod)) throw new BadRequestException("Phương thức thanh toán không được hỗ trợ.");
+  const qrPayment = requestedPaymentMethod === "BANK_TRANSFER_QR";
+  const paymentMethod = qrPayment ? "BANK_TRANSFER" : requestedPaymentMethod;
 
   const name = typeof body.customerName === "string" ? body.customerName.trim() : "";
   const phoneInput = typeof body.phone === "string" ? body.phone.trim() : "";
@@ -46,6 +57,7 @@ export function onlineOrderInput(body: Record<string, any>) {
     shippingAddress,
     note,
     paymentMethod,
+    qrPayment,
     items,
     salesChannel: "ONLINE",
     channel: "ONLINE",

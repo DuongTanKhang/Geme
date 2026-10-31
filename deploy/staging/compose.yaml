@@ -1,0 +1,257 @@
+name: geme-staging
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      storefront:
+        condition: service_healthy
+      admin:
+        condition: service_healthy
+    networks: [web, app]
+
+  storefront:
+    build:
+      context: ../../outputs/geme
+      dockerfile: Dockerfile
+      args:
+        GEME_API_BASE_URL: http://api:4000/api/v1
+        NEXT_PUBLIC_API_BASE_URL: https://test.geme.vn/api/v1
+        AEGIS_AUTH_API_URL: http://aegis:5130
+        GEME_SITE_URL: https://test.geme.vn
+        MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://geme-public-media.geme-media-gateway.workers.dev}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      GEME_API_BASE_URL: http://api:4000/api/v1
+      NEXT_PUBLIC_API_BASE_URL: https://test.geme.vn/api/v1
+      AEGIS_AUTH_API_URL: http://aegis:5130
+      GEME_SITE_URL: https://test.geme.vn
+      MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://geme-public-media.geme-media-gateway.workers.dev}
+    expose: ["3000"]
+    depends_on:
+      api:
+        condition: service_healthy
+      aegis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks: [app]
+
+  admin:
+    build:
+      context: ../../outputs/geme-admin
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: https://testadmin.geme.vn/api/v1
+        GEME_API_BASE_URL: http://api:4000/api/v1
+        GEME_STOREFRONT_ASSETS_URL: http://storefront:3000
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_BASE_URL: https://testadmin.geme.vn/api/v1
+      GEME_API_BASE_URL: http://api:4000/api/v1
+      GEME_STOREFRONT_ASSETS_URL: http://storefront:3000
+      AEGIS_AUTH_API_URL: http://aegis:5130
+    expose: ["3001"]
+    depends_on:
+      api:
+        condition: service_healthy
+      aegis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/login').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks: [app]
+
+  api:
+    build:
+      context: ../../outputs/geme-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      TRUST_PROXY_HOPS: "1"
+      ADMIN_AUTH_JWT_SECRET: ${ADMIN_AUTH_JWT_SECRET:?Set ADMIN_AUTH_JWT_SECRET in .env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      CORS_ORIGINS: https://test.geme.vn,https://testadmin.geme.vn
+      DATABASE_URL: postgresql://geme:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/geme?schema=public
+      REDIS_URL: redis://redis:6379/0
+      AEGIS_AUTH_API_URL: http://aegis:5130
+      AEGIS_ORDER_EMAIL_URL: http://aegis:5130
+      GEME_ORDER_EMAIL_API_KEY: ${GEME_ORDER_EMAIL_API_KEY:?Set GEME_ORDER_EMAIL_API_KEY in .env}
+      GEME_SITE_URL: https://test.geme.vn
+      MEDIA_STORAGE_PROVIDER: ${MEDIA_STORAGE_PROVIDER:-database}
+      MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://geme-public-media.geme-media-gateway.workers.dev}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_PRIVATE_BUCKET_NAME: ${R2_PRIVATE_BUCKET_NAME:-}
+      R2_REQUEST_TIMEOUT_MS: ${R2_REQUEST_TIMEOUT_MS:-15000}
+      SHOPEE_ENABLED: ${SHOPEE_ENABLED:-false}
+      SHOPEE_ENVIRONMENT: ${SHOPEE_ENVIRONMENT:-sandbox}
+      SHOPEE_PARTNER_ID: ${SHOPEE_PARTNER_ID:-}
+      SHOPEE_PARTNER_KEY: ${SHOPEE_PARTNER_KEY:-}
+      SHOPEE_REDIRECT_URI: ${SHOPEE_REDIRECT_URI:-}
+      SHOPEE_ADMIN_RETURN_URL: ${SHOPEE_ADMIN_RETURN_URL:-}
+      SHOPEE_TOKEN_ENCRYPTION_KEY: ${SHOPEE_TOKEN_ENCRYPTION_KEY:-}
+      SHOPEE_INITIAL_SYNC_DAYS: ${SHOPEE_INITIAL_SYNC_DAYS:-30}
+      SHOPEE_POLL_INTERVAL_MINUTES: ${SHOPEE_POLL_INTERVAL_MINUTES:-5}
+      SHOPEE_WORKER_CONCURRENCY: ${SHOPEE_WORKER_CONCURRENCY:-2}
+      # POS365 remains disabled by default; staging writes require an explicit opt-in.
+      POS365_ENABLED: ${POS365_ENABLED:-false}
+      POS365_API_BASE_URL: ${POS365_API_BASE_URL:-}
+      POS365_USERNAME: ${POS365_USERNAME:-}
+      POS365_PASSWORD: ${POS365_PASSWORD:-}
+      POS365_BRANCH_ID: ${POS365_BRANCH_ID:-}
+      POS365_ACCOUNT_ID_BANK_TRANSFER: ${POS365_ACCOUNT_ID_BANK_TRANSFER:-}
+      SEPAY_WEBHOOK_ENABLED: ${SEPAY_WEBHOOK_ENABLED:-false}
+      SEPAY_WEBHOOK_SECRET: ${SEPAY_WEBHOOK_SECRET:-}
+      SEPAY_API_TOKEN: ${SEPAY_API_TOKEN:-}
+      SEPAY_API_BASE_URL: ${SEPAY_API_BASE_URL:-https://userapi.sepay.vn/v2}
+      SEPAY_ACCOUNT_NUMBERS: ${SEPAY_ACCOUNT_NUMBERS:-}
+      VIETTELPOST_ENABLED: "false"
+    expose: ["4000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      aegis:
+        condition: service_healthy
+    command: ["sh", "-c", "pnpm db:deploy && pnpm db:seed && pnpm start"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/v1/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 8s
+      retries: 8
+      start_period: 90s
+    networks:
+      app: {}
+      data: {}
+      egress:
+        gw_priority: 1
+
+  aegis:
+    build:
+      context: ../../outputs/aegis
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:5130
+      ConnectionStrings__DefaultConnection: Server=sqlserver,1433;Database=Aegis_Security_Platform;User Id=sa;Password=${AEGIS_SQL_PASSWORD:?Set AEGIS_SQL_PASSWORD in .env};Encrypt=False;TrustServerCertificate=True
+      ConnectionStrings__Redis: redis:6379
+      Database__ApplyMigrationsOnStartup: "true"
+      Email__Host: ${AEGIS_EMAIL_HOST:-smtp.gmail.com}
+      Email__Port: ${AEGIS_EMAIL_PORT:-587}
+      Email__EnableSsl: ${AEGIS_EMAIL_ENABLE_SSL:-true}
+      Email__Username: ${AEGIS_EMAIL_USERNAME:?Set AEGIS_EMAIL_USERNAME in .env}
+      Email__Password: ${AEGIS_EMAIL_PASSWORD:?Set AEGIS_EMAIL_PASSWORD in .env}
+      Email__FromEmail: ${AEGIS_EMAIL_FROM_EMAIL:?Set AEGIS_EMAIL_FROM_EMAIL in .env}
+      Email__FromName: ${AEGIS_EMAIL_FROM_NAME:-GEME}
+      Email__PublicBaseUrl: https://test.geme.vn
+      Otp__HashingKey: ${AEGIS_OTP_HASHING_KEY:?Set AEGIS_OTP_HASHING_KEY in .env}
+      PasswordHashing__WorkFactor: "10"
+      Jwt__Issuer: Aegis
+      Jwt__Audience: AegisClient
+      Jwt__Key: ${AEGIS_JWT_KEY:?Set AEGIS_JWT_KEY in .env}
+      InternalApi__OrderEmailKey: ${GEME_ORDER_EMAIL_API_KEY:?Set GEME_ORDER_EMAIL_API_KEY in .env}
+    expose: ["5130"]
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5130/health/ready"]
+      interval: 15s
+      timeout: 8s
+      retries: 10
+      start_period: 90s
+    networks:
+      app: {}
+      data: {}
+      egress:
+        gw_priority: 1
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Express
+      MSSQL_MEMORY_LIMIT_MB: "2048"
+      MSSQL_SA_PASSWORD: ${AEGIS_SQL_PASSWORD:?Set AEGIS_SQL_PASSWORD in .env}
+    volumes:
+      - aegis_sql_data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q 'SELECT 1' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 8s
+      retries: 20
+      start_period: 60s
+    networks: [data]
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: geme
+      POSTGRES_USER: geme
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geme -d geme"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [data]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [data]
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:
+  redis_data:
+  aegis_sql_data:
+
+networks:
+  web:
+  app:
+    internal: true
+  data:
+    internal: true
+  egress:

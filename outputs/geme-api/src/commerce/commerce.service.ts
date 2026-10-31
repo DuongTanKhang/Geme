@@ -9,7 +9,7 @@ import { ensureCustomerForPaidOrder } from "./customer-profile.js";
 import { sanitizeBlogHtml } from "./blog-html.js";
 import { calculateCheckoutPrice, getCheckoutPromotionValue, loadActiveStorePromotions, type CheckoutPromotion } from "./checkout-pricing.js";
 import { canTransitionOrder } from "./order-state.js";
-import { getInventoryReservationExpiry } from "./reservation-expiry.js";
+import { getInventoryReservationExpiry, getQrPaymentWindow } from "./reservation-expiry.js";
 import { assertBangleQualityImages, normalizeBangleQuality, synchronizeBangleVariantMedia } from "./bangle-variant-media.js";
 import { isNewLabelActive } from "./new-arrivals.rules.js";
 
@@ -271,6 +271,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   private orderEmailOutboxRunning = false;
   private reservationExpiryTimer: ReturnType<typeof setInterval> | null = null;
   private reservationExpiryRunning = false;
+  private pos365PaymentReconcileTimer: ReturnType<typeof setInterval> | null = null;
+  private pos365PaymentReconcileRunning = false;
+  private pos365PaymentReconcileOffset = 0;
+  private lastPos365PaymentReconcileWarningAt = 0;
   private categoryCache: { expiresAt: number; records: any[] } | null = null;
   private categoryLoad: Promise<any[]> | null = null;
   private categoryCacheVersion = 0;
@@ -322,8 +326,16 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     this.orderEmailOutboxTimer.unref?.();
     this.reservationExpiryTimer = setInterval(() => {
       void this.expireOrderReservations().catch((error) => this.logger.error("Không thể giải phóng tồn kho giữ quá hạn.", error));
-    }, 30_000);
+    }, 5_000);
     this.reservationExpiryTimer.unref?.();
+    // POS365 does not push payment events to GEME through the current API
+    // integration. Re-read outstanding POS orders periodically; only an exact
+    // received TotalPayment for the matching code/branch can capture payment.
+    void this.reconcilePendingPos365Payments().catch(() => undefined);
+    this.pos365PaymentReconcileTimer = setInterval(() => {
+      void this.reconcilePendingPos365Payments().catch(() => undefined);
+    }, 30_000);
+    this.pos365PaymentReconcileTimer.unref?.();
   }
 
   onModuleDestroy() {
@@ -331,6 +343,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (this.promotionStatusTimer) clearInterval(this.promotionStatusTimer);
     if (this.orderEmailOutboxTimer) clearInterval(this.orderEmailOutboxTimer);
     if (this.reservationExpiryTimer) clearInterval(this.reservationExpiryTimer);
+    if (this.pos365PaymentReconcileTimer) clearInterval(this.pos365PaymentReconcileTimer);
   }
 
   private async persistDataImageReference(value: string, filename: string, alt?: string | null) {
@@ -739,7 +752,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (query.materialOptionId) where.materialOptionId = query.materialOptionId;
     if (query.new === "true") where.isNew = true;
     if (query.featured === "true") where.isFeatured = true;
-    if (query.search) where.OR = [{ name: { contains: query.search, mode: "insensitive" } }, { sku: { contains: query.search, mode: "insensitive" } }];
+    if (query.search) where.OR = [
+      { name: { contains: query.search, mode: "insensitive" } },
+      { sku: { contains: query.search, mode: "insensitive" } },
+      { variants: { some: { sku: { contains: query.search, mode: "insensitive" } } } },
+    ];
     if (query.all !== "true") where.AND = (where.AND || []).concat(await this.storefrontProductVisibilityWhere());
     const orderBy = [{ isNew: "desc" as const }, { createdAt: "desc" as const }, { id: "asc" as const }];
     const productLimit = query.all === "true" ? 5000 : 500;
@@ -2826,6 +2843,87 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     catch (error: any) { if (error?.code === "P2025") throw new NotFoundException("Không tìm thấy khách hàng."); if (error?.code === "P2002") throw new ConflictException("Email hoặc số điện thoại đã được sử dụng."); throw error; }
   }
 
+  async adminNotifications(adminId: string, query: Record<string, string> = {}) {
+    const take = Math.min(Math.max(Number(query.limit) || 30, 1), 100);
+    const [rows, unreadCount] = await Promise.all([
+      this.prisma.adminNotification.findMany({
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take,
+        include: { reads: { where: { adminId }, select: { readAt: true } } },
+      }),
+      this.prisma.adminNotification.count({ where: { reads: { none: { adminId } } } }),
+    ]);
+    return {
+      items: rows.map(({ reads, ...notification }: any) => ({ ...notification, readAt: reads[0]?.readAt ?? null })),
+      unreadCount,
+    };
+  }
+
+  async markAdminNotificationRead(id: string, adminId: string) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+      throw new BadRequestException("Mã thông báo không hợp lệ.");
+    }
+    const notification = await this.prisma.adminNotification.findUnique({ where: { id }, select: { id: true } });
+    if (!notification) throw new NotFoundException("Không tìm thấy thông báo.");
+    await this.prisma.adminNotificationRead.upsert({
+      where: { notificationId_adminId: { notificationId: id, adminId } },
+      create: { notificationId: id, adminId },
+      update: { readAt: new Date() },
+    });
+    return { ok: true };
+  }
+
+  async markAllAdminNotificationsRead(adminId: string) {
+    const unread = await this.prisma.adminNotification.findMany({
+      where: { reads: { none: { adminId } } },
+      select: { id: true },
+    });
+    if (unread.length) {
+      await this.prisma.adminNotificationRead.createMany({
+        data: unread.map(({ id }: { id: string }) => ({ notificationId: id, adminId })),
+        skipDuplicates: true,
+      });
+    }
+    return { markedRead: unread.length };
+  }
+
+  async publicOrderPaymentStatus(codeInput: string, idempotencyKeyInput?: string) {
+    const code = String(codeInput || "").trim();
+    const idempotencyKey = String(idempotencyKeyInput || "").trim();
+    if (!code || code.length > 40 || !/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) {
+      throw new NotFoundException("Không tìm thấy trạng thái thanh toán.");
+    }
+    const order = await this.prisma.order.findFirst({
+      where: { code, idempotencyKey },
+      select: {
+        status: true,
+        totalAmount: true,
+        qrPaymentExpiresAt: true,
+        payments: {
+          select: { method: true, status: true, amount: true, refunds: { select: { amount: true } } },
+          orderBy: { createdAt: "asc" },
+        },
+      },
+    });
+    if (!order || !order.payments.some((payment) => payment.method === "BANK_TRANSFER")) {
+      throw new NotFoundException("Không tìm thấy trạng thái thanh toán.");
+    }
+    const captured = order.payments
+      .filter((payment) => ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"].includes(payment.status))
+      .reduce((sum, payment) => sum + Number(payment.amount), 0);
+    const refunded = order.payments.reduce((sum, payment) => sum + payment.refunds.reduce((refundSum, refund) => refundSum + Number(refund.amount), 0), 0);
+    const total = Number(order.totalAmount);
+    const paymentStatus = captured >= total
+      ? refunded >= captured ? "REFUNDED" : refunded > 0 ? "PARTIALLY_REFUNDED" : "PAID"
+      : captured > 0 ? "PARTIALLY_PAID" : order.payments.some((payment) => payment.status === "FAILED") ? "FAILED" : "PENDING";
+    return {
+      orderStatus: order.status,
+      paymentStatus,
+      paymentBalance: Math.max(0, total - captured),
+      paymentExpiresAt: order.qrPaymentExpiresAt,
+    };
+  }
+
   orders(query: Record<string, string> = {}) {
     const take = Math.min(Math.max(Number(query.limit) || 500, 1), 500);
     if (query.view === "admin-summary") return this.prisma.order.findMany({
@@ -2833,7 +2931,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         id: true, code: true, customerName: true, customerPhone: true, customerEmail: true,
         shippingMethod: true, status: true, totalAmount: true, placedAt: true,
         customer: { select: { name: true, phone: true, email: true } },
-        items: { select: { productName: true, productSku: true, quantity: true, unitPrice: true, lineTotal: true } },
+        items: {
+          select: {
+            id: true, productName: true, productSku: true, quality: true, shape: true, beadSize: true,
+            quantity: true, unitPrice: true, lineTotal: true,
+            product: { select: { weightGrams: true, images: { orderBy: { sortOrder: "asc" }, take: 1, select: { url: true } } } },
+          },
+        },
         payments: { select: { method: true, status: true, amount: true, paidAt: true, refunds: { select: { amount: true } } }, orderBy: { createdAt: "asc" } },
       },
       orderBy: { placedAt: "desc" }, take,
@@ -2883,7 +2987,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       const now = new Date();
       const expired = await this.prisma.order.findMany({
         where: {
-          status: "PENDING_CONFIRMATION",
+          status: "PENDING_PAYMENT",
           inventoryReservedAt: { not: null },
           inventoryCommittedAt: null,
           inventoryReleasedAt: null,
@@ -2901,7 +3005,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             const claimed = await tx.order.updateMany({
               where: {
                 id: candidate.id,
-                status: "PENDING_CONFIRMATION",
+                status: "PENDING_PAYMENT",
                 inventoryReservedAt: { not: null },
                 inventoryCommittedAt: null,
                 inventoryReleasedAt: null,
@@ -2920,6 +3024,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
               before: { status: candidate.status, reservationExpiresAt: candidate.inventoryReservationExpiresAt?.toISOString() },
               after: { status: "CANCELLED", releasedAt: now.toISOString() },
             } });
+            await tx.adminNotification.create({ data: {
+              type: "ORDER_STATUS_CHANGED",
+              title: "Đơn hàng tự hủy do hết thời gian giữ hàng",
+              message: `Đơn ${candidate.code} của ${candidate.customerName} đã được hủy và hoàn tồn kho tự động.`,
+              entityType: "ORDER",
+              entityId: candidate.id,
+            } });
             return true;
           });
           if (released) {
@@ -2936,7 +3047,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateOrderStatus(id: string, statusInput: unknown, actor?: { id: string; correlationId?: string }, reasonInput?: unknown) {
-    const status = enumValue(statusInput, ["PENDING_CONFIRMATION", "PROCESSING", "SHIPPING", "DELIVERED", "CANCELLED"], "");
+    const status = enumValue(statusInput, ["PENDING_PAYMENT", "PENDING_CONFIRMATION", "PROCESSING", "SHIPPING", "DELIVERED", "CANCELLED"], "");
     if (!status) throw new BadRequestException("Trạng thái đơn hàng không hợp lệ.");
     const reason = typeof reasonInput === "string" ? reasonInput.trim().slice(0, 1000) : "";
     if (status === "CANCELLED" && reason.length < 5) throw new BadRequestException("Vui lòng ghi lý do hủy đơn tối thiểu 5 ký tự.");
@@ -2951,6 +3062,12 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         if (!current) throw new NotFoundException("Không tìm thấy đơn hàng.");
         if (current.status === status) { noOp = true; return current; }
         if (!canTransitionOrder(current.status, status)) throw new BadRequestException(`Không thể chuyển đơn từ ${current.status} sang ${status}. Tải lại đơn và chọn bước kế tiếp hợp lệ.`);
+        if (current.status === "PENDING_PAYMENT" && status === "PENDING_CONFIRMATION") {
+          const captured = current.payments
+            .filter((payment: any) => ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"].includes(payment.status))
+            .reduce((sum: number, payment: any) => sum + Number(payment.amount), 0);
+          if (captured < Number(current.totalAmount)) throw new BadRequestException("Đơn chưa được thanh toán đủ. Chỉ chuyển sang Chờ xác nhận sau khi POS365 xác nhận đủ tổng tiền.");
+        }
         if (status === "CANCELLED" && (current.inventoryCommittedAt || current.payments.some((payment: any) => payment.status === "PAID" || payment.status === "PARTIALLY_REFUNDED"))) {
           throw new BadRequestException("Đơn đã xuất hàng hoặc còn tiền chưa hoàn hết. Hoàn tiền thực tế và ghi nhận đầy đủ trước khi hủy đơn.");
         }
@@ -2967,7 +3084,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         let inventoryReleasedAt: Date | undefined;
         let inventoryCommittedAt: Date | undefined;
         if (status === "CANCELLED" && current.inventoryReservedAt && !current.inventoryCommittedAt && !current.inventoryReleasedAt
-          && ["PENDING_CONFIRMATION", "PROCESSING"].includes(current.status)) {
+          && ["PENDING_PAYMENT", "PENDING_CONFIRMATION", "PROCESSING"].includes(current.status)) {
           const releasedAt = new Date();
           await this.releaseOrderReservation(tx, current, changedProductIds);
           inventoryReleasedAt = releasedAt;
@@ -2999,7 +3116,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           where: { orderId: id, status: "ACTIVE" },
           data: { expiresAt: null },
         });
-        const updatedOrder = await tx.order.findUnique({ where: { id }, include: { items: true, payments: true, customer: true } });
+        const updatedOrder = await tx.order.findUnique({ where: { id }, select: selectAdminOrder });
         if (!updatedOrder) throw new NotFoundException("Không tìm thấy đơn hàng sau khi cập nhật.");
         await tx.auditLog.create({ data: {
           adminId: actor?.id || null,
@@ -3010,15 +3127,28 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           before: { status: current.status, inventoryCommittedAt: current.inventoryCommittedAt?.toISOString() || null },
           after: { status, reason: reason || null, inventoryCommittedAt: inventoryCommittedAt?.toISOString() || current.inventoryCommittedAt?.toISOString() || null },
         } });
+        const statusLabels: Record<string, string> = {
+          PENDING_PAYMENT: "Chờ thanh toán",
+          PENDING_CONFIRMATION: "Chờ xác nhận", PROCESSING: "Đang xử lý", SHIPPING: "Đang giao",
+          DELIVERED: "Đã giao", CANCELLED: "Đã hủy",
+        };
+        await tx.adminNotification.create({ data: {
+          type: "ORDER_STATUS_CHANGED",
+          title: "Trạng thái đơn hàng đã thay đổi",
+          message: `Đơn ${current.code}: ${statusLabels[current.status] || current.status} → ${statusLabels[status] || status}.`,
+          entityType: "ORDER",
+          entityId: current.id,
+        } });
         return updatedOrder;
       }));
-      if (noOp) return order;
       if (changedProductIds.size) {
         await this.queueProductStockSync(this.prisma, changedProductIds).catch(() => undefined);
         for (const productId of changedProductIds) this.publishCatalogChange("product", "updated", productId);
       }
-      if (this.pos365.isSyncEnabled()) void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đánh thức hàng đợi POS365 cho đơn ${order.code}.`, error));
-      return order;
+      if (!noOp && this.pos365.isSyncEnabled()) void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đánh thức hàng đợi POS365 cho đơn ${order.code}.`, error));
+      const response = await this.prisma.order.findUnique({ where: { id }, select: selectAdminOrder });
+      if (!response) throw new NotFoundException("Không tìm thấy đơn hàng sau khi cập nhật.");
+      return response;
     }
     catch (error: any) { if (error?.code === "P2025") throw new NotFoundException("Không tìm thấy đơn hàng."); throw error; }
   }
@@ -3028,7 +3158,130 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     throw new BadRequestException("Không còn hỗ trợ đánh dấu PAID toàn bộ. Ghi nhận từng khoản thu bằng POST /orders/:id/payments với số tiền, phương thức, mã giao dịch và Idempotency-Key.");
   }
 
-  async recordOrderPayment(id: string, actor: { id: string; correlationId?: string }, input: Input, idempotencyHeader?: string) {
+  private async reconcilePendingPos365Payments() {
+    if (!this.pos365.isSyncEnabled() || this.pos365PaymentReconcileRunning) return;
+    this.pos365PaymentReconcileRunning = true;
+    try {
+      const where = {
+        status: "PENDING_PAYMENT" as const,
+        pos365SyncStatus: "SYNCED",
+        payments: { some: { method: "BANK_TRANSFER" as const, status: "PENDING" as const } },
+      };
+      const pendingCount = await this.prisma.order.count({ where });
+      if (!pendingCount) {
+        this.pos365PaymentReconcileOffset = 0;
+        return;
+      }
+
+      // Keep POS API load bounded and rotate the window so old unpaid orders
+      // cannot starve newer ones. POS requests are serialized globally.
+      const batchSize = Math.min(5, pendingCount);
+      const start = this.pos365PaymentReconcileOffset % pendingCount;
+      const first = await this.prisma.order.findMany({
+        where,
+        select: { id: true },
+        orderBy: [{ placedAt: "asc" }, { id: "asc" }],
+        skip: start,
+        take: Math.min(batchSize, pendingCount - start),
+      });
+      const wrapped = first.length < batchSize
+        ? await this.prisma.order.findMany({
+          where,
+          select: { id: true },
+          orderBy: [{ placedAt: "asc" }, { id: "asc" }],
+          take: batchSize - first.length,
+        })
+        : [];
+      const candidates = [...first, ...wrapped];
+      this.pos365PaymentReconcileOffset = (start + candidates.length) % Math.max(1, pendingCount);
+
+      for (const candidate of candidates) {
+        const idempotencyKey = `POS365_AUTO:${candidate.id}:PAID`;
+        try {
+          const order = await this.confirmBankTransferFromPos365(
+            candidate.id,
+            { id: null, correlationId: `pos365-auto:${candidate.id}` },
+            idempotencyKey,
+            "AUTO",
+          );
+          if (order?.status === "PENDING_CONFIRMATION") {
+            this.logger.log(`POS365 đã xác nhận thanh toán đơn ${order.code}; GEME đã chuyển đơn sang chờ Admin xác nhận.`);
+          }
+        } catch (error) {
+          // An order that has not been paid yet is a normal polling result.
+          // Stop the batch on provider/network failures to avoid amplifying an outage.
+          if (error instanceof ConflictException || error instanceof NotFoundException || error instanceof BadRequestException) continue;
+          const now = Date.now();
+          if (now - this.lastPos365PaymentReconcileWarningAt >= 5 * 60_000) {
+            this.lastPos365PaymentReconcileWarningAt = now;
+            this.logger.warn("Chưa truy vấn được trạng thái thanh toán POS365; GEME sẽ tự thử lại ở lượt tiếp theo.");
+          }
+          break;
+        }
+      }
+    } catch {
+      const now = Date.now();
+      if (now - this.lastPos365PaymentReconcileWarningAt >= 5 * 60_000) {
+        this.lastPos365PaymentReconcileWarningAt = now;
+        this.logger.warn("Không thể tải các đơn đang chờ thanh toán để đối soát POS365; GEME sẽ tự thử lại ở lượt tiếp theo.");
+      }
+    } finally {
+      this.pos365PaymentReconcileRunning = false;
+    }
+  }
+
+  async confirmBankTransferFromPos365(
+    id: string,
+    actor: { id: string | null; correlationId?: string },
+    idempotencyHeader?: string,
+    source: "ADMIN" | "AUTO" = "ADMIN",
+  ) {
+    const idempotencyKey = String(idempotencyHeader || "").trim();
+    if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) throw new BadRequestException("Thiếu Idempotency-Key hợp lệ cho đối soát POS365.");
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      include: { payments: { include: { refunds: true }, orderBy: { createdAt: "asc" } } },
+    });
+    if (!order) throw new NotFoundException("Không tìm thấy đơn hàng.");
+    if (order.status === "CANCELLED") throw new ConflictException("Đơn đã hủy; không thể xác nhận thanh toán để xử lý tiếp.");
+    const paymentMethod = order.payments[0]?.method;
+    if (paymentMethod !== "BANK_TRANSFER") throw new BadRequestException("Đơn này không được đặt bằng chuyển khoản.");
+    const replay = await this.prisma.payment.findUnique({ where: { idempotencyKey } });
+    if (replay) {
+      if (replay.orderId !== id || replay.method !== "BANK_TRANSFER" || replay.providerRef?.startsWith("POS365:") !== true || Number(replay.amount) !== Number(order.totalAmount)) {
+        throw new ConflictException("Idempotency-Key đã được dùng cho một khoản thu khác.");
+      }
+      return this.prisma.order.findUniqueOrThrow({ where: { id }, include: { items: true, payments: { include: { refunds: true }, orderBy: { createdAt: "asc" } }, customer: true } });
+    }
+    const captured = order.payments
+      .filter((payment: any) => ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"].includes(payment.status))
+      .reduce((sum: number, payment: any) => sum + Math.max(0, Number(payment.amount) - payment.refunds.reduce((refundSum: number, refund: any) => refundSum + Number(refund.amount), 0)), 0);
+    const expectedAmount = Number(order.totalAmount);
+    if (captured > 0) throw new ConflictException("Đơn đã có khoản thu được ghi nhận. Hãy kiểm tra sổ thanh toán trước khi đối soát lại.");
+    if (!Number.isSafeInteger(expectedAmount) || expectedAmount <= 0) throw new BadRequestException("Tổng tiền đơn không hợp lệ.");
+
+    // POS365 is the source of truth: only record a bank transfer after the
+    // matching POS order reports the exact full amount received.
+    const verified = await this.pos365.verifyOrderPayment(order.code, expectedAmount);
+    return this.recordOrderPayment(id, actor, {
+      amount: verified.receivedAmount,
+      method: "BANK_TRANSFER",
+      providerRef: `POS365:${verified.remoteOrderId}`,
+      note: source === "AUTO"
+        ? `POS365 tự ghi nhận đã nhận đúng tổng đơn ${verified.receivedAmount.toLocaleString("vi-VN")} ₫; GEME tự đối soát.`
+        : `POS365 xác nhận đã nhận đúng tổng đơn ${verified.receivedAmount.toLocaleString("vi-VN")} ₫.`,
+      idempotencyKey,
+    }, idempotencyKey, "POS365");
+  }
+
+  async recordOrderPayment(
+    id: string,
+    actor: { id: string | null; correlationId?: string },
+    input: Input,
+    idempotencyHeader?: string,
+    verifiedBy: "MANUAL" | "POS365" | "SEPAY" = "MANUAL",
+    providerOccurredAt?: Date | null,
+  ) {
     const amount = Number(input.amount);
     const method = enumValue(input.method, ["BANK_TRANSFER", "MOMO", "CREDIT_CARD", "OTHER"], "");
     const providerRef = typeof input.providerRef === "string" ? input.providerRef.trim() : "";
@@ -3044,6 +3297,18 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         await tx.$queryRaw`SELECT "id" FROM "orders" WHERE "id" = ${id}::uuid FOR UPDATE`;
         const current = await tx.order.findUnique({ where: { id }, include: { payments: { orderBy: { createdAt: "asc" } } } });
         if (!current) throw new NotFoundException("Không tìm thấy đơn hàng.");
+        if (current.qrPaymentExpiresAt && verifiedBy === "SEPAY") {
+          const occurredAt = providerOccurredAt instanceof Date && Number.isFinite(providerOccurredAt.getTime()) ? providerOccurredAt : null;
+          if (!occurredAt || !current.qrPaymentStartedAt || occurredAt < current.qrPaymentStartedAt || occurredAt > current.qrPaymentExpiresAt) {
+            throw new ConflictException("Giao dịch QR nằm ngoài thời hạn thanh toán 15 phút; GEME chưa tự xác nhận và cần kiểm tra thủ công.");
+          }
+        }
+        if (current.qrPaymentExpiresAt && verifiedBy === "POS365" && current.qrPaymentExpiresAt <= new Date()) {
+          throw new ConflictException("Đã hết 15 phút thanh toán QR; POS365 chưa được dùng để tự xác nhận đơn này.");
+        }
+        if (method === "BANK_TRANSFER" && current.status !== "CANCELLED" && verifiedBy === "MANUAL") {
+          throw new BadRequestException("Chuyển khoản chỉ được xác nhận sau khi POS365 ghi nhận đúng mã đơn và đủ tổng tiền. Hãy dùng nút “Kiểm tra POS365 & xác nhận”.");
+        }
         const replay = await tx.payment.findUnique({ where: { idempotencyKey } });
         if (replay) {
           if (replay.orderId !== id || Number(replay.amount) !== amount || replay.method !== method || replay.providerRef !== providerRef || replay.recordingNote !== note) {
@@ -3063,7 +3328,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
 
         const now = new Date();
         const pending = current.payments.find((payment: any) => payment.status === "PENDING");
-        const shared = { orderId: id, idempotencyKey, method: method as any, status: "PAID" as any, amount, providerRef, paidAt: now, recordedByAdminId: actor.id, recordingNote: note };
+        const shared = { orderId: id, idempotencyKey, method: method as any, status: "PAID" as any, amount, providerRef, paidAt: now, recordedByAdminId: actor.id || null, recordingNote: note };
         if (pending && Number(pending.amount) < amount) throw new ConflictException("Số dư trên giao dịch chờ không khớp với số dư đơn. Hãy kiểm tra sổ thanh toán trước khi ghi thêm.");
         if (pending && Number(pending.amount) === amount) {
           await tx.payment.update({ where: { id: pending.id }, data: { ...shared } });
@@ -3081,25 +3346,34 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         const customer = current.status !== "CANCELLED" && totalCapturedAfter >= Number(current.totalAmount)
           ? await ensureCustomerForPaidOrder(tx, current)
           : null;
+        const paymentCompleted = current.status === "PENDING_PAYMENT" && totalCapturedAfter >= Number(current.totalAmount);
         const result = await tx.order.update({
           where: { id },
           data: {
+            ...(paymentCompleted ? { status: "PENDING_CONFIRMATION" as any } : {}),
             ...(customer && !current.customerId ? { customer: { connect: { id: customer.id } } } : {}),
-            ...(customer && this.pos365.isSyncEnabled() ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: now, pos365SyncError: null } : {}),
+            ...(customer && this.pos365.isSyncEnabled() && verifiedBy !== "POS365" ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: now, pos365SyncError: null } : {}),
           },
           include: { items: true, payments: { include: { refunds: true }, orderBy: { createdAt: "asc" } }, customer: true },
         });
         await tx.auditLog.create({ data: {
-          adminId: actor.id,
+          adminId: actor.id || null,
           correlationId: actor.correlationId,
           action: current.status === "CANCELLED" ? "LATE_PAYMENT_RECORDED_FOR_REFUND" : "ORDER_PAYMENT_RECORDED",
           entityType: "ORDER", entityId: id,
           before: { capturedAmount: captured, remainingAmount: remaining, status: current.status },
-          after: { amount, method, providerRef, idempotencyKey, note, capturedAmount: totalCapturedAfter, remainingAmount: remaining - amount, latePayment: current.status === "CANCELLED" },
+          after: { amount, method, providerRef, idempotencyKey, note, capturedAmount: totalCapturedAfter, remainingAmount: remaining - amount, latePayment: current.status === "CANCELLED", ...(paymentCompleted ? { orderStatus: "PENDING_CONFIRMATION" } : {}) },
+        } });
+        if (paymentCompleted) await tx.adminNotification.create({ data: {
+          type: "ORDER_STATUS_CHANGED",
+          title: "Đơn hàng đã thanh toán",
+          message: `Đơn ${current.code} đã nhận đủ ${Number(current.totalAmount).toLocaleString("vi-VN")} ₫ và đang chờ Admin xác nhận.`,
+          entityType: "ORDER",
+          entityId: current.id,
         } });
         return result;
       }, { isolationLevel: "Serializable", maxWait: 10_000, timeout: 30_000 }));
-      if (order.status !== "CANCELLED" && this.pos365.isSyncEnabled() && Number(order.payments.filter((payment: any) => ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"].includes(payment.status)).reduce((sum: number, payment: any) => sum + Number(payment.amount), 0)) >= Number(order.totalAmount)) {
+      if (verifiedBy !== "POS365" && order.status !== "CANCELLED" && this.pos365.isSyncEnabled() && Number(order.payments.filter((payment: any) => ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"].includes(payment.status)).reduce((sum: number, payment: any) => sum + Number(payment.amount), 0)) >= Number(order.totalAmount)) {
         void this.pos365.queueOrderSync(order.id).catch((error) => this.logger.warn(`Không thể đánh thức hàng đợi POS365 cho đơn ${order.code}.`, error));
       }
       return order;
@@ -3177,14 +3451,66 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  async startCustomerQrPayment(customerIdInput: string, codeInput: string) {
+    const customerId = String(customerIdInput || "").trim();
+    const code = String(codeInput || "").trim();
+    if (!customerId || !code || code.length > 40) throw new BadRequestException("Mã đơn thanh toán không hợp lệ.");
+    const now = new Date();
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "orders" WHERE "code" = ${code} AND "customer_id" = ${customerId}::uuid FOR UPDATE`;
+      const order = await tx.order.findFirst({
+        where: { code, customerId },
+        include: { payments: { orderBy: { createdAt: "asc" } } },
+      });
+      if (!order) throw new NotFoundException("Không tìm thấy đơn hàng.");
+      if (order.status !== "PENDING_PAYMENT") throw new ConflictException("Đơn này không còn ở trạng thái chờ thanh toán.");
+      if (order.payments[0]?.method !== "BANK_TRANSFER") throw new BadRequestException("Đơn này không dùng chuyển khoản ngân hàng.");
+      if (order.payments.some((payment) => ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"].includes(payment.status))) {
+        throw new ConflictException("Đơn đã có thanh toán được ghi nhận.");
+      }
+      if (order.qrPaymentExpiresAt) {
+        if (order.qrPaymentExpiresAt <= now) throw new ConflictException("Đã hết 15 phút thanh toán QR; đơn đang được tự hủy.");
+        return { orderCode: order.code, paymentStartedAt: order.qrPaymentStartedAt, paymentExpiresAt: order.qrPaymentExpiresAt, serverNow: now };
+      }
+      if (order.inventoryReservationExpiresAt && order.inventoryReservationExpiresAt <= now) {
+        throw new ConflictException("Thời gian giữ hàng đã hết; đơn đang được tự hủy.");
+      }
+
+      const window = getQrPaymentWindow(now);
+      await tx.order.update({
+        where: { id: order.id },
+        data: {
+          qrPaymentStartedAt: window.startedAt,
+          qrPaymentExpiresAt: window.expiresAt,
+          inventoryReservationExpiresAt: window.expiresAt,
+        },
+      });
+      await tx.inventoryReservation.updateMany({
+        where: { orderId: order.id, status: "ACTIVE" },
+        data: { expiresAt: window.expiresAt },
+      });
+      await tx.auditLog.create({ data: {
+        action: "ORDER_QR_PAYMENT_STARTED",
+        entityType: "ORDER",
+        entityId: order.id,
+        before: { inventoryReservationExpiresAt: order.inventoryReservationExpiresAt?.toISOString() ?? null },
+        after: { paymentStartedAt: window.startedAt.toISOString(), paymentExpiresAt: window.expiresAt.toISOString(), durationMinutes: 15 },
+      } });
+      return { orderCode: order.code, paymentStartedAt: window.startedAt, paymentExpiresAt: window.expiresAt, serverNow: now };
+    }, { isolationLevel: "Serializable", maxWait: 10_000, timeout: 30_000 });
+  }
+
   async createOrder(input: Input, authenticatedCustomerId?: string, trustedStoreSale = false, idempotencyKeyInput?: string) {
     const items = Array.isArray(input.items) ? input.items : [];
     if (!items.length) throw new BadRequestException("Đơn hàng cần ít nhất một sản phẩm.");
     const storeSale = trustedStoreSale && (input.salesChannel === "STORE" || input.channel === "STORE");
     const method = enumValue(input.paymentMethod, ["COD", "BANK_TRANSFER", "MOMO", "CREDIT_CARD", "OTHER"], "COD");
+    const qrPayment = !storeSale && input.qrPayment === true && method === "BANK_TRANSFER";
     const paid = storeSale && (input.paid === true || method === "COD");
-    const inventoryReservationExpiresAt = getInventoryReservationExpiry(method, paid);
-    const code = `GME-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 5).toUpperCase()}`;
+    const orderStartedAt = new Date();
+    const qrPaymentWindow = qrPayment ? getQrPaymentWindow(orderStartedAt) : null;
+    const inventoryReservationExpiresAt = qrPaymentWindow?.expiresAt ?? getInventoryReservationExpiry(method, paid, orderStartedAt);
+    const code = `GME-${orderStartedAt.getTime().toString(36).toUpperCase()}-${randomUUID().slice(0, 5).toUpperCase()}`;
     const customerId = String(authenticatedCustomerId || input.customerId || "");
     const idempotencyKey = String(idempotencyKeyInput || "").trim();
     if (!idempotencyKey) throw new BadRequestException("Thiếu mã chống tạo đơn trùng. Hãy tải lại màn hình rồi thử lại.");
@@ -3197,6 +3523,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       shippingAddress: input.shippingAddress,
       note: input.note,
       paymentMethod: method,
+      qrPayment,
       salesChannel: input.salesChannel || input.channel || null,
       paid: input.paid === true,
       discountAmount: input.discountAmount ?? null,
@@ -3352,15 +3679,25 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         shippingAddress: String(input.shippingAddress || input.address || "").trim(),
         shippingMethod: storeSale ? "Bán trực tiếp tại cửa hàng" : input.shippingMethod || null,
         note: input.note || null, subtotal, discountAmount, shippingFee, totalAmount,
-        status: paid ? "DELIVERED" as any : "PENDING_CONFIRMATION" as any,
-        ...(!paid ? { inventoryReservedAt: new Date() } : {}),
+        status: paid ? "DELIVERED" as any : method !== "COD" ? "PENDING_PAYMENT" as any : "PENDING_CONFIRMATION" as any,
+        ...(!paid ? { inventoryReservedAt: orderStartedAt } : {}),
         ...(!paid && inventoryReservationExpiresAt ? { inventoryReservationExpiresAt } : {}),
+        ...(qrPaymentWindow ? { qrPaymentStartedAt: qrPaymentWindow.startedAt, qrPaymentExpiresAt: qrPaymentWindow.expiresAt } : {}),
         ...(paid ? { inventoryCommittedAt: new Date() } : {}),
         ...(this.pos365.isSyncEnabled() ? { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: new Date() } : {}),
         ...(orderCustomer ? { customer: { connect: { id: orderCustomer.id } } } : {}),
         items: { create: placedItems },
         payments: { create: { method: method as any, amount: totalAmount, status: paid ? "PAID" as any : "PENDING" as any, ...(paid ? { paidAt: new Date() } : {}) } },
       }, include: { items: true, payments: true, customer: true } });
+      if (!storeSale) {
+        await tx.adminNotification.create({ data: {
+          type: "ORDER_CREATED",
+          title: "Có đơn hàng mới",
+          message: `Đơn ${savedOrder.code} từ ${savedOrder.customerName}, tổng ${Number(savedOrder.totalAmount).toLocaleString("vi-VN")} ₫.`,
+          entityType: "ORDER",
+          entityId: savedOrder.id,
+        } });
+      }
       if (!paid) {
         await tx.inventoryReservation.createMany({
           data: savedOrder.items.filter((item: any) => item.productId).map((item: any) => ({
@@ -3774,13 +4111,23 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
 
   async settings() {
     const rows = await this.prisma.siteSetting.findMany();
-    return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+    return Object.fromEntries(rows.filter((row) => row.key !== "bankQr").map((row) => [row.key, row.value]));
   }
 
   async publicSettings() {
-    const publicKeys = ["banners", "footerContent", "catalogEditorialPromos", "newArrivalsMedia", "address", "addressNote", "phone", "supportEmail", "openingHours", "socialLinks", "blogCategories"];
+    const publicKeys = ["banners", "footerContent", "catalogEditorialPromos", "newArrivalsMedia", "bankQr", "address", "addressNote", "phone", "supportEmail", "openingHours", "socialLinks", "blogCategories"];
     const rows = await this.prisma.siteSetting.findMany({ where: { key: { in: publicKeys } }, select: { key: true, value: true } });
-    return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+    const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+    const bankQr = settings.bankQr && typeof settings.bankQr === "object" ? settings.bankQr as Record<string, unknown> : null;
+    const bankCode = typeof bankQr?.bankCode === "string" ? bankQr.bankCode.trim() : "";
+    const accountNumber = typeof bankQr?.accountNumber === "string" ? bankQr.accountNumber.trim() : "";
+    const accountName = typeof bankQr?.accountName === "string" ? bankQr.accountName.trim().slice(0, 100) : "";
+    if (bankQr?.enabled === true && /^[a-z0-9.-]{2,20}$/i.test(bankCode) && /^[0-9]{6,19}$/.test(accountNumber) && accountName) {
+      settings.bankQr = { enabled: true, bankCode, accountNumber, accountName };
+    } else {
+      delete settings.bankQr;
+    }
+    return settings;
   }
 
   async storefrontSalesOverview() {
@@ -3829,6 +4176,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   async saveSettings(input: Record<string, unknown>) {
+    if (Object.prototype.hasOwnProperty.call(input, "bankQr")) throw new BadRequestException("Thông tin QR được lấy tự động từ SePay và không còn cấu hình trong Admin.");
     await this.prisma.$transaction(Object.entries(input).map(([key, value]) => this.prisma.siteSetting.upsert({ where: { key }, create: { key, value: value as any }, update: { value: value as any } })));
     this.publishCatalogChange("settings", "updated");
     return this.settings();

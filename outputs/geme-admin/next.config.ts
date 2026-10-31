@@ -18,7 +18,10 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   async headers() { return [{ source: "/:path*", headers: securityHeaders }]; },
   async rewrites() {
-    const apiBase = (process.env.GEME_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:4000/api/v1").replace(/\/$/, "");
+    const configuredApiBase = process.env.GEME_API_BASE_URL
+      || (process.env.NODE_ENV === "production" ? "" : process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:4000/api/v1");
+    if (!configuredApiBase) throw new Error("GEME_API_BASE_URL is required for production Admin builds; use the internal API service URL.");
+    const apiBase = configuredApiBase.replace(/\/$/, "");
     const storefrontAssetsBase = (process.env.GEME_STOREFRONT_ASSETS_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
     return { beforeFiles: [
       { source: "/geme-assets/:path*", destination: `${storefrontAssetsBase}/assets/:path*` },

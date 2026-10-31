@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Headers, Patch, Post, Req, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, Headers, Param, Patch, Post, Req, UseGuards } from "@nestjs/common";
 import { AegisCustomerGuard, type AegisCustomerIdentity } from "../auth/aegis-customer.guard.js";
 import { CommerceService } from "../commerce/commerce.service.js";
 import { onlineOrderInput } from "../commerce/online-order-input.js";
@@ -27,6 +27,12 @@ export class AccountController {
   @Get("orders")
   orders(@Req() request: AuthenticatedRequest) {
     return this.account.orders(request.customerIdentity);
+  }
+
+  @Post("orders/:code/qr-payment")
+  async startQrPayment(@Req() request: AuthenticatedRequest, @Param("code") code: string) {
+    const customerId = await this.account.customerId(request.customerIdentity);
+    return this.commerce.startCustomerQrPayment(customerId, code);
   }
 
   @Get("favorites")

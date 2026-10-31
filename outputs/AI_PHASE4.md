@@ -1,5 +1,7 @@
 # GEME AI Studio — Phase 4 (Sales & Marketing)
 
+> **Trạng thái:** Toàn bộ API AI Studio Phase 1–4 hiện đã được tháo khỏi ứng dụng. Tài liệu bên dưới là đặc tả lịch sử, không phải hướng dẫn sử dụng đang hoạt động. Các route AI Studio không được đăng ký; dữ liệu và migration cũ được giữ nguyên.
+
 ## Đối chiếu roadmap
 
 - Phase 1/2 đã có trong repository: AI Studio core, queue/worker, AI Core và Image Studio.

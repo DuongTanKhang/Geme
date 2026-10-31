@@ -13,8 +13,17 @@ type DetailTab = "description" | "reviews";
 const variantKey = (variant: NonNullable<StoreProduct["variants"]>[number]) => `${variant.shape ?? ""}::${variant.quality}::${variant.beadSize ?? ""}::${variant.carat ?? ""}::${variant.gemstoneQuality ?? ""}`;
 const bangleShapeName = (shape?: string | null) => ({ ROUND: "Tròn", OVAL: "Oval", SQUARE: "Vuông" } as Record<string, string>)[String(shape || "").toUpperCase()] || "";
 
-function HeartIcon() {
-  return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20.8 8.8c0 5-8.8 10.3-8.8 10.3S3.2 13.8 3.2 8.8A4.5 4.5 0 0 1 12 6.5a4.5 4.5 0 0 1 8.8 2.3Z" /></svg>;
+function HeartIcon({ filled = false }: { filled?: boolean }) {
+  return <svg viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} aria-hidden="true"><path d="M20.8 8.8c0 5-8.8 10.3-8.8 10.3S3.2 13.8 3.2 8.8A4.5 4.5 0 0 1 12 6.5a4.5 4.5 0 0 1 8.8 2.3Z" /></svg>;
+}
+
+function DetailAssuranceIcon({ name }: { name: "product" | "variants" | "consulting" | "support" }) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {name === "product" && <><path d="m12 3 9 9-9 9-9-9 9-9Z" /><circle cx="12" cy="12" r="1.5" /></>}
+    {name === "variants" && <><rect x="4" y="4" width="6.5" height="6.5" rx="1" /><rect x="13.5" y="4" width="6.5" height="6.5" rx="1" /><rect x="4" y="13.5" width="6.5" height="6.5" rx="1" /><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1" /></>}
+    {name === "consulting" && <><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-5.5A7.5 7.5 0 0 1 10.5 8h2A7.5 7.5 0 0 1 20 15.5Z" /><path d="M8 13h8M8 16h5" /></>}
+    {name === "support" && <><path d="M12 3 19 6v5c0 4.4-2.8 8.2-7 10-4.2-1.8-7-5.6-7-10V6l7-3Z" /><path d="m8.5 12 2.2 2.2 4.8-4.8" /></>}
+  </svg>;
 }
 
 function ProductPhoto({ url, alt, className = "", loading = "lazy", sizes = "(max-width: 760px) 100vw, 50vw" }: { url?: string; alt: string; className?: string; loading?: "eager" | "lazy"; sizes?: string }) {
@@ -67,12 +76,19 @@ export function StoreProductDetail({
   const { favoriteIds, toggleFavorite } = useWishlist();
   const isSaved = favoriteIds.has(product.id);
   const [wishlistNotice, setWishlistNotice] = useState("");
+  const [wishlistPending, setWishlistPending] = useState(false);
   const [cartNotice, setCartNotice] = useState("");
 
   const handleFavorite = async () => {
+    if (wishlistPending) return;
     setWishlistNotice("");
-    try { await toggleFavorite(product); }
+    setWishlistPending(true);
+    try {
+      await toggleFavorite(product);
+      setWishlistNotice(isSaved ? "Đã bỏ khỏi danh sách yêu thích." : "Đã thêm vào danh sách yêu thích.");
+    }
     catch (error) { setWishlistNotice(error instanceof Error ? error.message : "Không cập nhật được danh sách yêu thích."); }
+    finally { setWishlistPending(false); }
   };
 
   const selectedVariant = availableVariants.find(
@@ -221,7 +237,7 @@ export function StoreProductDetail({
             {activeMedia?.kind === "variant-video"
               ? <video className="detail-variant-video" src={activeMedia.url} controls playsInline preload="metadata" aria-label={"Video " + (selectedVariant?.sku || product.name)} />
               : <ProductPhoto url={activeMedia?.kind === "image" ? activeMedia.image.url : undefined} alt={activeMedia?.kind === "image" ? activeMedia.image.alt || product.name : product.name} loading="eager" />}
-            <button className={`detail-image-heart${isSaved ? " is-saved" : ""}`} type="button" aria-label={isSaved ? "Bỏ khỏi danh sách yêu thích" : "Thêm vào danh sách yêu thích"} aria-pressed={isSaved} onClick={() => void handleFavorite()}><HeartIcon /></button>
+            <button className={`detail-image-heart${isSaved ? " is-saved" : ""}`} type="button" aria-label={isSaved ? "Bỏ khỏi danh sách yêu thích" : "Thêm vào danh sách yêu thích"} aria-pressed={isSaved} aria-busy={wishlistPending} disabled={wishlistPending} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void handleFavorite(); }}><HeartIcon filled={isSaved} /></button>
             {galleryMedia.length > 1 && <>
               <button className="detail-image-arrow is-prev" type="button" onClick={() => setActiveImage((activeImageIndex + galleryMedia.length - 1) % galleryMedia.length)} aria-label="Ảnh trước">‹</button>
               <button className="detail-image-arrow is-next" type="button" onClick={() => setActiveImage((activeImageIndex + 1) % galleryMedia.length)} aria-label="Ảnh tiếp theo">›</button>
@@ -276,7 +292,7 @@ export function StoreProductDetail({
             </button>)}</div>
           </fieldset>}
 
-          <div className="detail-stock-status" role="status">{product.isPremiumGemstone ? "Liên hệ để được tư vấn và kiểm tra tình trạng hàng" : stock > 0 ? "Còn " + stock + " sản phẩm" : "Tạm hết hàng"}<small>SKU: {selectedVariant?.sku || product.sku}</small></div>
+          <div className="detail-stock-status" role="status">{product.isPremiumGemstone ? "Liên hệ để được tư vấn và kiểm tra tình trạng hàng" : stock > 0 ? "Còn " + stock + " sản phẩm" : "Tạm hết hàng"}</div>
           {product.isPremiumGemstone
             ? <div className="detail-contact-only"><a href="/lien-he">LIÊN HỆ GEME ĐỂ ĐƯỢC TƯ VẤN</a></div>
             : <div className="detail-buy-row">
@@ -289,17 +305,17 @@ export function StoreProductDetail({
             <button className="detail-add-cart" type="button" onClick={addToCart} disabled={stock === 0}>{stock > 0 ? "BỎ VÀO GIỎ HÀNG" : "TẠM HẾT HÀNG"}</button>
           </div>}
           {cartNotice && <p className="detail-cart-notice" role="status">{cartNotice}</p>}
-          <button className={`detail-wishlist${isSaved ? " is-saved" : ""}`} type="button" aria-label={isSaved ? "Bỏ khỏi danh sách yêu thích" : "Thêm vào danh sách yêu thích"} aria-pressed={isSaved} onClick={() => void handleFavorite()}><HeartIcon />{isSaved ? "Đã lưu yêu thích" : "Thêm vào danh sách yêu thích"}</button>
+          <button className={`detail-wishlist${isSaved ? " is-saved" : ""}`} type="button" aria-label={isSaved ? "Bỏ khỏi danh sách yêu thích" : "Thêm vào danh sách yêu thích"} aria-pressed={isSaved} aria-busy={wishlistPending} disabled={wishlistPending} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void handleFavorite(); }}><HeartIcon filled={isSaved} />{isSaved ? "Đã lưu yêu thích" : "Thêm vào danh sách yêu thích"}</button>
           {wishlistNotice && <p className="detail-cart-notice" role="status">{wishlistNotice}</p>}
           <div className="detail-share"><span>Chia sẻ:</span><button type="button" onClick={() => window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(window.location.href)}`, "_blank", "noopener,noreferrer")} aria-label="Chia sẻ Facebook">f</button><button type="button" onClick={() => navigator.clipboard?.writeText(window.location.href)} aria-label="Sao chép liên kết">↗</button></div>
         </div>
       </section>
 
       <section className="detail-assurance-strip" aria-label="Thông tin dịch vụ">
-        <div><span aria-hidden="true">◇</span><span><strong>Dữ liệu sản phẩm rõ ràng</strong><small>Thông tin lấy từ GEME</small></span></div>
-        <div><span aria-hidden="true">⌑</span><span><strong>Biến thể theo sản phẩm</strong><small>Giá và tồn kho theo lựa chọn</small></span></div>
-        <div><span aria-hidden="true">☏</span><span><strong>Tư vấn riêng</strong><small>Hỗ trợ trước khi đặt hàng</small></span></div>
-        <div><span aria-hidden="true">↗</span><span><strong>Hỗ trợ sau mua</strong><small>Liên hệ đội ngũ GEME</small></span></div>
+        <div><DetailAssuranceIcon name="product" /><span><strong>Dữ liệu sản phẩm rõ ràng</strong><small>Thông tin lấy từ GEME</small></span></div>
+        <div><DetailAssuranceIcon name="variants" /><span><strong>Biến thể theo sản phẩm</strong><small>Giá và tồn kho theo lựa chọn</small></span></div>
+        <div><DetailAssuranceIcon name="consulting" /><span><strong>Tư vấn riêng</strong><small>Hỗ trợ trước khi đặt hàng</small></span></div>
+        <div><DetailAssuranceIcon name="support" /><span><strong>Hỗ trợ sau mua</strong><small>Liên hệ đội ngũ GEME</small></span></div>
       </section>
 
       <section className="detail-content">
@@ -332,7 +348,6 @@ export function StoreProductDetail({
               {gemstoneCaratPricing && <tr><th>Carat</th><td>{[...new Set(productVariants.map((variant) => variant.carat).filter((carat): carat is number => carat != null))].join(" / ")} ct</td></tr>}
               {minVariantPrice > 0 && <tr><th>Khoảng giá phiên bản</th><td>{minVariantPrice === maxVariantPrice ? formatStorePrice(minVariantPrice) : `${formatStorePrice(minVariantPrice)} – ${formatStorePrice(maxVariantPrice)}`}</td></tr>}
             </tbody></table>
-            <p className="detail-note">Giá và tồn kho hiển thị theo phiên bản đang chọn.</p>
           </div>
         </div>}
 

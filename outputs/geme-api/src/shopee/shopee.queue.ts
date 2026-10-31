@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, ServiceUnavailableException } from
 import { randomUUID } from "node:crypto";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
-import { redisConnectionOptions } from "../ai-studio/ai-studio.queue.js";
+import { redisConnectionOptions } from "../queue/redis-connection.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { shopeeConfig } from "./shopee.client.js";
 import { SHOPEE_SYNC_JOB_OPTIONS } from "./shopee.retry.js";

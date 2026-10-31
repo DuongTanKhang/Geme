@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { StoreProductCard } from "./store-product-grid";
 import { useWishlist } from "./wishlist-provider";
+import { getVietQrImageUrl, getVietQrTransferInfo, type BankQrSettings } from "../lib/bank-qr";
+import { normalizeApiBaseUrl } from "../lib/api-base";
+import { PaymentCountdown } from "./payment-countdown";
 
 type AccountMode = "login" | "register";
 type SavedProfile = { name?: string; email?: string; phone?: string };
@@ -23,6 +26,10 @@ type AccountOrder = {
   title: string;
   image?: string | null;
   price: number;
+  paymentMethod: string;
+  paymentStatus: string;
+  paymentBalance: number;
+  paymentExpiresAt?: string | null;
   shippingProvider?: string | null;
   shippingMethod?: string | null;
   trackingCode?: string | null;
@@ -76,6 +83,10 @@ function normalizeAccountOrders(payload: unknown): AccountOrder[] {
       title: String(firstOrderValue(order, "title") ?? itemSummary),
       image: firstOrderValue(order, "image") as string | null | undefined,
       price: Number(firstOrderValue(order, "price", "totalAmount", "total_amount", "total") ?? 0),
+      paymentMethod: String(firstOrderValue(order, "paymentMethod", "payment_method") ?? ""),
+      paymentStatus: String(firstOrderValue(order, "paymentStatus", "payment_status") ?? "PENDING"),
+      paymentBalance: Number(firstOrderValue(order, "paymentBalance", "payment_balance") ?? firstOrderValue(order, "price", "totalAmount", "total_amount", "total") ?? 0),
+      paymentExpiresAt: firstOrderValue(order, "paymentExpiresAt", "payment_expires_at") as string | null | undefined,
       shippingProvider: firstOrderValue(order, "shippingProvider", "shipping_provider") as string | null | undefined,
       shippingMethod: firstOrderValue(order, "shippingMethod", "shipping_method") as string | null | undefined,
       trackingCode: firstOrderValue(order, "trackingCode", "tracking_code") as string | null | undefined,
@@ -152,6 +163,8 @@ export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pendingEmailVerification, setPendingEmailVerification] = useState("");
+  const [passwordResetStep, setPasswordResetStep] = useState<"request" | "reset" | null>(null);
+  const [passwordResetEmail, setPasswordResetEmail] = useState("");
   const [email, setEmail] = useState("");
   const [otpInput, setOtpInput] = useState("");
   const [codeLength, setCodeLength] = useState(6);
@@ -292,12 +305,146 @@ export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage
     }
   }
 
-  const accountHeading = pendingEmailVerification ? "Xác nhận email" : isRegister ? "Đăng ký" : "Đăng nhập";
+  function startPasswordReset() {
+    setPasswordResetEmail(email.trim());
+    setPasswordResetStep("request");
+    setMessage("");
+    setSubmitted(false);
+    setResendCountdown(0);
+  }
+
+  function returnToLogin() {
+    setPasswordResetStep(null);
+    setMessage("");
+    setSubmitted(false);
+    setResendCountdown(0);
+  }
+
+  async function requestPasswordReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const submittedEmail = passwordResetEmail.trim().toLowerCase();
+    if (!submittedEmail) {
+      setMessage("Vui lòng nhập email của bạn.");
+      setSubmitted(false);
+      return;
+    }
+
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: submittedEmail }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Chưa gửi được mã. Vui lòng thử lại.");
+
+      setPasswordResetEmail(submittedEmail);
+      setCodeLength(Number(result.codeLength) || 6);
+      setLifetimeMinutes(Number(result.lifetimeMinutes) || 5);
+      setResendCountdown(Math.max(0, Number(result.resendCooldownSeconds) || 0));
+      setOtpInput("");
+      setPasswordResetStep("reset");
+      setMessage(result.message || "Nếu email thuộc tài khoản GEME, mã xác nhận sẽ được gửi đến hộp thư.");
+      setSubmitted(true);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Không kết nối được máy chủ xác thực.");
+      setSubmitted(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    const newPassword = String(values.get("new-password") || "");
+    const confirmPassword = String(values.get("confirm-new-password") || "");
+    if (otpInput.length !== codeLength) {
+      setMessage(`Vui lòng nhập đủ ${codeLength} chữ số.`);
+      setSubmitted(false);
+      return;
+    }
+    if (newPassword.length < 10 || newPassword.length > 128
+      || !/[A-Z]/.test(newPassword)
+      || !/[a-z]/.test(newPassword)
+      || !/[0-9]/.test(newPassword)
+      || !/[^a-zA-Z0-9]/.test(newPassword)) {
+      setMessage("Mật khẩu cần từ 10 đến 128 ký tự, gồm chữ hoa, chữ thường, số và ký tự đặc biệt.");
+      setSubmitted(false);
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setMessage("Mật khẩu xác nhận chưa khớp. Vui lòng kiểm tra lại.");
+      setSubmitted(false);
+      return;
+    }
+
+    setBusy(true);
+    setMessage("");
+    setSubmitted(false);
+    try {
+      const response = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: passwordResetEmail.trim().toLowerCase(), otp: otpInput, newPassword }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Không thể đặt lại mật khẩu.");
+
+      setEmail(passwordResetEmail.trim().toLowerCase());
+      setPasswordResetStep(null);
+      setOtpInput("");
+      setResendCountdown(0);
+      setMessage(result.message || "Mật khẩu đã được đặt lại. Vui lòng đăng nhập bằng mật khẩu mới.");
+      setSubmitted(true);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Không kết nối được máy chủ xác thực. Mã xác nhận vẫn được giữ lại.");
+      setSubmitted(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resendPasswordResetCode() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: passwordResetEmail.trim().toLowerCase() }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Chưa gửi lại được mã.");
+      setCodeLength(Number(result.codeLength) || codeLength);
+      setLifetimeMinutes(Number(result.lifetimeMinutes) || lifetimeMinutes);
+      setResendCountdown(Math.max(0, Number(result.resendCooldownSeconds) || 0));
+      setMessage(result.message || "Nếu email thuộc tài khoản GEME, mã mới sẽ được gửi đến hộp thư.");
+      setSubmitted(true);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Không gửi lại được mã. Vui lòng thử lại sau.");
+      setSubmitted(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const accountHeading = pendingEmailVerification
+    ? "Xác nhận email"
+    : passwordResetStep
+      ? passwordResetStep === "request" ? "Quên mật khẩu" : "Đặt lại mật khẩu"
+      : isRegister ? "Đăng ký" : "Đăng nhập";
   const accountIntro = pendingEmailVerification
     ? "Nhập mã OTP để hoàn tất đăng ký tài khoản GEME."
-    : isRegister
-      ? "Tạo tài khoản để tiếp tục hành trình cùng GEME."
-      : "Thật vui khi được gặp lại bạn.";
+    : passwordResetStep
+      ? passwordResetStep === "request"
+        ? "Nhập email đã đăng ký. Nếu tài khoản hợp lệ, GEME sẽ gửi mã xác nhận cho bạn."
+        : "Nhập mã trong email và chọn mật khẩu mới cho tài khoản của bạn."
+      : isRegister
+        ? "Tạo tài khoản để tiếp tục hành trình cùng GEME."
+        : "Thật vui khi được gặp lại bạn.";
 
   return <main className="account-page auth-page">
     <section className="auth-main" aria-label="Tài khoản GEME">
@@ -317,24 +464,38 @@ export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage
           <span className="auth-eyebrow">TÀI KHOẢN GEME</span>
           <h2 id="auth-heading">{accountHeading}</h2>
           <p className="auth-intro">{accountIntro}</p>
-          {!pendingEmailVerification && <nav className="auth-tabs" aria-label="Tài khoản"><a aria-current={!isRegister ? "page" : undefined} className={!isRegister ? "is-active" : ""} href="/dang-nhap">Đăng nhập</a><a aria-current={isRegister ? "page" : undefined} className={isRegister ? "is-active" : ""} href="/dang-ky">Đăng ký</a></nav>}
+          {!pendingEmailVerification && !passwordResetStep && <nav className="auth-tabs" aria-label="Tài khoản"><a aria-current={!isRegister ? "page" : undefined} className={!isRegister ? "is-active" : ""} href="/dang-nhap">Đăng nhập</a><a aria-current={isRegister ? "page" : undefined} className={isRegister ? "is-active" : ""} href="/dang-ky">Đăng ký</a></nav>}
         {pendingEmailVerification ? <form className="account-form" autoComplete="off" onSubmit={verifyRegistrationEmail}>
           <p className="auth-code-destination">Email nhận mã: <strong>{pendingEmailVerification}</strong>. Mã có hiệu lực trong {lifetimeMinutes} phút và chỉ dùng một lần. Nếu chưa nhận được, hãy kiểm tra thư rác hoặc gửi lại mã.</p>
           <label>Mã xác nhận<input name="otp" type="text" inputMode="numeric" autoCapitalize="off" spellCheck={false} autoComplete="one-time-code" pattern={`[0-9]{${codeLength}}`} maxLength={codeLength} placeholder={`Nhập mã ${codeLength} chữ số`} value={otpInput} onChange={(event) => setOtpInput(event.target.value.replace(/\D/g, "").slice(0, codeLength))} required /></label>
           <button className="auth-submit" type="submit" disabled={busy}>{busy ? "ĐANG XÁC NHẬN..." : "XÁC NHẬN"}</button>
           <button className="text-button" type="button" onClick={resendRegistrationCode} disabled={busy || resendCountdown > 0}>{resendCountdown > 0 ? `Gửi lại mã sau ${resendCountdown} giây` : "Gửi lại mã"}</button>
           {message && <div className={`auth-feedback${submitted ? " is-success" : ""}`} role="status">{message}</div>}
+        </form> : passwordResetStep === "request" ? <form className="account-form" onSubmit={requestPasswordReset}>
+          <label>Email<input name="password-reset-email" type="email" autoComplete="email" placeholder="Nhập email đã đăng ký" value={passwordResetEmail} onChange={(event) => setPasswordResetEmail(event.target.value)} required /></label>
+          <button className="auth-submit" type="submit" disabled={busy}>{busy ? "ĐANG GỬI MÃ..." : "GỬI MÃ XÁC NHẬN"}</button>
+          {message && <div className={`auth-feedback${submitted ? " is-success" : ""}`} role="status">{message}</div>}
+          <button className="text-button" type="button" onClick={returnToLogin} disabled={busy}>← Quay lại đăng nhập</button>
+        </form> : passwordResetStep === "reset" ? <form className="account-form" autoComplete="off" onSubmit={resetPassword}>
+          <p className="auth-code-destination">Nếu email <strong>{passwordResetEmail}</strong> thuộc tài khoản GEME, mã xác nhận sẽ được gửi đến hộp thư. Mã có hiệu lực trong {lifetimeMinutes} phút và chỉ dùng một lần.</p>
+          <label>Mã xác nhận<input name="otp" type="text" inputMode="numeric" autoCapitalize="off" spellCheck={false} autoComplete="one-time-code" pattern={`[0-9]{${codeLength}}`} maxLength={codeLength} placeholder={`Nhập mã ${codeLength} chữ số`} value={otpInput} onChange={(event) => setOtpInput(event.target.value.replace(/\D/g, "").slice(0, codeLength))} required /></label>
+          <label>Mật khẩu mới<span className="account-password-field"><input name="new-password" autoComplete="new-password" type={showPassword ? "text" : "password"} placeholder="Nhập mật khẩu mới" minLength={10} maxLength={128} required /><button type="button" aria-label={showPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"} onClick={() => setShowPassword((value) => !value)}><EyeIcon hidden={!showPassword} /></button></span><small className="auth-field-help">Tối thiểu 10 ký tự, gồm chữ hoa, chữ thường, số và ký tự đặc biệt.</small></label>
+          <label>Xác nhận mật khẩu mới<input name="confirm-new-password" autoComplete="new-password" type={showPassword ? "text" : "password"} placeholder="Nhập lại mật khẩu mới" minLength={10} maxLength={128} required /></label>
+          <button className="auth-submit" type="submit" disabled={busy}>{busy ? "ĐANG ĐẶT LẠI..." : "ĐẶT LẠI MẬT KHẨU"}</button>
+          <button className="text-button" type="button" onClick={resendPasswordResetCode} disabled={busy || resendCountdown > 0}>{resendCountdown > 0 ? `Gửi lại mã sau ${resendCountdown} giây` : "Gửi lại mã"}</button>
+          {message && <div className={`auth-feedback${submitted ? " is-success" : ""}`} role="status">{message}</div>}
+          <button className="text-button" type="button" onClick={() => { setPasswordResetStep("request"); setMessage(""); setSubmitted(false); }} disabled={busy}>← Đổi email khác</button>
         </form> : <form className="account-form" onSubmit={handleSubmit}>
           {isRegister && <><p className="auth-field-help">Nếu bạn đã tạo hồ sơ tại cửa hàng, nhập đúng số điện thoại để dùng họ tên đã lưu. Nếu chưa có hồ sơ, hãy nhập thêm họ tên.</p><label>Họ và tên (nếu chưa tạo hồ sơ tại cửa hàng)<input name="name" autoComplete="name" placeholder="Nhập họ tên của bạn" /></label><label>Số điện thoại<input name="phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="Nhập số điện thoại đã đăng ký tại cửa hàng" required /></label></>}
           <label>Email<input name="email" autoComplete="username" type="email" placeholder="Nhập email của bạn" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
           <label>Mật khẩu<span className="account-password-field"><input name="password" autoComplete={isRegister ? "new-password" : "current-password"} type={showPassword ? "text" : "password"} placeholder="Nhập mật khẩu" minLength={isRegister ? 10 : 8} maxLength={isRegister ? 128 : undefined} required /><button type="button" aria-label={showPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"} onClick={() => setShowPassword((value) => !value)}><EyeIcon hidden={!showPassword} /></button></span>{isRegister && <small className="auth-field-help">Tối thiểu 10 ký tự, gồm chữ hoa, chữ thường, số và ký tự đặc biệt.</small>}</label>
           {isRegister && <label>Xác nhận mật khẩu<input name="confirm-password" autoComplete="new-password" type={showPassword ? "text" : "password"} placeholder="Nhập lại mật khẩu" minLength={10} maxLength={128} required /></label>}
-          {!isRegister && <div className="auth-form-options"><label className="auth-checkbox"><input type="checkbox" name="remember" /> Ghi nhớ đăng nhập</label><button type="button" className="text-button" onClick={() => setMessage("Chức năng đặt lại mật khẩu chưa được cấu hình trong AEGIS.")}>Quên mật khẩu?</button></div>}
+          {!isRegister && <div className="auth-form-options"><label className="auth-checkbox"><input type="checkbox" name="remember" /> Ghi nhớ đăng nhập</label><button type="button" className="text-button" onClick={startPasswordReset}>Quên mật khẩu?</button></div>}
           {isRegister && <label className="auth-checkbox auth-terms"><input type="checkbox" required /> Tôi đồng ý với điều khoản sử dụng và chính sách bảo mật của GEME.</label>}
           <button className="auth-submit" type="submit" disabled={busy}>{busy ? "ĐANG XỬ LÝ..." : isRegister ? "TẠO TÀI KHOẢN" : "ĐĂNG NHẬP"}</button>
           {message && <div className={`auth-feedback${submitted ? " is-success" : ""}`} role="status">{message}{submitted && <a href="/dang-nhap">Đến trang đăng nhập →</a>}</div>}
         </form>}
-        {!pendingEmailVerification && <p className="auth-switch">{isRegister ? "Đã có tài khoản? " : "Chưa có tài khoản? "}<a href={isRegister ? "/dang-nhap" : "/dang-ky"}>{isRegister ? "Đăng nhập" : "Đăng ký ngay"}</a></p>}
+        {!pendingEmailVerification && !passwordResetStep && <p className="auth-switch">{isRegister ? "Đã có tài khoản? " : "Chưa có tài khoản? "}<a href={isRegister ? "/dang-nhap" : "/dang-ky"}>{isRegister ? "Đăng nhập" : "Đăng ký ngay"}</a></p>}
         <p className="auth-demo-note">Tài khoản được xác thực bởi AEGIS; phiên đăng nhập được lưu bằng cookie bảo mật.</p>
       </div>
       </section>
@@ -347,6 +508,7 @@ const accountTabs = [
 ] as const;
 
 const orderStatusLabels: Record<string, string> = {
+  PENDING_PAYMENT: "Chờ thanh toán",
   PENDING_CONFIRMATION: "Chờ xác nhận",
   PROCESSING: "Đang xử lý",
   SHIPPING: "Đang giao",
@@ -369,6 +531,78 @@ export function ProfilePage() {
   const [avatarDataUrl, setAvatarDataUrl] = useState("");
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [bankQr, setBankQr] = useState<BankQrSettings>({ enabled: false, bankCode: "", accountNumber: "", accountName: "" });
+  const [bankQrReady, setBankQrReady] = useState(false);
+  const [payingOrderId, setPayingOrderId] = useState("");
+  const [failedQrOrderId, setFailedQrOrderId] = useState("");
+  const [startingQrOrderId, setStartingQrOrderId] = useState("");
+  const orderRefreshInFlight = useRef(false);
+
+  const refreshOrdersAfterPaymentExpiry = useCallback(async () => {
+    if (orderRefreshInFlight.current) return;
+    orderRefreshInFlight.current = true;
+    try {
+      const response = await fetch("/api/account/orders", { cache: "no-store", headers: { "Cache-Control": "no-cache" }, signal: AbortSignal.timeout(6000) });
+      if (response.ok) setOrders(normalizeAccountOrders(await response.json()));
+    } catch { /* the normal account refresh will retry */ }
+    finally { orderRefreshInFlight.current = false; }
+  }, []);
+
+  async function toggleOrderPayment(orderCode: string) {
+    if (payingOrderId === orderCode) {
+      setPayingOrderId("");
+      return;
+    }
+    if (startingQrOrderId) return;
+    setStartingQrOrderId(orderCode);
+    setNotice("");
+    setFailedQrOrderId("");
+    try {
+      const response = await fetch(`/api/account/orders/${encodeURIComponent(orderCode)}/qr-payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Không thể mở thanh toán QR cho đơn hàng.");
+      const expiresAt = result.paymentExpiresAt ? String(result.paymentExpiresAt) : null;
+      setOrders((current) => current.map((order) => order.id === orderCode ? { ...order, paymentExpiresAt: expiresAt } : order));
+      setPayingOrderId(orderCode);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Không thể mở thanh toán QR cho đơn hàng.");
+    } finally {
+      setStartingQrOrderId("");
+    }
+  }
+
+  useEffect(() => {
+    const apiBase = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:4000/api/v1");
+    let alive = true;
+    void fetch(`${apiBase}/settings/public`, { cache: "no-store", signal: AbortSignal.timeout(8000) })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Không tải được thông tin thanh toán.");
+        return response.json() as Promise<{ bankQr?: Partial<BankQrSettings> }>;
+      })
+      .then((settings) => {
+        if (!alive) return;
+        const value = settings.bankQr && typeof settings.bankQr === "object" ? settings.bankQr : {};
+        setBankQr({ enabled: value.enabled === true, bankCode: String(value.bankCode || ""), accountNumber: String(value.accountNumber || ""), accountName: String(value.accountName || "") });
+      })
+      .catch(() => { /* Keep payment details unavailable until the server returns public bank settings. */ })
+      .finally(() => { if (alive) setBankQrReady(true); });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    const paymentIsOpenAndPending = orders.some((order) =>
+      order.id === payingOrderId && order.paymentMethod === "BANK_TRANSFER" && order.status === "PENDING_PAYMENT" && order.paymentStatus === "PENDING",
+    );
+    if (!payingOrderId || !paymentIsOpenAndPending) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshOrdersAfterPaymentExpiry();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [orders, payingOrderId, refreshOrdersAfterPaymentExpiry]);
 
   useEffect(() => {
     const requestedTab = new URLSearchParams(window.location.search).get("tab");
@@ -422,11 +656,15 @@ export function ProfilePage() {
     const refreshOrdersWhenVisible = () => {
       if (document.visibilityState === "visible") void loadOrders().catch(() => {});
     };
+    const refreshOrdersTimer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadOrders().catch(() => {});
+    }, 30_000);
     window.addEventListener("focus", refreshOrdersWhenVisible);
     document.addEventListener("visibilitychange", refreshOrdersWhenVisible);
     void loadAccount();
     return () => {
       cancelled = true;
+      window.clearInterval(refreshOrdersTimer);
       window.removeEventListener("focus", refreshOrdersWhenVisible);
       document.removeEventListener("visibilitychange", refreshOrdersWhenVisible);
     };
@@ -491,12 +729,12 @@ export function ProfilePage() {
         {!loading && profile && <>
           {tab === "overview" && <>
             <div className="profile-stats"><div><AccountIcon name="calendar" /><strong>{profile.orderCount}</strong><span>Đơn hàng</span></div><div><AccountIcon name="heart" /><strong>{favorites.length}</strong><span>Sản phẩm yêu thích</span></div><div><AccountIcon name="star" /><strong>0</strong><span>Điểm thưởng</span></div><div><AccountIcon name="gift" /><strong>0</strong><span>Ưu đãi đang có</span></div></div>
-            <section className="profile-panel"><div className="profile-panel-heading"><h2>Đơn hàng gần đây</h2><button type="button" onClick={() => setTab("orders")}>Xem tất cả <span>→</span></button></div><OrderList orders={orders.slice(0, 5)} /></section>
+            <section className="profile-panel"><div className="profile-panel-heading"><h2>Đơn hàng gần đây</h2><button type="button" onClick={() => setTab("orders")}>Xem tất cả <span>→</span></button></div><OrderList orders={orders.slice(0, 5)} bankQr={bankQr} bankQrReady={bankQrReady} payingOrderId={payingOrderId} failedQrOrderId={failedQrOrderId} startingQrOrderId={startingQrOrderId} onTogglePayment={toggleOrderPayment} onPaymentExpired={refreshOrdersAfterPaymentExpiry} onQrError={setFailedQrOrderId} /></section>
           </>}
-          {tab === "orders" && <section className="profile-panel"><div className="profile-panel-heading"><h2>Đơn hàng của tôi</h2><span>{orders.length} đơn hàng</span></div><OrderList orders={orders} /></section>}
+          {tab === "orders" && <section className="profile-panel"><div className="profile-panel-heading"><h2>Đơn hàng của tôi</h2><span>{orders.length} đơn hàng</span></div><OrderList orders={orders} bankQr={bankQr} bankQrReady={bankQrReady} payingOrderId={payingOrderId} failedQrOrderId={failedQrOrderId} startingQrOrderId={startingQrOrderId} onTogglePayment={toggleOrderPayment} onPaymentExpired={refreshOrdersAfterPaymentExpiry} onQrError={setFailedQrOrderId} /></section>}
           {tab === "favorites" && <section className="profile-panel"><div className="profile-panel-heading"><h2>Sản phẩm yêu thích</h2><span>{favorites.length} sản phẩm</span></div>{favorites.length ? <div className="profile-favorites-grid">{favorites.map((product) => <StoreProductCard key={product.id} product={product} promotions={[]} />)}</div> : <div className="profile-favorites-empty">Bạn chưa có sản phẩm yêu thích.</div>}</section>}
           {tab === "addresses" && <section className="profile-panel profile-edit-panel"><div className="profile-panel-heading"><h2>Địa chỉ giao hàng mặc định</h2><span>Được dùng khi đặt hàng</span></div><form className="profile-form" onSubmit={saveProfile}><label>Số điện thoại<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Nhập số điện thoại" /></label><label>Địa chỉ giao hàng<textarea value={defaultAddress} onChange={(event) => setDefaultAddress(event.target.value)} placeholder="Nhập địa chỉ giao hàng" rows={3} /></label><button type="submit" disabled={busy}>{busy ? "ĐANG LƯU..." : "LƯU THAY ĐỔI"}</button></form></section>}
-          {tab === "profile" && <section className="profile-panel profile-edit-panel"><div className="profile-panel-heading"><h2>Thông tin tài khoản</h2><span>Email đăng nhập đã xác minh bởi AEGIS</span></div><div className="profile-avatar-editor"><div className="profile-avatar profile-avatar-large">{avatarPreview ? <img src={avatarPreview} alt="Ảnh đại diện xem trước"/> : <AccountIcon name="user" />}</div><label>Ảnh đại diện<input type="file" accept="image/png,image/jpeg,image/webp" disabled={avatarBusy || busy} onChange={(event) => { void selectAvatar(event.currentTarget.files?.[0]); event.currentTarget.value = ""; }}/><small>{avatarBusy ? "Đang xử lý ảnh…" : "PNG, JPG hoặc WebP. Ảnh sẽ được thu nhỏ và nén trước khi lưu."}</small></label></div><form className="profile-form" onSubmit={saveProfile}><label>Họ và tên<input value={name} onChange={(event) => setName(event.target.value)} maxLength={160} autoComplete="name" required /></label><label>Email<input type="email" value={email} readOnly /></label><label>Số điện thoại<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Nhập số điện thoại" autoComplete="tel" /></label><label>Địa chỉ giao hàng<textarea value={defaultAddress} onChange={(event) => setDefaultAddress(event.target.value)} placeholder="Nhập địa chỉ giao hàng" rows={3} /></label><button type="submit" disabled={busy || avatarBusy}>{busy ? "ĐANG LƯU..." : "LƯU THAY ĐỔI"}</button></form></section>}
+          {tab === "profile" && <section className="profile-panel profile-edit-panel"><div className="profile-panel-heading"><h2>Thông tin tài khoản</h2><span>Email đăng nhập đã xác minh bởi AEGIS</span></div><div className="profile-avatar-editor"><div className="profile-avatar profile-avatar-large">{avatarPreview ? <img src={avatarPreview} alt="Ảnh đại diện xem trước"/> : <AccountIcon name="user" />}</div><label>Ảnh đại diện<span className="profile-avatar-upload"><input type="file" accept="image/png,image/jpeg,image/webp" disabled={avatarBusy || busy} onChange={(event) => { void selectAvatar(event.currentTarget.files?.[0]); event.currentTarget.value = ""; }}/><span>{avatarBusy ? "Đang xử lý ảnh…" : "↑　Chọn ảnh đại diện"}</span></span><small>{avatarBusy ? "Đang xử lý ảnh…" : "PNG, JPG hoặc WebP. Ảnh sẽ được thu nhỏ và nén trước khi lưu."}</small></label></div><form className="profile-form" onSubmit={saveProfile}><label>Họ và tên<input value={name} onChange={(event) => setName(event.target.value)} maxLength={160} autoComplete="name" required /></label><label>Email<input type="email" value={email} readOnly /></label><label>Số điện thoại<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Nhập số điện thoại" autoComplete="tel" /></label><label>Địa chỉ giao hàng<textarea value={defaultAddress} onChange={(event) => setDefaultAddress(event.target.value)} placeholder="Nhập địa chỉ giao hàng" rows={3} /></label><button type="submit" disabled={busy || avatarBusy}>{busy ? "ĐANG LƯU..." : "LƯU THAY ĐỔI"}</button></form></section>}
           {tab === "password" && <section className="profile-panel profile-edit-panel"><div className="profile-panel-heading"><h2>Đổi mật khẩu</h2><span>Bảo vệ tài khoản của bạn</span></div><p className="profile-address-empty">Luồng đổi mật khẩu chưa được bật trên AEGIS. Hãy liên hệ GEME để được hỗ trợ.</p></section>}
         </>}
       </section>
@@ -504,6 +742,31 @@ export function ProfilePage() {
   </main>;
 }
 
-function OrderList({ orders }: { orders: AccountOrder[] }) {
-  return <div className="profile-orders">{orders.length ? orders.map((order) => <article className="profile-order" key={order.id}>{order.image && <img src={order.image} alt="" />}<div className="profile-order-info"><strong>{order.id}</strong><span>{new Date(order.date).toLocaleDateString("vi-VN")} · <b className={`profile-order-status status-${order.status.toLocaleLowerCase("en")}`}>{orderStatusLabels[order.status] || order.status}</b></span><small>{order.title}</small>{order.trackingCode && <small className="profile-order-shipment">Viettel Post · Mã vận đơn {order.trackingCode}{order.carrierStatusName ? ` · ${order.carrierStatusName}` : ""}</small>}</div><strong className="profile-order-price">{Number(order.price).toLocaleString("vi-VN")} ₫</strong></article>) : <p className="profile-orders-empty">Chưa có đơn hàng.</p>}</div>;
+function OrderList({ orders, bankQr, bankQrReady, payingOrderId, failedQrOrderId, startingQrOrderId, onTogglePayment, onPaymentExpired, onQrError }: { orders: AccountOrder[]; bankQr: BankQrSettings; bankQrReady: boolean; payingOrderId: string; failedQrOrderId: string; startingQrOrderId: string; onTogglePayment: (id: string) => void | Promise<void>; onPaymentExpired: () => void | Promise<void>; onQrError: (id: string) => void }) {
+  return <div className="profile-orders">{orders.length ? orders.map((order) => {
+    const canPayByQr = order.paymentMethod === "BANK_TRANSFER" && order.paymentBalance > 0 && order.status !== "CANCELLED" && ["PENDING", "FAILED", "PARTIALLY_PAID"].includes(order.paymentStatus);
+    const qrImageUrl = canPayByQr ? getVietQrImageUrl(bankQr, order.paymentBalance, order.id) : null;
+    const qrOpen = payingOrderId === order.id;
+    return <article className="profile-order" key={order.id}>
+      {order.image && <img src={order.image} alt="" />}
+      <div className="profile-order-info">
+        <strong>{order.id}</strong>
+        <span>{new Date(order.date).toLocaleDateString("vi-VN")} · <b className={`profile-order-status status-${order.status.toLocaleLowerCase("en")}`}>{orderStatusLabels[order.status] || order.status}</b></span>
+        <small>{order.title}</small>
+        <small className={`profile-order-payment-status${["PAID", "PARTIALLY_REFUNDED", "REFUNDED"].includes(order.paymentStatus) ? " is-paid" : ""}`}>Thanh toán: {order.paymentStatus === "PAID" ? "Đã thanh toán" : order.paymentStatus === "PARTIALLY_REFUNDED" ? "Đã hoàn một phần" : order.paymentStatus === "REFUNDED" ? "Đã hoàn tiền" : order.paymentStatus === "FAILED" ? "Thanh toán thất bại" : order.paymentStatus === "PARTIALLY_PAID" ? `Đã thanh toán một phần · còn ${order.paymentBalance.toLocaleString("vi-VN")} ₫` : "Chưa thanh toán"}</small>
+        {order.paymentStatus === "PAID" && <p className="profile-order-payment-success" role="status">✓　Thanh toán thành công. GEME đã nhận đủ tiền.{order.status === "PENDING_CONFIRMATION" ? " Đơn hàng đang chờ GEME xác nhận." : ""}</p>}
+        {order.trackingCode && <small className="profile-order-shipment">Viettel Post · Mã vận đơn {order.trackingCode}{order.carrierStatusName ? ` · ${order.carrierStatusName}` : ""}</small>}
+        {canPayByQr && <button className="profile-order-pay-button" type="button" onClick={() => void onTogglePayment(order.id)} disabled={startingQrOrderId === order.id} aria-expanded={qrOpen}>{startingQrOrderId === order.id ? "Đang mở mã…" : qrOpen ? "Đóng mã thanh toán" : "Thanh toán · Quét mã QR"}</button>}
+        {canPayByQr && order.paymentExpiresAt && <PaymentCountdown expiresAt={order.paymentExpiresAt} onExpire={() => void onPaymentExpired()} />}
+        {qrOpen && canPayByQr && <section className="profile-order-qr" aria-label={`Thanh toán đơn ${order.id}`}>
+          <h3>Quét mã để thanh toán</h3>
+          <strong>{order.paymentBalance.toLocaleString("vi-VN")} ₫</strong>
+          {!bankQrReady ? <p>Đang tải thông tin thanh toán…</p> : !bankQr.enabled ? <p role="alert">GEME chưa lấy được tài khoản nhận từ SePay. Vui lòng liên hệ GEME để được hỗ trợ.</p> : qrImageUrl && failedQrOrderId !== order.id ? <img src={qrImageUrl} alt={`Mã QR thanh toán ${order.paymentBalance.toLocaleString("vi-VN")} đồng cho đơn ${order.id}`} onError={() => onQrError(order.id)} /> : <p role="alert">Không tải được mã QR. Vui lòng chuyển khoản thủ công đúng số tiền với nội dung <b>{getVietQrTransferInfo(order.id, bankQr.bankCode)}</b>.</p>}
+          {bankQrReady && bankQr.enabled && <div><p>Ngân hàng: <b>{bankQr.bankCode}</b></p><p>Số tài khoản: <b>{bankQr.accountNumber}</b></p><p>Chủ tài khoản: <b>{bankQr.accountName}</b></p><p>Nội dung: <b>{getVietQrTransferInfo(order.id, bankQr.bankCode)}</b></p></div>}
+          <p>GEME đang tự đối soát giao dịch. Khi nhận đủ tiền, mã QR sẽ tự ẩn và trạng thái thanh toán thành công sẽ hiện tại đây.</p>
+        </section>}
+      </div>
+      <strong className="profile-order-price">{Number(order.price).toLocaleString("vi-VN")} ₫</strong>
+    </article>;
+  }) : <p className="profile-orders-empty">Chưa có đơn hàng.</p>}</div>;
 }

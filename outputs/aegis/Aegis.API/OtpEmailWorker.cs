@@ -53,6 +53,11 @@ public sealed class OtpEmailWorker : BackgroundService
                         await emailService.SendRegistrationOtpAsync(
                             message.Email, message.CustomerName, message.Code, message.Lifetime);
                     }
+                    else if (message.Purpose == OtpPurpose.PasswordReset)
+                    {
+                        await emailService.SendPasswordResetOtpAsync(
+                            message.Email, message.CustomerName, message.Code, message.Lifetime);
+                    }
                     else
                     {
                         await emailService.SendAsync(

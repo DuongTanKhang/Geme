@@ -7,7 +7,7 @@ const imageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"
 const videoTypes = new Set(["video/mp4", "video/webm"]);
 
 function objectKeyFromPath(pathname: string) {
-  if (!pathname.startsWith("/media/")) return null;
+  if (!pathname.startsWith("/media/") && !pathname.startsWith("/product-images/")) return null;
   const encodedKey = pathname.slice(1);
   let key: string;
   try {
@@ -18,8 +18,35 @@ function objectKeyFromPath(pathname: string) {
     return null;
   }
   const parts = key.split("/");
-  if (parts[0] !== "media" || parts.length < 2 || parts.some((part) => !part || part === "." || part === "..")) return null;
-  return key;
+  if (parts.some((part) => !part || part === "." || part === "..")) return null;
+  if (parts[0] === "media" && parts.length >= 2) return key;
+
+  // Legacy catalog images use product-images/{SKU}/{SKU}-{sequence}.{ext}.
+  // Keep this public route narrower than the whole bucket: private-media and
+  // unrelated product-images objects must never be reachable from the Worker.
+  if (parts[0] === "product-images" && parts.length === 3) {
+    const [, sku, filename] = parts;
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(sku)) return null;
+    const escapedSku = sku.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (!new RegExp(`^${escapedSku}-[1-9][0-9]{0,3}\\.(?:jpe?g|png|webp)$`, "i").test(filename)) return null;
+    return key;
+  }
+  return null;
+}
+
+function isAllowedPublicImageKey(key: string) {
+  const parts = key.split("/");
+  if (parts[0] === "media") return parts.length >= 2;
+  return parts[0] === "product-images" && parts.length === 3;
+}
+
+function productImageContentTypeFromKey(key: string) {
+  if (!key.startsWith("product-images/")) return "";
+  const extension = key.slice(key.lastIndexOf(".") + 1).toLowerCase();
+  return extension === "jpg" || extension === "jpeg" ? "image/jpeg"
+    : extension === "png" ? "image/png"
+      : extension === "webp" ? "image/webp"
+        : "";
 }
 
 type ByteRange = { offset: number; length: number };
@@ -52,7 +79,7 @@ export default {
       return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, HEAD" } });
     }
     const key = objectKeyFromPath(new URL(request.url).pathname);
-    if (!key) return notFound();
+    if (!key || !isAllowedPublicImageKey(key)) return notFound();
 
     const rangeHeader = request.headers.get("Range");
     const metadata = rangeHeader || request.method === "HEAD" ? await env.GEME_MEDIA.head(key) : null;
@@ -62,9 +89,20 @@ export default {
 
     const contentType = source.httpMetadata?.contentType || "";
     const normalizedContentType = contentType.split(";", 1)[0].trim().toLowerCase();
-    // The Worker exposes only raster product media under `media/`, never PDFs,
-    // SVG, AI originals, or private bucket paths.
-    if (!imageTypes.has(normalizedContentType) && !videoTypes.has(normalizedContentType)) return notFound();
+    const productImageFallback = productImageContentTypeFromKey(key);
+    // Older SKU images were uploaded without R2 HTTP metadata. Their key is
+    // already constrained to a SKU/sequence and raster extension above, so
+    // infer MIME only for absent or generic metadata; keep rejecting explicit
+    // non-image types such as SVG/PDF.
+    const effectiveContentType = productImageFallback && ["", "application/octet-stream", "binary/octet-stream"].includes(normalizedContentType)
+      ? productImageFallback
+      : contentType;
+    const effectiveNormalizedContentType = effectiveContentType.split(";", 1)[0].trim().toLowerCase();
+    // The Worker exposes raster/video media under `media/` and SKU-sequenced
+    // raster catalog images under `product-images/`, never PDFs, SVG, AI
+    // originals, or private bucket paths.
+    if (!imageTypes.has(effectiveNormalizedContentType) && !videoTypes.has(effectiveNormalizedContentType)) return notFound();
+    if (key.startsWith("product-images/") && !imageTypes.has(effectiveNormalizedContentType)) return notFound();
 
     const range = parseRange(rangeHeader, source.size);
     if (range === "invalid") {
@@ -76,7 +114,7 @@ export default {
 
     const headers = new Headers();
     source.writeHttpMetadata(headers);
-    headers.set("Content-Type", contentType);
+    headers.set("Content-Type", effectiveContentType);
     headers.set("Content-Length", String(range ? range.length : source.size));
     headers.set("Cache-Control", "public, max-age=31536000, immutable");
     headers.set("ETag", source.httpEtag);

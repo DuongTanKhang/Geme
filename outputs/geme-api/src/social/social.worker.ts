@@ -4,7 +4,7 @@ import { Queue, Worker, type Job } from "bullmq";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { MediaStorageService } from "../media/media-storage.service.js";
-import { redisConnectionOptions } from "../ai-studio/ai-studio.queue.js";
+import { redisConnectionOptions } from "../queue/redis-connection.js";
 import { approvedSnapshotHash, socialCommerceSnapshot, socialCommerceSnapshotHash, socialPayloadHash } from "./social.contract.js";
 import { decryptMetaToken, MetaRequestError, SocialMetaClient, type MetaPublishResult } from "./social-meta.client.js";
 import { SOCIAL_PUBLISH_QUEUE, type SocialPublishPayload } from "./social.queue.js";

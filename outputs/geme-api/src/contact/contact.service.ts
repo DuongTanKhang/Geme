@@ -27,7 +27,7 @@ export class ContactService {
     if (name.length < 2 || name.length > 120) throw new BadRequestException("Họ tên cần từ 2 đến 120 ký tự.");
     if (email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BadRequestException("Email liên hệ không hợp lệ.");
     const phoneDigits = phone.replace(/\D/g, "");
-    if (phone.length > 32 || phoneDigits.length < 9 || phoneDigits.length > 15) throw new BadRequestException("Số điện thoại cần có từ 9 đến 15 chữ số.");
+    if (phone.length > 32 || (phone && (phoneDigits.length < 9 || phoneDigits.length > 15))) throw new BadRequestException("Số điện thoại cần có từ 9 đến 15 chữ số nếu nhập.");
     if (!subjects.has(subject)) throw new BadRequestException("Chủ đề liên hệ không hợp lệ.");
     if (message.length < 10 || message.length > 5000) throw new BadRequestException("Nội dung cần từ 10 đến 5.000 ký tự.");
 

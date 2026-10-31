@@ -12,8 +12,10 @@ type Props = { customers: Record<string, any>[]; onAdd: () => void; onNotify: (m
 const formatMoney = (value: number) => `${new Intl.NumberFormat("vi-VN").format(value || 0)} ₫`;
 
 function Avatar({ customer, large = false }: { customer: CustomerRecord; large?: boolean }) {
-  const initials = customer.avatar || customer.name.split(" ").map((part) => part[0]).slice(-2).join("");
-  return <span className={`customer-avatar ${large ? "large" : ""} avatar-${customer.id.slice(-1)}`} aria-hidden="true">{initials}</span>;
+  const avatarUrl = typeof customer.avatar === "string" ? customer.avatar.trim() : "";
+  const initials = customer.name.split(" ").map((part) => part[0]).slice(-2).join("");
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
+  return <span className={`customer-avatar ${large ? "large" : ""} avatar-${customer.id.slice(-1)}`} aria-hidden="true">{avatarUrl && failedAvatarUrl !== avatarUrl ? <img src={avatarUrl} alt="" onError={() => setFailedAvatarUrl(avatarUrl)} /> : initials}</span>;
 }
 function Segment({ value }: { value: string }) {
   const variant = value === "VIP" ? "vip" : value === "Khách quen" || value === "Thành viên" ? "regular" : "new";

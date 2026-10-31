@@ -162,7 +162,9 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
     finally { setEmailRetryLoading(false); }
   };
 
-  const statusSteps = ["Đặt hàng", "Chờ xác nhận", "Đang xử lý", "Đang giao", "Đã giao", "Đã hủy"];
+  const statusSteps = order.status === "Chờ thanh toán"
+    ? ["Đặt hàng", "Chờ thanh toán", "Chờ xác nhận", "Đang xử lý", "Đang giao", "Đã giao", "Đã hủy"]
+    : ["Đặt hàng", "Chờ xác nhận", "Đang xử lý", "Đang giao", "Đã giao", "Đã hủy"];
   const statusIndex = Math.max(0, statusSteps.indexOf(order.status));
 
   return <aside className="order-drawer" aria-label={`Chi tiết đơn hàng ${order.id}`}>
@@ -220,7 +222,7 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
 
     {order.note && <section className="drawer-note"><h3><SectionIcon name="note"/>Ghi chú đơn hàng</h3><p>{order.note}</p></section>}
     <div className="drawer-actions">
-      {order.paymentStatus !== "PAID" && order.paymentBalance !== 0 && !order.payment.includes("COD") && <button className="button button-primary" type="button" onClick={() => void markPaymentAsPaid()} disabled={paymentLoading}>{paymentLoading ? "Đang lưu khoản thu…" : order.status === "Đã hủy" ? "Ghi nhận tiền đến muộn" : "＋ Ghi nhận khoản thu"}</button>}
+      {order.paymentStatus !== "PAID" && order.paymentBalance !== 0 && !order.payment.includes("COD") && <button className="button button-primary" type="button" onClick={() => void markPaymentAsPaid()} disabled={paymentLoading}>{paymentLoading ? "Đang đối soát…" : order.payment === "BANK_TRANSFER" && order.status !== "Đã hủy" ? "Kiểm tra POS365 & xác nhận" : order.status === "Đã hủy" ? "Ghi nhận tiền đến muộn" : "＋ Ghi nhận khoản thu"}</button>}
       {(((["Chờ xác nhận", "Đang xử lý"].includes(order.status)) || order.status === "Đã hủy") && (order.paymentCaptured || 0) > (order.paymentRefunded || 0) && !order.payment.includes("COD")) && <button className="button button-quiet" type="button" onClick={onRefundPreShipment}>Ghi nhận hoàn tiền trước giao</button>}
       {paymentError && <small className="vtp-error" role="alert">{paymentError}</small>}
       {order.status === "Chờ xác nhận"

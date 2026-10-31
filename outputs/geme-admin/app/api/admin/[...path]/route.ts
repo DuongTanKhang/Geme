@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server.js";
-import { buildAdminApiTarget, hasSameOrigin, prepareAdminProxyRequest, requiresSameOrigin } from "../../../../lib/social-proxy.mjs";
+import { adminProxyTimeoutMs, buildAdminApiTarget, hasSameOrigin, isAdminEventStreamRequest, prepareAdminProxyRequest, requiresSameOrigin } from "../../../../lib/social-proxy.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -80,7 +80,9 @@ async function proxy(request: NextRequest, context: RouteContext) {
     const init = await prepareAdminProxyRequest(request, token);
     const upstream = await fetch(targetUrl, {
       ...init,
-      signal: AbortSignal.timeout(path.join("/") === "ai-studio/product-agent/direct-upload" ? 120_000 : 30_000),
+      // EventSource subscriptions must outlive the normal request deadline;
+      // tie them to the client connection so closing the page still cancels upstream.
+      signal: isAdminEventStreamRequest(request) ? request.signal : AbortSignal.timeout(adminProxyTimeoutMs(path)),
     });
     const responseHeaders = new Headers({ "Cache-Control": "no-store" });
     for (const name of ["content-type", "content-disposition", "retry-after", "etag", "last-modified"]) {
@@ -88,8 +90,11 @@ async function proxy(request: NextRequest, context: RouteContext) {
       if (value) responseHeaders.set(name, value);
     }
     return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
-  } catch {
-    return jsonError("Không kết nối được API GEME. Vui lòng thử lại.", 502);
+  } catch (error) {
+    if (request.signal.aborted) return new Response(null, { status: 499 });
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    console.error(`[admin-api-proxy] ${request.method} /${path.join("/")} failed: ${error instanceof Error ? error.message : "unknown upstream error"}`);
+    return jsonError(timedOut ? "API xử lý quá thời gian cho phép. Vui lòng thử lại." : "Không kết nối được API GEME. Vui lòng thử lại.", timedOut ? 504 : 502);
   }
 }
 

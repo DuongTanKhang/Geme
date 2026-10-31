@@ -8,12 +8,12 @@ import { CommerceModule } from "./commerce/commerce.module.js";
 import { Pos365Module } from "./pos365/pos365.module.js";
 import { ViettelPostModule } from "./viettel-post/viettel-post.module.js";
 import { AdminAuthModule } from "./admin-auth/admin-auth.module.js";
-import { AiStudioModule } from "./ai-studio/ai-studio.module.js";
 import { SocialModule } from "./social/social.module.js";
 import { ShopeeModule } from "./shopee/shopee.module.js";
 import { ContactModule } from "./contact/contact.module.js";
+import { SePayModule } from "./sepay/sepay.module.js";
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, AdminAuthModule, AiStudioModule, SocialModule, ShopeeModule, ContactModule, HealthModule, MaterialsModule, CommerceModule, AccountModule, Pos365Module, ViettelPostModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, AdminAuthModule, SocialModule, ShopeeModule, ContactModule, SePayModule, HealthModule, MaterialsModule, CommerceModule, AccountModule, Pos365Module, ViettelPostModule],
 })
 export class AppModule {}

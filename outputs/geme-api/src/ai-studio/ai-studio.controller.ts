@@ -5,7 +5,6 @@ import { RequireAdminPermissions } from "../admin-auth/admin-permissions.js";
 import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
 import { AiImageStudioService } from "./ai-image-studio.service.js";
 import { AiProductAgentService } from "./ai-product-agent.service.js";
-import { AiPhaseFourService } from "./ai-phase-four.service.js";
 import { AiStudioService } from "./ai-studio.service.js";
 
 type AdminRequest = { adminIdentity: AdminIdentity };
@@ -17,7 +16,7 @@ type ImageResponse = { setHeader(name: string, value: string): unknown; status(c
 @UseGuards(AdminAuthGuard)
 @RequireAdminPermissions("ai-studio.read")
 export class AiStudioController {
-  constructor(private readonly aiStudio: AiStudioService, private readonly imageStudio: AiImageStudioService, private readonly productAgent: AiProductAgentService, private readonly phaseFour: AiPhaseFourService) {}
+  constructor(private readonly aiStudio: AiStudioService, private readonly imageStudio: AiImageStudioService, private readonly productAgent: AiProductAgentService) {}
 
   @Get("overview") overview() { return this.aiStudio.overview(); }
   @Get("tasks") tasks(@Query("status") status?: string, @Query("limit") limit?: string) { return this.aiStudio.listTasks(status, limit); }
@@ -128,36 +127,4 @@ export class AiStudioController {
     return this.productAgent.retryDraft(request.adminIdentity, id);
   }
 
-  @Get("phase4/sales/status") salesStatus() { return this.phaseFour.salesStatus(); }
-  @Get("phase4/sales/analytics") salesAnalytics() { return this.phaseFour.salesAnalytics(); }
-  @Post("phase4/sales/answer") @RequireAdminPermissions("ai-studio.draft") salesAnswer(@Req() request: AdminRequest, @Body() body: unknown, @Headers("idempotency-key") key?: string) {
-    return this.phaseFour.askSales(request.adminIdentity, body, key);
-  }
-  @Post("phase4/sales/answers/:taskId/product-click") salesProductClick(@Param("taskId", new ParseUUIDPipe()) taskId: string, @Body() body: Record<string, unknown>) {
-    return this.phaseFour.recordProductClick(taskId, body?.productId);
-  }
-  @Get("phase4/sales/knowledge") salesKnowledge(@Query("archived") archived?: string) { return this.phaseFour.listKnowledge(archived === "true"); }
-  @Post("phase4/sales/knowledge") @RequireAdminPermissions("ai-studio.draft") createSalesKnowledge(@Req() request: AdminRequest, @Body() body: unknown) { return this.phaseFour.createKnowledge(request.adminIdentity, body); }
-  @Post("phase4/sales/knowledge/:id/revisions") @RequireAdminPermissions("ai-studio.draft") createSalesKnowledgeRevision(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string, @Body() body: unknown) { return this.phaseFour.createKnowledgeRevision(request.adminIdentity, id, body); }
-  @Post("phase4/sales/knowledge/:id/activate") @RequireAdminPermissions("ai-studio.approve") activateSalesKnowledge(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.phaseFour.activateKnowledge(request.adminIdentity, id); }
-  @Post("phase4/sales/knowledge/:id/archive") @RequireAdminPermissions("ai-studio.approve") archiveSalesKnowledge(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.phaseFour.archiveKnowledge(request.adminIdentity, id); }
-
-  @Get("phase4/marketing/products") marketingProducts(@Query("search") search?: string) { return this.phaseFour.marketingProducts(search); }
-  @Get("phase4/marketing/drafts") marketingDrafts(@Query("status") status?: string, @Query("limit") limit?: string) { return this.phaseFour.listMarketingDrafts(status, limit); }
-  @Get("phase4/marketing/drafts/:id") marketingDraft(@Param("id", new ParseUUIDPipe()) id: string) { return this.phaseFour.marketingDraft(id); }
-  @Post("phase4/marketing/drafts") @RequireAdminPermissions("ai-studio.draft") createMarketingDraft(@Req() request: AdminRequest, @Body() body: unknown, @Headers("idempotency-key") key?: string) {
-    return this.phaseFour.createMarketingDraft(request.adminIdentity, body, key);
-  }
-  @Patch("phase4/marketing/drafts/:id") @RequireAdminPermissions("ai-studio.draft") updateMarketingDraft(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string, @Body() body: unknown) {
-    return this.phaseFour.updateMarketingDraft(request.adminIdentity, id, body);
-  }
-  @Post("phase4/marketing/drafts/:id/retry") @RequireAdminPermissions("ai-studio.draft") retryMarketingDraft(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) {
-    return this.phaseFour.retryMarketingDraft(request.adminIdentity, id);
-  }
-  @Post("phase4/marketing/drafts/:id/approve") @RequireAdminPermissions("ai-studio.approve") approveMarketingDraft(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string, @Body() body: Record<string, unknown>) {
-    return this.phaseFour.decideMarketingDraft(request.adminIdentity, id, "APPROVED", body);
-  }
-  @Post("phase4/marketing/drafts/:id/reject") @RequireAdminPermissions("ai-studio.approve") rejectMarketingDraft(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string, @Body() body: Record<string, unknown>) {
-    return this.phaseFour.decideMarketingDraft(request.adminIdentity, id, "REJECTED", body);
-  }
 }

@@ -79,7 +79,7 @@ async function createAdmin(role: "ADMIN" | "CONTENT_EDITOR" = "ADMIN") {
 }
 
 async function createOrder(options: {
-  status?: "PENDING_CONFIRMATION" | "PROCESSING" | "SHIPPING" | "DELIVERED" | "CANCELLED";
+  status?: "PENDING_PAYMENT" | "PENDING_CONFIRMATION" | "PROCESSING" | "SHIPPING" | "DELIVERED" | "CANCELLED";
   total?: number;
   placedAt?: Date;
   payment?: { method: "COD" | "BANK_TRANSFER"; amount: number; status: "PENDING" | "PAID" | "PARTIALLY_REFUNDED"; paidAt?: Date }[];
@@ -113,6 +113,35 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
   if (!prisma) throw new Error("PostgreSQL test service did not initialize.");
   const operations = new OperationsService(prisma);
   const financeActor = await createAdmin();
+
+  await t.test("unpaid QR orders wait for payment and POS confirmation moves them to admin review", { skip: !shouldRunIntegrationCase("qr-payment") }, async () => {
+    const productId = randomUUID();
+    const product = await prisma!.product.create({ data: {
+      id: productId, sku: `CI-${productId.slice(0, 10)}`, name: "QR payment fixture", slug: `ci-qr-payment-${productId}`,
+      kind: "JEWELRY", status: "ACTIVE", price: 1_000, stock: 1,
+    } });
+    productIds.push(product.id);
+    const phone = `09${String(Date.now()).slice(-8)}`;
+    customerPhones.push(phone);
+    const pos365 = {
+      isSyncEnabled: () => false,
+      verifyOrderPayment: async (_code: string, expectedAmount: number) => ({ receivedAmount: expectedAmount, remoteOrderId: "CI-POS-QR-1" }),
+    };
+    const commerce = new CommerceService(prisma!, pos365 as any, {} as any);
+    const unpaid = await commerce.createOrder({
+      customerName: "QR payment fixture", phone, shippingAddress: "PostgreSQL integration fixture",
+      paymentMethod: "BANK_TRANSFER", expectedTotalAmount: 1_000, items: [{ productId, quantity: 1 }],
+    }, undefined, false, `checkout-${randomUUID()}`);
+    orderIds.push(unpaid.id);
+    assert.equal(unpaid.status, "PENDING_PAYMENT");
+    assert.equal(unpaid.payments[0].status, "PENDING");
+    await assert.rejects(() => commerce.updateOrderStatus(unpaid.id, "PENDING_CONFIRMATION", financeActor), /chưa được thanh toán đủ/i);
+
+    const confirmed = await commerce.confirmBankTransferFromPos365(unpaid.id, financeActor, `pos-qr-${randomUUID()}`);
+    assert.equal(confirmed.status, "PENDING_CONFIRMATION");
+    assert.equal(confirmed.payments[0].status, "PAID");
+    assert.equal(Number(confirmed.payments[0].amount), 1_000);
+  });
   const statementDate = new Date().toISOString().slice(0, 10);
 
   await t.test("COD variances close at the wider state width, concurrent close is single-writer, and reversal preserves collected payment evidence", { skip: !shouldRunIntegrationCase("cod") }, async () => {
@@ -293,7 +322,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     await prisma!.order.update({ where: { id: order.id }, data: { customerPhone: phone } });
     const idempotencyKey = `payment-${randomUUID()}`;
     const outcomes = await Promise.allSettled([
-      commerce.recordOrderPayment(order.id, financeActor, { amount: 10_000, method: "BANK_TRANSFER", providerRef: `ci-${randomUUID()}`, note: "Khoản thu kiểm thử race" }, idempotencyKey),
+      commerce.recordOrderPayment(order.id, financeActor, { amount: 10_000, method: "OTHER", providerRef: `ci-${randomUUID()}`, note: "Khoản thu kiểm thử race" }, idempotencyKey),
       commerce.updateOrderStatus(order.id, "CANCELLED", financeActor, "Kiểm thử race giữa hủy và thu tiền"),
     ]);
     assert.ok(outcomes.some((outcome) => outcome.status === "fulfilled"));
@@ -347,7 +376,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     assert.equal(await prisma!.inventoryMovement.count({ where: { reference: cancelFirst.order.code, type: "IN" } }), 1);
 
     const paymentFirst = await makeReservedOrder("Payment then cancel fixture");
-    const payment = { amount: 10_000, method: "BANK_TRANSFER", providerRef: `paid-${randomUUID()}`, note: "Đã nhận chuyển khoản đơn hàng" };
+    const payment = { amount: 10_000, method: "OTHER", providerRef: `paid-${randomUUID()}`, note: "Đã nhận khoản thu đơn hàng" };
     const paymentKey = `paid-payment-${randomUUID()}`;
     await commerce.recordOrderPayment(paymentFirst.order.id, financeActor, payment, paymentKey);
     await commerce.recordOrderPayment(paymentFirst.order.id, financeActor, payment, paymentKey);

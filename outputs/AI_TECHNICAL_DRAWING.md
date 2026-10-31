@@ -1,5 +1,7 @@
 # GEME AI Technical Drawing
 
+> **Trạng thái:** API AI Studio đã được tháo khỏi ứng dụng. Tài liệu này là đặc tả lưu trữ; luồng bản vẽ AI không khả dụng trong runtime hiện tại. Media và dữ liệu lịch sử được giữ nguyên.
+
 The Image Studio has two separate jobs: deterministic Photoroom background finishing and AI technical-illustration drafts. Technical drawing jobs use the existing authenticated NestJS queue and private media storage; the Python AI Core is reachable only on the internal Docker network.
 
 ## Configuration

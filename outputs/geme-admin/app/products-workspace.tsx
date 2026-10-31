@@ -11,6 +11,7 @@ export type AdminProduct = {
   id: string;
   apiId?: string;
   detailsLoaded?: boolean;
+  detailsMissing?: string[];
   name: string;
   price: number;
   sold: number;
@@ -80,7 +81,7 @@ type Props = {
   categories: AdminCategory[];
   materials: MaterialOption[];
   request: (path: string, method?: string, body?: unknown) => Promise<any>;
-  onLoadDetails: (apiId: string) => Promise<void>;
+  onLoadDetails: (apiId: string) => Promise<AdminProduct | void>;
   permissions: string[];
   isAdmin?: boolean;
   onSetNewLabel: (product: AdminProduct, isNew: boolean, newUntil?: string | null) => Promise<AdminProduct>;

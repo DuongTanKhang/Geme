@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { StoreProductGrid } from "./store-product-grid";
+import { useProductListReturnState } from "./use-product-list-return-state";
 import type { StoreProduct, StorePromotion, StoreSalesProduct } from "../lib/store-api";
 
 export type StoneChoice = { id: string; name: string; slug: string; sortOrder: number };
@@ -80,6 +81,12 @@ export function GemstoneFaceCollection({ activeStone = "", activeCut = "", stone
   const [page, setPage] = useState(Math.max(1, Number.isFinite(initialPage) ? initialPage : 1));
   const [filtersOpen, setFiltersOpen] = useState(false);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
+  useProductListReturnState({
+    listId: "gemstone-catalog",
+    state: null,
+    onRestore: () => {},
+    readyKey: `${page}:${selectedStone}:${selectedCut}:${priceRange}:${sort}`,
+  });
 
   const salesBySku = useMemo(() => new Map(sales.map((item) => [item.sku, item.sold])), [sales]);
   const hasSalesData = sales.some((item) => item.sold > 0);

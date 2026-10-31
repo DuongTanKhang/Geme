@@ -23,12 +23,6 @@ const defaultSlides: CollectionBannerSlide[] = [
   { id: "jewelry-5", src: "/assets/collection-jewelry-banner-5.png", alt: "Trâm hoa đá tím trên nền lụa và hoa trắng", position: "69% 50%", eyebrow: "COLLECTION / GEME", title: "Tinh tế trong từng chi tiết", description: "Dấu ấn thủ công và vẻ đẹp thiên nhiên gặp nhau trong những món trang sức GEME.", ctaLabel: "Khám phá trang sức", href: "#san-pham" },
 ];
 
-function collectionHref(value?: string) {
-  const href = value?.trim();
-  if (!href || href === "/san-pham" || href === "./" || href === ".") return "#san-pham";
-  return href;
-}
-
 export function CollectionBanner({ slides = defaultSlides }: { slides?: CollectionBannerSlide[] }) {
   const carouselRef = useRef<HTMLElement>(null);
   const touchStart = useRef<number | null>(null);
@@ -100,7 +94,6 @@ export function CollectionBanner({ slides = defaultSlides }: { slides?: Collecti
           const fallbackSlide = defaultSlides[slide.captionIndex ?? index] || defaultSlides[0];
           const title = slide.title || fallbackSlide.title || "Tất cả sản phẩm";
           const description = slide.description || fallbackSlide.description || "Trang sức bạc tinh tế kết hợp đá quý thiên nhiên, lưu giữ vẻ đẹp riêng trong từng khoảnh khắc.";
-          const ctaLabel = slide.ctaLabel || fallbackSlide.ctaLabel || "Khám phá trang sức";
           return <article
             className="jewelry-collection-banner-slide"
             key={slide.id}
@@ -114,7 +107,6 @@ export function CollectionBanner({ slides = defaultSlides }: { slides?: Collecti
               <span className="jewelry-collection-banner-eyebrow">{slide.eyebrow || fallbackSlide.eyebrow || "COLLECTION / GEME"}</span>
               {isActive ? <h1>{title}</h1> : <h2>{title}</h2>}
               <p>{description}</p>
-              <a className="jewelry-collection-banner-cta" href={collectionHref(slide.href)}>{ctaLabel}<span aria-hidden="true">→</span></a>
               {slideCount > 1 && <div className="jewelry-collection-banner-controls" aria-label="Điều khiển trình chiếu">
                 <button type="button" className="jewelry-banner-step" onClick={() => move(-1)} aria-label="Slide trước">‹</button>
                 <span className="jewelry-banner-count" aria-live="polite">{String(active + 1).padStart(2, "0")} / {String(slideCount).padStart(2, "0")}</span>

@@ -261,7 +261,12 @@ function apiImageUrl(url: string) {
   // them a dedicated same-origin route so the admin can preview them reliably.
   if (url.startsWith("/assets/")) return `/geme-assets${url.slice("/assets".length)}`;
   if (url.startsWith("/images/")) return `/geme-images${url.slice("/images".length)}`;
-  if (url.startsWith("/media/")) return url;
+  // The Admin and API run on separate hosts in staging/production. A bare
+  // `/media/:id` URL resolves against the Admin host, which serves the Next.js
+  // app and returns 404/500 instead of the API asset. Route previews through
+  // the authenticated same-origin Admin proxy so they work on split domains
+  // and in local development alike.
+  if (url.startsWith("/media/")) return `${apiBaseUrl}${url}`;
   return `${apiBaseUrl}/${url.replace(/^\//, "")}`;
 }
 

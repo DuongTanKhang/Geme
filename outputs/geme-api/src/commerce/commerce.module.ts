@@ -7,7 +7,8 @@ import { OperationsController } from "../operations/operations.controller.js";
 import { OperationsService } from "../operations/operations.service.js";
 import { NewArrivalsController } from "./new-arrivals.controller.js";
 import { NewArrivalsService } from "./new-arrivals.service.js";
+import { SePayBankAccountService } from "../sepay/sepay-bank-account.service.js";
 
-@Module({ imports: [Pos365Module, MediaModule], controllers: [CommerceController, NewArrivalsController, OperationsController], providers: [CommerceService, NewArrivalsService, OperationsService], exports: [CommerceService, NewArrivalsService] })
+@Module({ imports: [Pos365Module, MediaModule], controllers: [CommerceController, NewArrivalsController, OperationsController], providers: [CommerceService, NewArrivalsService, OperationsService, SePayBankAccountService], exports: [CommerceService, NewArrivalsService, SePayBankAccountService] })
 export class CommerceModule {}
 

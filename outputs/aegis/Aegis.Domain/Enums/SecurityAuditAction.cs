@@ -15,6 +15,8 @@ namespace Aegis.Domain.Enums
         AccountLocked = 5,
         TwoFactorRequired = 6,
         TwoFactorFailed = 7,
-        TwoFactorSucceeded = 8
+        TwoFactorSucceeded = 8,
+        PasswordResetFailed = 9,
+        PasswordResetSucceeded = 10
     }
 }

@@ -13,6 +13,7 @@ type Props = {
   categories: AdminCategory[];
   materials: MaterialOption[];
   initialCategory?: AdminCategory;
+  onLoadDetails: (apiId: string) => Promise<AdminProduct>;
   onBack: () => void;
   onSave: (product: AdminProduct, publish: boolean) => Promise<AdminProduct | void> | AdminProduct | void;
   onNotify: (message: string) => void;
@@ -78,7 +79,7 @@ const variantMediaKey = (variant: ProductPriceVariant) => JSON.stringify({
   video: String(variant.videoUrl || "").trim(),
 });
 
-export default function ProductCreatePage({ products, categories: categoryRecords, materials, initialCategory, onBack, onSave, onNotify }: Props) {
+export default function ProductCreatePage({ products, categories: categoryRecords, materials, initialCategory, onLoadDetails, onBack, onSave, onNotify }: Props) {
   const initialType: "Trang sức" | "Đá quý" = initialCategory?.kind === "Đá quý" ? "Đá quý" : "Trang sức";
   const initialProductCategory = initialCategory?.usage === "stone"
     ? categoryRecords.find((item) => item.kind === "Đá quý" && item.usage === "product" && item.level === 2)
@@ -128,6 +129,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
   const [inventoryLoading, setInventoryLoading] = useState(true);
   const [inventoryError, setInventoryError] = useState("");
   const [selectedInventoryId, setSelectedInventoryId] = useState("");
+  const [loadingSkuId, setLoadingSkuId] = useState("");
 
   const reloadInventory = async () => {
     setInventoryLoading(true);
@@ -168,12 +170,16 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     }
     return path.join(" / ");
   };
-  const categoryInventoryProducts = matchingInventoryProducts.filter((item) => isGemstone
-    ? item.gemstoneTypeId === product.gemstoneTypeId || item.categoryId === (product.categoryId || selectedProductCategory?.id)
-    : item.categoryId === (product.categoryId || selectedProductCategory?.id) || (!item.categoryId && item.category === product.category));
+  const selectedCategoryId = product.categoryId || selectedProductCategory?.id;
+  const categoryInventoryProducts = matchingInventoryProducts.filter((item) => {
+    // SKU lookup must be scoped to a selected category. Comparing two missing
+    // category IDs used to expose uncategorized inventory while this field was blank.
+    if (!selectedCategoryId) return false;
+    if (isGemstone) return item.gemstoneTypeId === product.gemstoneTypeId || item.categoryId === selectedCategoryId;
+    return item.categoryId === selectedCategoryId || (!item.categoryId && item.category === selectedProductCategory?.name);
+  });
   const availableInventoryMaterialIds = new Set(categoryInventoryProducts.map((item) => item.materialOptionId).filter(Boolean));
   const availableInventoryStoneNames = new Set(categoryInventoryProducts.map((item) => item.subcategory).filter(Boolean));
-  const selectedCategoryId = product.categoryId || selectedProductCategory?.id;
   const selectedSkuRule = inventorySkuRules.find((rule) => rule.categoryId === selectedCategoryId);
   const skuRuleMaterialIds = new Set([...(selectedSkuRule?.materialOptionIds || []), ...(selectedSkuRule?.materialPrefixes?.map((item) => item.materialOptionId) || [])]);
   const availableStoneOptions = materials.filter((item) => {
@@ -228,12 +234,52 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     }));
   };
 
-  const selectInventoryProduct = (apiId: string) => {
+  const selectInventoryProduct = async (apiId: string) => {
     if (!apiId) { clearInventorySelection(); return; }
+    if (!selectedCategoryId) {
+      onNotify("Vui lòng chọn danh mục sản phẩm trước khi chọn SKU.");
+      return;
+    }
     const source = availableInventoryProducts.find((item) => item.apiId === apiId);
     if (!source) return;
-    setSelectedInventoryId(apiId);
-    setProduct({ ...source, image: source.gallery?.[0] ?? source.image ?? "", gallery: source.gallery ?? (source.image ? [source.image] : []) });
+    setInventoryError("");
+    setLoadingSkuId(apiId);
+    try {
+      // /inventory is intentionally a summary endpoint. Load the complete
+      // product record before allowing edits/publication so partial variant and
+      // media data cannot overwrite the stored product.
+      const details = await onLoadDetails(source.apiId!);
+      if (!details.detailsLoaded) {
+        const missing = details.detailsMissing?.length ? details.detailsMissing.join(", ") : "hồ sơ chi tiết từ máy chủ";
+        throw new Error(`SKU ${source.id} chưa tải đủ: ${missing}. Hãy tải lại chi tiết SKU rồi thử lại.`);
+      }
+      const categoryMatches = isGemstone
+        ? details.gemstoneTypeId === product.gemstoneTypeId || details.categoryId === selectedCategoryId
+        : details.categoryId === selectedCategoryId || (!details.categoryId && details.category === selectedProductCategory?.name);
+      if (!categoryMatches) {
+        throw new Error(`SKU ${source.id} không thuộc danh mục đang chọn “${selectedProductCategory?.name || product.category}”. Chọn đúng danh mục hoặc kiểm tra danh mục của SKU trong kho.`);
+      }
+      setSelectedInventoryId(apiId);
+      // Keep the chosen category metadata if a legacy full record lacks it.
+      setProduct({
+        ...details,
+        productType: product.productType,
+        category: details.category || selectedProductCategory?.name || product.category,
+        categoryId: details.categoryId || selectedCategoryId,
+        materialOptionId: details.materialOptionId || product.materialOptionId,
+        gemstoneTypeId: details.gemstoneTypeId || product.gemstoneTypeId,
+        categoryPricingMode: details.categoryPricingMode || product.categoryPricingMode,
+        subcategory: details.subcategory || product.subcategory,
+        image: details.gallery?.[0] ?? details.image ?? "",
+        gallery: details.gallery ?? (details.image ? [details.image] : []),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `Không tải được hồ sơ đầy đủ của SKU ${source.id}.`;
+      setInventoryError(message);
+      onNotify(message);
+    } finally {
+      setLoadingSkuId("");
+    }
   };
 
   const changeProductType = (value: "Trang sức" | "Đá quý") => {
@@ -424,19 +470,21 @@ export default function ProductCreatePage({ products, categories: categoryRecord
   };
 
   const save = async (publish: boolean) => {
-    if (saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)) return;
+    if (saving || loadingSkuId || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)) return;
     if (!selectedInventoryProduct) {
       onNotify("Chọn một SKU đã có trong kho trước khi lưu bài đăng. Muốn tạo SKU mới, hãy dùng mục Nhập hàng.");
       setActiveTab("basic");
       return;
     }
     if (publish && (!selectedInventoryProduct || selectedInventoryProduct.stock <= 0 || selectedInventoryProduct.status === "Đang hoạt động")) {
-      onNotify("Chọn một mã SKU đang còn hàng trong kho và chưa đăng bán để tiếp tục.");
+      const problem = !selectedInventoryProduct ? "chưa chọn SKU" : selectedInventoryProduct.stock <= 0 ? "tồn kho bằng 0" : "SKU đã được đăng bán";
+      onNotify(`Không thể đăng SKU ${selectedInventoryProduct?.id || "(chưa chọn)"}: ${problem}.`);
       setActiveTab("basic");
       return;
     }
-    if (!product.name.trim() || !product.category) {
-      onNotify("Nhập tên sản phẩm và chọn danh mục cấp 2 trước khi lưu.");
+    const missingRequiredFields = [!product.name.trim() ? "tên sản phẩm" : "", !selectedCategoryId ? (isGemstone ? "loại đá cấp 2" : "danh mục sản phẩm cấp 2") : ""].filter(Boolean);
+    if (missingRequiredFields.length) {
+      onNotify(`Không thể ${publish ? "đăng" : "lưu nháp"} SKU ${product.id}: còn thiếu ${missingRequiredFields.join(" và ")}.`);
       setActiveTab("basic");
       return;
     }
@@ -455,8 +503,9 @@ export default function ProductCreatePage({ products, categories: categoryRecord
     }
     saved.price = selectedInventoryProduct!.price;
     saved.originalPrice = selectedInventoryProduct!.originalPrice;
-    if (publish && (hasInventoryVariants ? saved.priceVariants!.some((item) => item.price <= 0) : saved.price <= 0)) {
-      onNotify("SKU chưa có giá trong Hồ sơ sản phẩm. Hãy cập nhật giá theo SKU trước khi đăng.");
+    const missingPriceSkus = hasInventoryVariants ? (saved.priceVariants || []).filter((item) => item.price <= 0).map((item) => item.sku || "SKU con chưa có mã") : saved.price <= 0 ? [saved.id] : [];
+    if (publish && missingPriceSkus.length) {
+      onNotify(`Không thể đăng: chưa có giá bán trong Hồ sơ sản phẩm cho ${missingPriceSkus.join(", ")}.`);
       setActiveTab(hasInventoryVariants ? "variants" : "basic");
       return;
     }
@@ -477,8 +526,8 @@ export default function ProductCreatePage({ products, categories: categoryRecord
         <div><h1>Tạo bài đăng</h1><p>Chọn một SKU đã có trong kho để đưa lên website GEME.</p></div>
       </div>
       <div className="product-create-actions">
-        <button className="button button-quiet" disabled={saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save(false)}>{saving ? "Đang lưu…" : "Lưu nháp"}</button>
-        <button className="button button-primary" disabled={saving || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save(true)}><span>↗</span>{saving ? "Đang lưu…" : uploadingImages || uploadingCoverVideo || uploadingTechnicalVideo ? "Đang tải media…" : "Lưu và đăng"}</button>
+        <button className="button button-quiet" disabled={saving || Boolean(loadingSkuId) || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save(false)}>{saving ? "Đang lưu…" : "Lưu nháp"}</button>
+        <button className="button button-primary" disabled={saving || Boolean(loadingSkuId) || uploadingImages || uploadingCoverVideo || uploadingTechnicalImage || uploadingTechnicalVideo || Object.values(uploadingVariantMedia).some(Boolean)} onClick={() => void save(true)}><span>↗</span>{loadingSkuId ? "Đang tải hồ sơ SKU…" : saving ? "Đang lưu…" : uploadingImages || uploadingCoverVideo || uploadingTechnicalVideo ? "Đang tải media…" : "Lưu và đăng"}</button>
       </div>
     </div>
 
@@ -500,7 +549,7 @@ export default function ProductCreatePage({ products, categories: categoryRecord
                   <label className="create-field"><span>Đá gắn có trong kho</span><select disabled={Boolean(selectedInventoryId)} value={product.materialOptionId ?? ""} onChange={(event) => { const option = materials.find((item) => item.id === event.target.value); update("materialOptionId", option?.id); update("subcategory", option?.name ?? ""); }}><option value="">{availableJewelryMaterials.length ? "Tất cả loại đá" : "Chưa có loại đá trong kho"}</option>{availableJewelryMaterials.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>
                 </>}
               </div>
-              <div className="create-inventory-picker"><div><label className="create-field"><span>Chọn mã SKU còn hàng để đăng bán</span><select value={selectedInventoryId} disabled={inventoryLoading || !availableInventoryProducts.length} onChange={(event) => selectInventoryProduct(event.target.value)}><option value="">{inventoryLoading ? "Đang tải tồn kho…" : availableInventoryProducts.length ? "Chọn mã sản phẩm trong kho" : "Không có mã phù hợp đang còn hàng"}</option>{availableInventoryProducts.map((item) => <option key={item.apiId} value={item.apiId}>{item.id} · {item.name} — còn {item.stock}</option>)}</select></label><small>{selectedInventoryProduct ? `Mã ${selectedInventoryProduct.id} còn ${selectedInventoryProduct.stock} sản phẩm trong kho. Số lượng trên website sẽ đồng bộ từ tồn kho.` : "Chỉ hiển thị mã chưa đăng bán và còn hàng. Chọn mã này sẽ dùng chính bản ghi tồn kho, không tạo SKU trùng."}</small>{inventoryError && <small className="create-inventory-error">{inventoryError}</small>}</div><button type="button" className="button button-quiet" onClick={() => void reloadInventory()} disabled={inventoryLoading}>{inventoryLoading ? "Đang tải…" : "↻ Làm mới kho"}</button></div>
+              <div className="create-inventory-picker"><div><label className="create-field"><span>Chọn mã SKU còn hàng để đăng bán</span><select value={selectedInventoryId} disabled={inventoryLoading || Boolean(loadingSkuId) || !selectedCategoryId || !availableInventoryProducts.length} onChange={(event) => void selectInventoryProduct(event.target.value)}><option value="">{loadingSkuId ? "Đang tải hồ sơ SKU…" : inventoryLoading ? "Đang tải tồn kho…" : !selectedCategoryId ? "Chọn danh mục trước để lọc SKU" : availableInventoryProducts.length ? "Chọn mã sản phẩm trong kho" : "Không có mã phù hợp đang còn hàng"}</option>{availableInventoryProducts.map((item) => <option key={item.apiId} value={item.apiId}>{item.id} · {item.name} — còn {item.stock}</option>)}</select></label><small>{loadingSkuId ? `Đang tải hồ sơ chi tiết cho SKU ${inventoryProducts.find((item) => item.apiId === loadingSkuId)?.id || "đã chọn"}…` : selectedInventoryProduct ? `Mã ${selectedInventoryProduct.id} còn ${selectedInventoryProduct.stock} sản phẩm trong kho. Số lượng trên website sẽ đồng bộ từ tồn kho.` : !selectedCategoryId ? "Chọn danh mục sản phẩm trước; danh sách SKU sẽ chỉ gồm hàng tồn thuộc danh mục đó." : "Chỉ hiển thị mã chưa đăng bán và còn hàng. Chọn mã này sẽ tải hồ sơ đầy đủ trước khi cho phép lưu."}</small>{inventoryError && <small className="create-inventory-error">{inventoryError}</small>}</div><button type="button" className="button button-quiet" onClick={() => void reloadInventory()} disabled={inventoryLoading || Boolean(loadingSkuId)}>{inventoryLoading ? "Đang tải…" : "↻ Làm mới kho"}</button></div>
               <div className="create-field-row create-brand-row">
                 <label className="create-field"><span>Thương hiệu</span><select defaultValue=""><option value="">GEME</option></select></label>
               </div>

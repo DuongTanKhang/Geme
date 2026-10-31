@@ -4,8 +4,9 @@ import { AdminAuthService } from "../admin-auth/admin-auth.service.js";
 import { AdminPermissionService, RequireAdminPermissions, type AdminPermission } from "../admin-auth/admin-permissions.js";
 import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
 import { CommerceService } from "./commerce.service.js";
-import { onlineOrderInput } from "./online-order-input.js";
+import { onlineOrderInput, onlineOrderQuoteInput } from "./online-order-input.js";
 import { MediaAssetsService } from "../media/media-assets.service.js";
+import { SePayBankAccountService } from "../sepay/sepay-bank-account.service.js";
 
 type MediaResponse = { setHeader(name: string, value: string): void; end(data?: Uint8Array): void; redirect(status: number, url: string): unknown };
 type AuthorizationRequest = { headers: { authorization?: string } };
@@ -17,7 +18,7 @@ const admin = (...permissions: AdminPermission[]) => permissions.length
 
 @Controller()
 export class CommerceController {
-  constructor(private readonly commerce: CommerceService, private readonly adminAuth: AdminAuthService, private readonly adminPermissions: AdminPermissionService, private readonly mediaStore: MediaAssetsService) {}
+  constructor(private readonly commerce: CommerceService, private readonly adminAuth: AdminAuthService, private readonly adminPermissions: AdminPermissionService, private readonly mediaStore: MediaAssetsService, private readonly sepayBankAccount: SePayBankAccountService) {}
 
   @Get("categories/public")
   @Header("Cache-Control", "no-store")
@@ -141,14 +142,23 @@ export class CommerceController {
   @Patch("inventory/products/:id/minimum-stock") @admin("inventory.write") minimumStock(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.updateMinimumStock(id, body.minimumStock); }
   @Post("inventory/movements") @admin("inventory.write") createInventoryMovement(@Req() request: AdminRequest, @Body() body: Record<string, any>) { return this.commerce.createInventoryMovement(body, request.adminIdentity); }
 
+  @Get("notifications") @admin("dashboard.read") notifications(@Req() request: AdminRequest, @Query() query: Record<string, string>) { return this.commerce.adminNotifications(request.adminIdentity.id, query); }
+  @Patch("notifications/read-all") @admin("dashboard.read") markAllNotificationsRead(@Req() request: AdminRequest) { return this.commerce.markAllAdminNotificationsRead(request.adminIdentity.id); }
+  @Patch("notifications/:id/read") @admin("dashboard.read") markNotificationRead(@Req() request: AdminRequest, @Param("id") id: string) { return this.commerce.markAdminNotificationRead(id, request.adminIdentity.id); }
+
   @Get("customers") @admin("customers.read") customers(@Query() query: Record<string, string>) { return this.commerce.customers(query); }
   @Post("customers") @admin("customers.write") createCustomer(@Body() body: Record<string, any>) { return this.commerce.saveCustomer(body); }
   @Patch("customers/:id") @admin("customers.write") updateCustomer(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.saveCustomer(body, id); }
 
   @Get("orders") @admin("orders.read") orders(@Query() query: Record<string, string>) { return this.commerce.orders(query); }
+  @Get("orders/:code/payment-status")
+  @Header("Cache-Control", "private, no-store, max-age=0")
+  publicOrderPaymentStatus(@Param("code") code: string, @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.commerce.publicOrderPaymentStatus(code, idempotencyKey);
+  }
   // Guest checkout remains public. POS orders use the separately protected admin route below.
   @Post("orders/quote") quoteStoreOrder(@Body() body: Record<string, any>) {
-    return this.commerce.quoteOrder(onlineOrderInput(body));
+    return this.commerce.quoteOrder(onlineOrderQuoteInput(body));
   }
   @Post("orders") createStoreOrder(@Body() body: Record<string, any>, @Headers("idempotency-key") idempotencyKey?: string) {
     return this.commerce.createOrder(onlineOrderInput(body), undefined, false, idempotencyKey);
@@ -158,6 +168,9 @@ export class CommerceController {
   @Patch("orders/:id/payment") @admin("finance.manage") orderPayment(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.markOrderPaid(id, body.status); }
   @Post("orders/:id/payments") @admin("finance.manage") recordOrderPayment(@Param("id") id: string, @Req() request: AdminRequest, @Body() body: Record<string, any>, @Headers("idempotency-key") idempotencyKey?: string) {
     return this.commerce.recordOrderPayment(id, request.adminIdentity, body, idempotencyKey);
+  }
+  @Post("orders/:id/payments/confirm-pos365") @admin("finance.manage") confirmBankTransferFromPos365(@Param("id") id: string, @Req() request: AdminRequest, @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.commerce.confirmBankTransferFromPos365(id, request.adminIdentity, idempotencyKey);
   }
   @Post("orders/:id/email/retry") @admin("orders.write") retryOrderEmail(@Param("id") id: string) { return this.commerce.retryOrderConfirmationEmail(id); }
 
@@ -223,12 +236,12 @@ export class CommerceController {
       await this.adminPermissions.assertPermissions(identity, ["content.read"]);
     }
     const publicUrl = this.mediaStore.publicDeliveryUrl(asset);
-    // The public media Worker intentionally does not expose the legacy
-    // product-images/ prefix. Serve these public, DB-verified assets through
-    // this endpoint after the isPrivate authorization check above instead of
-    // widening the Worker’s public bucket paths.
-    const requiresApiDelivery = asset.storageProvider === "r2" && asset.objectKey?.startsWith("product-images/");
-    if (publicUrl && !requiresApiDelivery) {
+    // Public SKU image objects are served by the media Worker through a strict
+    // `product-images/{SKU}/{SKU}-{sequence}.{image}` allowlist. Redirecting
+    // here avoids requiring API-side R2 credentials just to render a catalog
+    // image; private assets still pass the authorization check above and are
+    // never given a public delivery URL.
+    if (publicUrl) {
       response.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400");
       return response.redirect(302, publicUrl);
     }
@@ -239,7 +252,12 @@ export class CommerceController {
     response.end(bytes);
   }
 
-  @Get("settings/public") publicSettings() { return this.commerce.publicSettings(); }
+  @Get("settings/public") async publicSettings() {
+    const settings = await this.commerce.publicSettings();
+    const bankQr = await this.sepayBankAccount.getPublicQrSettings();
+    if (bankQr) settings.bankQr = bankQr;
+    return settings;
+  }
   @Get("settings") @admin("settings.manage") settings() { return this.commerce.settings(); }
   @Patch("settings") @admin("settings.manage") saveSettings(@Body() body: Record<string, unknown>) { return this.commerce.saveSettings(body); }
   @Get("reports/storefront") storefrontReport() { return this.commerce.storefrontSalesOverview(); }

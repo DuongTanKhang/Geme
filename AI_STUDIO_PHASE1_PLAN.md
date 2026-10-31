@@ -1,5 +1,7 @@
 # GEME AI Studio — Phase 1 implementation plan
 
+> **Trạng thái:** AI Studio đã được gỡ khỏi ứng dụng đang chạy; đây là kế hoạch triển khai lịch sử. API, worker và AI Core đã được tháo khỏi cấu hình runtime. Bảng dữ liệu và migration cũ được giữ nguyên.
+
 ## Repository findings
 
 - The repository already separates the Next.js storefront, Next.js Admin, NestJS commerce API, ASP.NET Core AEGIS authentication, PostgreSQL, and Redis in Docker Compose.

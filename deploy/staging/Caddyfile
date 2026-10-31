@@ -1,0 +1,25 @@
+{
+	admin off
+}
+
+test.geme.vn {
+	encode zstd gzip
+	@api path /api/v1/*
+	handle @api {
+		reverse_proxy api:4000
+	}
+	handle {
+		reverse_proxy storefront:3000
+	}
+}
+
+testadmin.geme.vn {
+	encode zstd gzip
+	@api path /api/v1/*
+	handle @api {
+		reverse_proxy api:4000
+	}
+	handle {
+		reverse_proxy admin:3001
+	}
+}

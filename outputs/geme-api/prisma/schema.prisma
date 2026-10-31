@@ -281,6 +281,7 @@ enum ProductStatus {
 }
 
 enum OrderStatus {
+  PENDING_PAYMENT
   PENDING_CONFIRMATION
   PROCESSING
   SHIPPING
@@ -361,6 +362,7 @@ model AdminUser {
   updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
   blogPosts    BlogPost[]
   auditLogs    AuditLog[]
+  notificationReads AdminNotificationRead[]
   aiTasks      AiTask[]     @relation("AiTaskRequester")
   aiApprovals  AiApproval[] @relation("AiApprovalReviewer")
   aiImageBatches AiImageBatch[] @relation("AiImageBatchCreator")
@@ -757,6 +759,8 @@ model Order {
   inventoryCommittedAt DateTime?  @map("inventory_committed_at") @db.Timestamptz(3)
   inventoryReleasedAt DateTime?   @map("inventory_released_at") @db.Timestamptz(3)
   inventoryReservationExpiresAt DateTime? @map("inventory_reservation_expires_at") @db.Timestamptz(3)
+  qrPaymentStartedAt DateTime?   @map("qr_payment_started_at") @db.Timestamptz(3)
+  qrPaymentExpiresAt DateTime?   @map("qr_payment_expires_at") @db.Timestamptz(3)
   shippingFee     Decimal         @default(0) @map("shipping_fee") @db.Decimal(14, 0)
   totalAmount     Decimal         @map("total_amount") @db.Decimal(14, 0)
   note            String?         @db.Text
@@ -774,6 +778,7 @@ model Order {
   customer        Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
   items           OrderItem[]
   payments        Payment[]
+  sepayWebhookEvents SePayWebhookEvent[]
   emailOutbox     OrderEmailOutbox[]
   inventoryReservations InventoryReservation[]
   returns         OrderReturn[]
@@ -839,6 +844,34 @@ model Payment {
   @@index([orderId, status])
   @@index([status, paidAt(sort: Desc)])
   @@map("payments")
+}
+
+model SePayWebhookEvent {
+  id              String    @id @default(uuid()) @db.Uuid
+  transactionId   String    @unique @map("transaction_id") @db.VarChar(80)
+  gateway         String?   @db.VarChar(80)
+  accountNumber   String?   @map("account_number") @db.VarChar(40)
+  subAccount      String?   @map("sub_account") @db.VarChar(80)
+  paymentCode     String?   @map("payment_code") @db.VarChar(120)
+  transferType    String    @map("transfer_type") @db.VarChar(12)
+  amount          Decimal   @db.Decimal(14, 0)
+  transactionDate DateTime? @map("transaction_date") @db.Timestamptz(3)
+  referenceCode   String?   @map("reference_code") @db.VarChar(160)
+  content         String?   @db.Text
+  rawPayload      Json      @map("raw_payload") @db.JsonB
+  status          String    @default("RECEIVED") @db.VarChar(20)
+  orderId         String?   @map("order_id") @db.Uuid
+  attempts        Int       @default(0)
+  nextAttemptAt   DateTime  @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  lastError       String?   @map("last_error") @db.VarChar(1000)
+  processedAt     DateTime? @map("processed_at") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  order           Order?    @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextAttemptAt, createdAt])
+  @@index([orderId, createdAt(sort: Desc)])
+  @@map("sepay_webhook_events")
 }
 
 model OrderEmailOutbox {
@@ -1295,6 +1328,33 @@ model AuditLog {
   @@index([adminId, createdAt(sort: Desc)])
   @@index([correlationId])
   @@map("audit_logs")
+}
+
+model AdminNotification {
+  id         String                  @id @default(uuid()) @db.Uuid
+  type       String                  @db.VarChar(40)
+  title      String                  @db.VarChar(160)
+  message    String                  @db.Text
+  entityType String?                 @map("entity_type") @db.VarChar(40)
+  entityId   String?                 @map("entity_id") @db.VarChar(80)
+  createdAt  DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  reads      AdminNotificationRead[]
+
+  @@index([createdAt(sort: Desc)])
+  @@index([entityType, entityId, createdAt(sort: Desc)])
+  @@map("admin_notifications")
+}
+
+model AdminNotificationRead {
+  notificationId String            @map("notification_id") @db.Uuid
+  adminId        String            @map("admin_id") @db.Uuid
+  readAt         DateTime          @default(now()) @map("read_at") @db.Timestamptz(3)
+  notification   AdminNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  admin          AdminUser         @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@id([notificationId, adminId])
+  @@index([adminId, readAt])
+  @@map("admin_notification_reads")
 }
 
 model AiTask {

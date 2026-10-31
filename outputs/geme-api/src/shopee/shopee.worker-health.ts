@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { Redis } from "ioredis";
-import { redisConnectionOptions } from "../ai-studio/ai-studio.queue.js";
+import { redisConnectionOptions } from "../queue/redis-connection.js";
 import { shopeeConfig } from "./shopee.client.js";
 import { SHOPEE_WORKER_HEARTBEAT_KEY } from "./shopee.queue.js";
 

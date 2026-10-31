@@ -12,8 +12,6 @@ const agents = [
   { id: "content", name: "Content Atelier", capability: "Chuẩn bị bản nháp nội dung", status: "SCAFFOLD" },
   { id: "image", name: "GEME Visual Agent", capability: "Tạo bối cảnh theo chỉ dẫn, ghép mask và giữ sản phẩm gốc", status: "PROVIDER_DISABLED" },
   { id: "product", name: "GEME Product Agent", capability: "Tạo bản nháp sản phẩm từ ảnh đã duyệt, luôn cần admin rà soát", status: "PROVIDER_DISABLED" },
-  { id: "sales", name: "GEME Sales Agent", capability: "Tư vấn dựa trên sản phẩm ACTIVE, tồn kho hiện tại và chính sách đã duyệt; chuyển người khi thiếu dữ kiện", status: "PROVIDER_DISABLED" },
-  { id: "marketing", name: "GEME Marketing Agent", capability: "Soạn nội dung theo sản phẩm đã duyệt; chỉ lưu nháp, không tự đăng hoặc gửi", status: "PROVIDER_DISABLED" },
   { id: "catalog-review", name: "Catalog Reviewer", capability: "Đưa đề xuất xuất bản vào trung tâm duyệt", status: "APPROVAL_REQUIRED" },
 ];
 
@@ -35,7 +33,6 @@ export class AiStudioService {
         if (agent.id === "image") return { ...agent, status: process.env.PHOTOROOM_CONFIGURED?.trim() === "true" || Boolean(process.env.PHOTOROOM_API_KEY?.trim()) ? "READY" : "PROVIDER_DISABLED" };
         if (agent.id === "content") return { ...agent, status: process.env.OPENAI_CONFIGURED?.trim() === "true" ? "READY" : "PROVIDER_DISABLED" };
         if (agent.id === "product") return { ...agent, status: process.env.OPENAI_CONFIGURED?.trim() === "true" ? "READY" : "PROVIDER_DISABLED" };
-        if (agent.id === "sales" || agent.id === "marketing") return { ...agent, status: process.env.OPENAI_CONFIGURED?.trim() === "true" ? "READY" : "PROVIDER_DISABLED" };
         return agent;
       }),
       taskCounts,

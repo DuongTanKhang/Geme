@@ -52,6 +52,15 @@ namespace Aegis.Domain.Entities
 
         }
 
+        public void ResetPassword(byte[] passwordHash)
+        {
+            if (passwordHash is null || passwordHash.Length == 0)
+                throw new ArgumentException("Password hash is required.", nameof(passwordHash));
+
+            PasswordHash = passwordHash;
+            ResetFailedLogins();
+        }
+
         public bool IsLocked() => LockoutEnd.HasValue && LockoutEnd > DateTime.UtcNow;
 
         public void Disable()

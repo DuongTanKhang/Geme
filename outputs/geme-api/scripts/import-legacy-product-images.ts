@@ -11,13 +11,14 @@ type ImagePlanRow = {
   sku: string;
   productName: string;
   legacyProductName: string;
-  status: "DRAFT";
+  status: "DRAFT" | "HIDDEN";
   category: string | null;
   gemstone: string | null;
   legacyProductId: string;
   sourceFilename: string;
   sourceObjectKey: string;
   filename: string;
+  matchMethod?: "SKU" | "NAME" | "ID_SKU_RULE";
   role: string;
   isPrimary: boolean;
   objectKey: string;
@@ -43,15 +44,16 @@ const mimeTypeFor = (filename: string) => {
   throw new Error(`Unsupported image extension: ${ext || "none"}`);
 };
 
-function validatePlan(value: unknown): ImagePlanRow[] {
+function validatePlan(value: unknown, attachOnly: boolean): ImagePlanRow[] {
   if (!value || typeof value !== "object" || !Array.isArray((value as ProductImagePlan).images)) throw new Error("Invalid legacy image plan.");
   const images = (value as ProductImagePlan).images;
   if (images.length > 20_000) throw new Error("Legacy image plan is too large.");
   const keys = new Set<string>();
   for (const image of images) {
     if (!image || typeof image !== "object") throw new Error("Invalid image row.");
-    if (!/^[0-9a-f-]{36}$/i.test(image.productId) || !image.sku || image.sku.length > 64 || image.status !== "DRAFT") throw new Error("Invalid product match.");
+    if (!/^[0-9a-f-]{36}$/i.test(image.productId) || !image.sku || image.sku.length > 64 || image.status !== "DRAFT" && !(attachOnly && image.status === "HIDDEN")) throw new Error("Invalid product match.");
     if (!image.sourceFilename || image.sourceFilename !== image.sourceFilename.split(/[\\/]/).at(-1) || image.sourceFilename.length > 240) throw new Error("Unsafe legacy filename.");
+    if (image.matchMethod !== undefined && image.matchMethod !== "SKU" && image.matchMethod !== "NAME" && image.matchMethod !== "ID_SKU_RULE") throw new Error("Invalid legacy-to-current product match method.");
     if (!/^[A-Za-z0-9._-]{1,100}-[1-9][0-9]{0,3}\.(?:jpe?g|png|webp)$/i.test(image.filename)) throw new Error("Image display filename must be SKU-sequence based.");
     const safeSku = image.sku.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 100);
     if (image.sourceObjectKey !== `legacy-product-images/${image.sourceFilename}` || image.objectKey !== `product-images/${safeSku}/${image.filename}`) throw new Error("Unexpected SKU image object key.");
@@ -85,7 +87,7 @@ function privateSourceKey(sku: string, filename: string) {
 }
 
 async function main() {
-  const rows = validatePlan(JSON.parse(await readFile(planPath, "utf8")));
+  const rows = validatePlan(JSON.parse(await readFile(planPath, "utf8")), attachOnly);
   if (!rows.length) throw new Error("No matching product images in plan.");
   const productSkus = [...new Set(rows.map(({ sku }) => sku))];
   const products = await prisma.product.findMany({
@@ -95,7 +97,7 @@ async function main() {
   const productBySku = new Map(products.map((product) => [product.sku.toLocaleUpperCase("en"), product]));
   for (const row of rows) {
     const product = productBySku.get(row.sku.toLocaleUpperCase("en"));
-    if (!product || product.id !== row.productId || product.name !== row.productName || product.status !== "DRAFT") {
+    if (!product || product.id !== row.productId || product.name !== row.productName || product.status !== row.status) {
       throw new Error(`Exact SKU/database verification failed for ${row.sku}; no rows were changed.`);
     }
   }
@@ -181,13 +183,27 @@ async function main() {
 
     if (attachOnly) {
       if (attached) {
+        const sourceMatchCounts = {
+          exactSku: rows.filter(({ matchMethod }) => matchMethod === "SKU").length,
+          exactUniqueName: rows.filter(({ matchMethod }) => matchMethod === "NAME").length,
+          explicitIdSkuRule: rows.filter(({ matchMethod }) => matchMethod === "ID_SKU_RULE").length,
+          unspecified: rows.filter(({ matchMethod }) => matchMethod === undefined).length,
+        };
         await transaction.auditLog.create({
           data: {
             adminId: admin.id,
             action: "LEGACY_PRODUCT_IMAGE_IMPORT",
             entityType: "product_image_migration",
             entityId: [...grouped.keys()][0],
-            after: { products: grouped.size, productImages: attached, matching: "EXACT_SKU", status: "DRAFT_ONLY", aiDraftsQueued: 0 },
+            after: {
+              products: grouped.size,
+              productImages: attached,
+              targetVerification: "EXACT_CURRENT_SKU_PRODUCT_ID_NAME_AND_NON_ACTIVE_STATUS",
+              sourceMatchCounts,
+              statuses: [...new Set(rows.map(({ status }) => status))],
+              nonActiveOnly: true,
+              aiDraftsQueued: 0,
+            },
           },
         });
       }
@@ -348,3 +364,6 @@ try {
 } finally {
   await prisma.$disconnect();
 }
+
+
+

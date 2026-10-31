@@ -1,4 +1,4 @@
-import { after, NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { callAegis, callGemePublicApi, upstreamError } from "../../../lib/customer-session";
 
 type CustomerRecord = {
@@ -51,11 +51,16 @@ export async function POST(request: NextRequest) {
     }
 
     const customersResponse = await callGemePublicApi(`/customers?phone=${encodeURIComponent(phone)}`);
-    if (!customersResponse.ok) {
+    if (customersResponse.status === 401 || customersResponse.status === 403) {
+      // The customer directory is an Admin-only API. Public registration must
+      // continue through Aegis; the account API links an existing profile by
+      // verified email on the customer's first authenticated request.
+    } else if (!customersResponse.ok) {
       return NextResponse.json({ message: "Không kiểm tra được hồ sơ khách hàng. Vui lòng thử lại." }, { status: 503 });
+    } else {
+      const customers = await customersResponse.json() as CustomerRecord[];
+      linkedStoreCustomer = customers.find((customer) => normalizePhone(customer.phone) === phone);
     }
-    const customers = await customersResponse.json() as CustomerRecord[];
-    linkedStoreCustomer = customers.find((customer) => normalizePhone(customer.phone) === phone);
 
     if (linkedStoreCustomer?.authSubjectId) {
       return NextResponse.json({ message: "Số điện thoại này đã có tài khoản GEME. Vui lòng đăng nhập bằng Gmail đã đăng ký." }, { status: 409 });
@@ -107,21 +112,6 @@ export async function POST(request: NextRequest) {
       lifetimeMinutes: registration.lifetimeMinutes ?? 5,
       resendCooldownSeconds: registration.resendCooldownSeconds ?? 60,
     };
-
-    if (!linkedStoreCustomer) {
-      // Account creation and OTP dispatch are the critical path. The API already
-      // repairs a missing customer profile on first login, so sync this profile
-      // after returning instead of making registration wait on a third service.
-      after(async () => {
-        try {
-          await callGemePublicApi("/customers", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: accountName, email, phone, status: "ACTIVE", segment: "Khách mới" }),
-          });
-        } catch { /* First-login profile sync is the recovery path. */ }
-      });
-    }
 
     return NextResponse.json({
       registered: true,

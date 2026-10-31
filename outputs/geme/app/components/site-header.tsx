@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FocusEvent, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { normalizeApiBaseUrl } from "../lib/api-base";
+import { useWishlist } from "./wishlist-provider";
 
 type MenuId = "trang-suc" | "da-quy" | "san-pham";
 
-type MenuStone = { id: string; name: string; slug: string; imageUrl?: string; appliedCategoryIds?: string[]; sortOrder?: number };
+type MenuStone = { id: string; name: string; slug: string; imageUrl?: string; appliedCategoryIds?: string[]; availableCategoryIds?: string[]; sortOrder?: number };
 type MenuCategory = { id: string; name: string; slug: string; kind: "JEWELRY" | "GEMSTONE"; usage: "PRODUCT_CATEGORY" | "GEMSTONE_TYPE"; level: number; parentId?: string | null; status: "ACTIVE" | "INACTIVE"; imageUrl?: string | null; sortOrder?: number };
-type ApiMaterialOption = { id: string; name: string; scope: "JEWELRY" | "GEMSTONE"; kind: "MATERIAL" | "STONE"; active: boolean; imageUrl?: string | null; slug?: string; sortOrder?: number; appliedCategoryIds?: string[] };
+type ApiMaterialOption = { id: string; name: string; scope: "JEWELRY" | "GEMSTONE"; kind: "MATERIAL" | "STONE"; active: boolean; imageUrl?: string | null; slug?: string; sortOrder?: number; appliedCategoryIds?: string[]; availableCategoryIds?: string[] };
 type StoreCartLine = { key: string; productId: string; variantId: string | null; slug: string; name: string; sku: string; price: number; shape?: string | null; quality: string | null; beadSize: string | null; carat?: number | null; gemstoneQuality?: string | null; quantity: number; stock: number };
 const CART_STORAGE_KEY = "geme-cart-v1";
 function readStoreCart(): StoreCartLine[] {
@@ -17,8 +18,9 @@ function readStoreCart(): StoreCartLine[] {
   } catch { return []; }
 }
 const money = (value: number) => `${new Intl.NumberFormat("vi-VN").format(value)} ₫`;
-const categoryShape = (name: string): "diamond" | "ring" | "bracelet" | "circle" | "necklace" | "pendant" | "earrings" => /nhẫn/i.test(name) ? "ring" : /dây chuyền/i.test(name) ? "necklace" : /mặt dây/i.test(name) ? "pendant" : /hoa tai/i.test(name) ? "earrings" : /lắc|vòng/i.test(name) ? "bracelet" : "diamond";
+const categoryShape = (name: string): "diamond" | "ring" | "bracelet" | "circle" | "necklace" | "pendant" | "earrings" => /nhẫn/i.test(name) ? "ring" : /dây chuyền/i.test(name) ? "necklace" : /mặt dây/i.test(name) ? "pendant" : /hoa tai|bông tai/i.test(name) ? "earrings" : /lắc|vòng/i.test(name) ? "bracelet" : "diamond";
 const materialsApiBase = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:4000/api/v1");
+type ProductSearchResult = { id: string; name: string; sku: string; slug: string; imageUrl: string; price: number; isPremiumGemstone: boolean };
 const fallbackStoneImages: Record<string, string> = {
   "Thạch anh tím": "/assets/gemstone-quartz.png", Moonstone: "/assets/gemstone-moonstone.png", "Ngọc bích": "/assets/gemstone-jadeite.png",
   Opal: "/assets/gemstone-opal.png", Ruby: "/assets/gemstone-ruby.png", Tourmaline: "/assets/gemstone-tourmaline.png",
@@ -43,32 +45,46 @@ function CategoryGlyph({ shape }: { shape: "diamond" | "ring" | "bracelet" | "ci
   return <svg {...common}><path d="M8 3v3m8-3v3" /><circle cx="8" cy="10" r="2.4" /><circle cx="16" cy="10" r="2.4" /><path d="M8 12.5v7m8-7v7" /></svg>;
 }
 
-function JewelryTypeColumn({ categories, activeType, onSelect }: { categories: MenuCategory[]; activeType: string | null; onSelect: (type: string) => void }) {
+function JewelryTypeColumn({ categories, activeType, onSelect, selectionMode = false }: { categories: MenuCategory[]; activeType: string | null; onSelect: (type: string) => void; selectionMode?: boolean }) {
   return <div className="mega-column">
     <h3 className="mega-column-title">Theo loại trang sức</h3>
     <div className="mega-category-list">
-      {categories.map((category) => <a href={"/san-pham?danh-muc=" + category.slug} className={"mega-category-link" + (activeType === category.id ? " is-selected" : "")} key={category.id} aria-controls={activeType === category.id ? "jewelry-stone-list" : undefined} aria-expanded={activeType === category.id} onMouseEnter={() => onSelect(category.id)} onFocus={() => onSelect(category.id)}>{category.imageUrl ? <img className="mega-category-thumbnail" src={category.imageUrl} alt="" /> : <CategoryGlyph shape={categoryShape(category.name)} />}<span>{category.name}</span></a>)}
+      {categories.map((category) => <a href={"/san-pham?danh-muc=" + category.slug} className={"mega-category-link" + (activeType === category.id ? " is-selected" : "")} key={category.id} aria-controls={activeType === category.id ? "jewelry-stone-list" : undefined} aria-expanded={activeType === category.id} onMouseEnter={() => onSelect(category.id)} onFocus={() => onSelect(category.id)} onClick={(event) => { if (selectionMode) { event.preventDefault(); event.stopPropagation(); onSelect(category.id); } }}>{category.imageUrl ? <img className="mega-category-thumbnail" src={category.imageUrl} alt="" /> : <CategoryGlyph shape={categoryShape(category.name)} />}<span>{category.name}</span></a>)}
       {!categories.length && <span className="mega-gem-empty">Chưa có danh mục trang sức</span>}
     </div>
   </div>;
 }
 
-function JewelryStoneColumn({ stones, showHeading = true, categorySlug = "" }: { stones: MenuStone[]; showHeading?: boolean; categorySlug?: string }) {
+function JewelryStoneColumn({ stones, showHeading = true, categorySlug = "", mobileCompact = false }: { stones: MenuStone[]; showHeading?: boolean; categorySlug?: string; mobileCompact?: boolean }) {
+  const [showAllMobileStones, setShowAllMobileStones] = useState(false);
+  const [stoneSearch, setStoneSearch] = useState("");
+  const normalizedSearch = stoneSearch.trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("vi");
+  const matchingStones = mobileCompact && normalizedSearch
+    ? stones.filter((stone) => stone.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("vi").includes(normalizedSearch))
+    : stones;
+  const visibleStones = mobileCompact && !showAllMobileStones ? matchingStones.slice(0, 4) : matchingStones;
   return <div className="mega-column" id="jewelry-stone-list">
-    {showHeading && <><h3 className="mega-column-title">Theo loại đá</h3><p className="mega-column-description">Chọn loại đá để xem {categorySlug ? "mẫu vòng tay" : "trang sức"} phù hợp.</p></>}
-    <div className="mega-gem-list">
-      {stones.map((stone) => <a href={`/san-pham?${categorySlug ? `danh-muc=${categorySlug}&` : ""}loai=${encodeURIComponent(stone.slug)}`} className="mega-gem-link" key={stone.id}>{stone.imageUrl ? <img src={stone.imageUrl} alt="" /> : <span className="mega-gem-placeholder" aria-hidden="true">◇</span>}<span>{stone.name}</span></a>)}
+    {showHeading && <><h3 className="mega-column-title">Theo loại đá</h3><p className="mega-column-description">{mobileCompact ? "Chọn loại đá để lọc trang sức phù hợp." : `Chọn loại đá để xem ${categorySlug ? "mẫu vòng tay" : "trang sức"} phù hợp.`}</p></>}
+    {mobileCompact && showAllMobileStones && stones.length > 4 && <label className="mobile-stone-search" onClick={(event) => event.stopPropagation()}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.7"/><path d="m16 16 4.2 4.2"/></svg>
+      <input type="search" value={stoneSearch} onChange={(event) => setStoneSearch(event.target.value)} onClick={(event) => event.stopPropagation()} placeholder="Tìm loại đá" aria-label="Tìm loại đá" />
+    </label>}
+    <div className={`mega-gem-list${mobileCompact ? " mobile-jewelry-stone-list" : ""}${mobileCompact && showAllMobileStones ? " is-expanded" : ""}`} id={mobileCompact ? "mobile-jewelry-stone-options" : undefined}>
+      {visibleStones.map((stone) => <a href={`/san-pham?${categorySlug ? `danh-muc=${categorySlug}&` : ""}loai=${encodeURIComponent(stone.slug)}`} className="mega-gem-link" key={stone.id}>{stone.imageUrl ? <img src={stone.imageUrl} alt="" /> : <span className="mega-gem-placeholder" aria-hidden="true">◇</span>}<span>{stone.name}</span></a>)}
       {!stones.length && <span className="mega-gem-empty">Chưa có loại đá</span>}
-      <a className="mega-view-all" href={categorySlug ? `/san-pham?danh-muc=${categorySlug}` : "/san-pham"}>Xem tất cả <span>›</span></a>
+      {!mobileCompact && <a className="mega-view-all" href={categorySlug ? `/san-pham?danh-muc=${categorySlug}` : "/san-pham"}>Xem tất cả <span>›</span></a>}
+      {mobileCompact && showAllMobileStones && normalizedSearch && !matchingStones.length && <span className="mega-gem-empty">Không tìm thấy loại đá phù hợp</span>}
     </div>
+    {mobileCompact && stones.length > 4 && <button className="mobile-stone-toggle" type="button" aria-expanded={showAllMobileStones} aria-controls="mobile-jewelry-stone-options" onClick={(event) => { event.stopPropagation(); setShowAllMobileStones((expanded) => !expanded); if (showAllMobileStones) setStoneSearch(""); }}>{showAllMobileStones ? "Thu gọn" : `Xem tất cả ${stones.length} loại đá`}<span aria-hidden="true">{showAllMobileStones ? "−" : "＋"}</span></button>}
+    {mobileCompact && <a className="mega-view-all mobile-stone-products-link" href={categorySlug ? `/san-pham?danh-muc=${categorySlug}` : "/san-pham"}>Xem tất cả sản phẩm <span>›</span></a>}
   </div>;
 }
 
-function BraceletCategoryColumn({ categories, activeCategory, onSelect }: { categories: MenuCategory[]; activeCategory: string | null; onSelect: (id: string) => void }) {
+function BraceletCategoryColumn({ categories, activeCategory, onSelect, selectionMode = false }: { categories: MenuCategory[]; activeCategory: string | null; onSelect: (id: string) => void; selectionMode?: boolean }) {
   return <div className="mega-column">
     <h3 className="mega-column-title">Danh mục con</h3>
     <div className="mega-category-list">
-      {categories.map((category) => <a href={"/san-pham?danh-muc=" + category.slug} className={"mega-category-link" + (activeCategory === category.id ? " is-selected" : "")} key={category.id} aria-controls={activeCategory === category.id ? "jewelry-stone-list" : undefined} aria-expanded={activeCategory === category.id} onMouseEnter={() => onSelect(category.id)} onFocus={() => onSelect(category.id)}>{category.imageUrl ? <img className="mega-category-thumbnail" src={category.imageUrl} alt="" /> : <CategoryGlyph shape={categoryShape(category.name)} />}<span>{category.name}</span><span className="mega-sub-chevron">&gt;</span></a>)}
+      {categories.map((category) => <a href={"/san-pham?danh-muc=" + category.slug} className={"mega-category-link" + (activeCategory === category.id ? " is-selected" : "")} key={category.id} aria-controls={activeCategory === category.id ? "jewelry-stone-list" : undefined} aria-expanded={activeCategory === category.id} onMouseEnter={() => onSelect(category.id)} onFocus={() => onSelect(category.id)} onClick={(event) => { if (selectionMode) { event.preventDefault(); event.stopPropagation(); onSelect(category.id); } }}>{category.imageUrl ? <img className="mega-category-thumbnail" src={category.imageUrl} alt="" /> : <CategoryGlyph shape={categoryShape(category.name)} />}<span>{category.name}</span><span className="mega-sub-chevron">&gt;</span></a>)}
     </div>
   </div>;
 }
@@ -120,13 +136,30 @@ function JewelLinks({ showAll = false, categories, stones }: { showAll?: boolean
   const selectedChildren = activeChild ? sortCategories(jewelryProductCategories.filter((item) => item.parentId === activeChild)) : [];
   const showStones = Boolean(activeCategory);
   const stoneCategory = activeChild ? categories.find((item) => item.id === activeChild) : activeCategory;
-  const typeColumn = <JewelryTypeColumn categories={typeCategories} activeType={activeType} onSelect={(id) => { setActiveType(id); setActiveChild(null); }} />;
-  const secondColumn = activeType && children.length > 0 ? <BraceletCategoryColumn categories={children} activeCategory={activeChild} onSelect={setActiveChild} /> : null;
-  const thirdColumn = activeChild && selectedChildren.length > 0 ? <BraceletCategoryColumn categories={selectedChildren} activeCategory={null} onSelect={setActiveChild} /> : null;
+  const descendants = new Set<string>(stoneCategory ? [stoneCategory.id] : []);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const category of jewelryProductCategories) {
+      if (category.parentId && descendants.has(category.parentId) && !descendants.has(category.id)) {
+        descendants.add(category.id);
+        grew = true;
+      }
+    }
+  }
+  const selectType = (id: string) => { setActiveType(id); setActiveChild(null); };
+  const typeColumn = <JewelryTypeColumn categories={typeCategories} activeType={activeType} onSelect={selectType} selectionMode={showAll} />;
+  const secondColumn = activeType && children.length > 0 ? <BraceletCategoryColumn categories={children} activeCategory={activeChild} onSelect={setActiveChild} selectionMode={showAll} /> : null;
+  const thirdColumn = activeChild && selectedChildren.length > 0 ? <BraceletCategoryColumn categories={selectedChildren} activeCategory={null} onSelect={setActiveChild} selectionMode={showAll} /> : null;
   const applicableStones = stoneCategory
-    ? stones.filter((stone) => stone.appliedCategoryIds === undefined || stone.appliedCategoryIds.includes(stoneCategory.id))
+    ? stones.filter((stone) => {
+      const actualCategories = stone.availableCategoryIds ?? [];
+      const configuredCategories = stone.appliedCategoryIds;
+      return actualCategories.some((id) => descendants.has(id))
+        && (configuredCategories === undefined || configuredCategories.some((id) => descendants.has(id)));
+    })
     : [];
-  const stonesColumn = showStones ? <JewelryStoneColumn stones={applicableStones} categorySlug={stoneCategory?.slug || ""} /> : null;
+  const stonesColumn = showStones ? <JewelryStoneColumn key={stoneCategory?.id || "all"} stones={applicableStones} categorySlug={stoneCategory?.slug || ""} mobileCompact={showAll} /> : null;
   if (showAll) return <div className="mega-columns has-selection">{typeColumn}{secondColumn}{thirdColumn}{stonesColumn}</div>;
   return <div className={"mega-selection-layout" + (activeType ? " has-selection" : "")}>
     <MenuCard id="trang-suc" title="TRANG SỨC"><div className="mega-columns">{typeColumn}</div></MenuCard>
@@ -156,7 +189,64 @@ function MenuCard({ id, title, children, className = "" }: { id: MenuId; title: 
   </section>;
 }
 
+function ProductSearchBox({ searchPlaceholder }: { searchPlaceholder: string }) {
+  const [value, setValue] = useState("");
+  const [results, setResults] = useState<ProductSearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const isBlogSearch = searchPlaceholder.toLocaleLowerCase("vi").includes("bài viết");
+
+  useEffect(() => {
+    const query = value.trim();
+    if (query.length < 2 || isBlogSearch) {
+      setResults([]);
+      setLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(`/api/products/search?q=${encodeURIComponent(query)}`, { signal: controller.signal, cache: "no-store" });
+        if (!response.ok) throw new Error("Không tải được kết quả tìm kiếm.");
+        const result = await response.json() as { products?: ProductSearchResult[] };
+        if (!controller.signal.aborted) setResults(Array.isArray(result.products) ? result.products : []);
+      } catch {
+        if (!controller.signal.aborted) setResults([]);
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }, 220);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [value, isBlogSearch]);
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const query = value.trim();
+    if (!query) return;
+    setOpen(false);
+    window.location.assign(isBlogSearch ? `/blog?q=${encodeURIComponent(query)}` : `/san-pham?search=${encodeURIComponent(query)}`);
+  };
+
+  return <form className={`search-box${open ? " is-open" : ""}`} role="search" onSubmit={submit} onBlur={(event) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) window.setTimeout(() => setOpen(false), 120);
+  }}>
+    <button className="search-box-trigger" type="button" aria-label="Mở tìm kiếm" onClick={() => { setOpen(true); inputRef.current?.focus(); }}><HeaderIcon name="search" /></button>
+    <input ref={inputRef} type="search" aria-label={searchPlaceholder} placeholder={searchPlaceholder} value={value} onChange={(event) => { setValue(event.target.value); setOpen(true); }} onFocus={() => setOpen(true)} />
+    {open && value.trim().length >= 2 && !isBlogSearch && <div className="header-search-results" role="listbox" aria-label="Kết quả tìm kiếm">
+      {loading ? <p className="header-search-message">Đang tìm sản phẩm…</p> : results.length ? results.map((product) => <a href={`/san-pham/${encodeURIComponent(product.slug)}`} role="option" aria-selected="false" className="header-search-result" key={product.id}>
+        {product.imageUrl ? <img src={product.imageUrl} alt="" loading="lazy" /> : <span className="header-search-placeholder" aria-hidden="true">◇</span>}
+        <span className="header-search-copy"><strong>{product.name}</strong><small>SKU: {product.sku}</small></span>
+        <span className="header-search-price">{product.isPremiumGemstone ? "Liên hệ" : money(product.price)}</span>
+      </a>) : <p className="header-search-message">Không tìm thấy sản phẩm theo tên hoặc SKU.</p>}
+    </div>}
+  </form>;
+}
+
 export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", activePage }: { searchPlaceholder?: string; activePage?: "blog" | "new-arrivals" | "gemstone" }) {
+  const { favorites } = useWishlist();
+  const favoriteCount = favorites.length;
   const [activeMenu, setActiveMenu] = useState<MenuId | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [jewelryStones, setJewelryStones] = useState<MenuStone[]>([]);
@@ -182,6 +272,7 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
         slug: item.slug || slugifyStone(item.name),
         imageUrl: item.imageUrl || fallbackStoneImages[item.name],
         ...(Array.isArray(item.appliedCategoryIds) ? { appliedCategoryIds: item.appliedCategoryIds } : {}),
+        ...(Array.isArray(item.availableCategoryIds) ? { availableCategoryIds: item.availableCategoryIds } : {}),
         sortOrder: item.sortOrder ?? 0,
       }));
       const order = (left: MenuStone & { sortOrder?: number }, right: MenuStone & { sortOrder?: number }) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name, "vi");
@@ -338,8 +429,8 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
         </div>}
       </nav>
       <div className="header-tools">
-        <label className="search-box"><HeaderIcon name="search" /><input aria-label={searchPlaceholder} placeholder={searchPlaceholder} /></label>
-        <a className="header-icon" href="/tai-khoan?tab=favorites" aria-label="Sản phẩm yêu thích"><HeaderIcon name="heart" /></a>
+        <ProductSearchBox searchPlaceholder={searchPlaceholder} />
+        <a className="header-icon header-wishlist-button" href="/tai-khoan?tab=favorites" aria-label={`Sản phẩm yêu thích${favoriteCount ? `, ${favoriteCount} sản phẩm` : ""}`}><HeaderIcon name="heart" />{favoriteCount > 0 && <span className="header-wishlist-count">{favoriteCount > 99 ? "99+" : favoriteCount}</span>}</a>
         <a className="header-icon" href={accountHref} aria-label={accountName ? `Tài khoản của ${accountName}` : "Đăng nhập hoặc vào tài khoản"}>{accountAvatarUrl ? <img className="header-account-avatar" src={accountAvatarUrl} alt=""/> : <HeaderIcon name="user" />}</a>
         <button className="header-icon header-cart-button" type="button" aria-label={`Giỏ hàng${cartCount ? `, ${cartCount} sản phẩm` : ""}`} aria-haspopup="dialog" aria-expanded={cartOpen} onClick={() => { setCartItems(readStoreCart()); setCartOpen(true); }}><HeaderIcon name="bag" />{cartCount > 0 && <span className="header-cart-count">{cartCount}</span>}</button>
       </div>

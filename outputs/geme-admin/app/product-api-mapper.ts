@@ -13,10 +13,17 @@ export function fromApiProduct(value: Row): AdminProduct {
   const images = Array.isArray(value.images) ? value.images.map((image: Row) => image.url).filter(Boolean) : [];
   const hasFullVariants = Array.isArray(value.variants) && value.variants.every((item: Row) =>
     ["id", "sku", "quality", "shape", "beadSize", "carat", "gemstoneQuality", "price", "originalPrice", "stock", "imageUrls", "videoUrl"].every((key) => Object.hasOwn(item, key)));
-  const detailsLoaded = value.adminSummary !== true
-    && Object.hasOwn(value, "fullDescription")
-    && Object.hasOwn(value, "technicalImageUrl")
-    && hasFullVariants;
+  const detailsMissing: string[] = [];
+  if (!Object.hasOwn(value, "fullDescription")) detailsMissing.push("mô tả chi tiết");
+  if (!Object.hasOwn(value, "technicalImageUrl") || !Object.hasOwn(value, "technicalVideoUrl")) detailsMissing.push("đường dẫn ảnh/video kỹ thuật");
+  if (!Array.isArray(value.variants) || !hasFullVariants) {
+    const incompleteSkus = Array.isArray(value.variants)
+      ? [...new Set(value.variants.filter((item: Row) => !["id", "sku", "quality", "shape", "beadSize", "carat", "gemstoneQuality", "price", "originalPrice", "stock", "imageUrls", "videoUrl"].every((key) => Object.hasOwn(item, key))).map((item: Row) => String(item.sku || "SKU chưa xác định")))]
+      : [];
+    detailsMissing.push(incompleteSkus.length ? `dữ liệu biến thể (${incompleteSkus.join(", ")})` : "dữ liệu biến thể");
+  }
+  if (value.adminSummary === true) detailsMissing.unshift("hồ sơ chi tiết (API đang trả dữ liệu danh sách rút gọn)");
+  const detailsLoaded = detailsMissing.length === 0;
   const variants: ProductPriceVariant[] = Array.isArray(value.variants)
     ? value.variants.map((item: Row) => ({
       id: String(item.id || ""),
@@ -38,6 +45,7 @@ export function fromApiProduct(value: Row): AdminProduct {
     id: String(value.sku),
     apiId: String(value.id),
     detailsLoaded,
+    detailsMissing,
     name: String(value.name || ""),
     price: Number(value.price) || variants.reduce((min, row) => min ? Math.min(min, row.price) : row.price, 0),
     originalPrice: Number(value.originalPrice) || 0,

@@ -70,7 +70,7 @@ function ImageThumb({ src, alt }: { src?: string; alt: string }) {
 }
 
 export default function DashboardWorkspace({ products, orders, promotions, posts, customerCount, report, reportLoading, onOpen, onSelectOrder }: Props) {
-  const recentProducts = products.slice(0, 5);
+  const recentProducts = products.filter((product) => Boolean(product.newLabelActive ?? product.isNew));
   const recentOrders = orders.slice(0, 5);
   const recentPromotions = promotions.slice(0, 5);
   const recentPosts = posts.slice(0, 5);
@@ -126,11 +126,11 @@ export default function DashboardWorkspace({ products, orders, promotions, posts
     </section>
 
     <section className="dashboard-bottom">
-      <article className="panel mini-panel dashboard-list-panel">
-        <div className="panel-heading"><div><h2>Sản phẩm mới cập nhật</h2><small>Hiển thị {recentProducts.length} / {products.length}</small></div><button className="panel-link" onClick={() => onOpen("products")}>Mở danh sách →</button></div>
-        <div className="dashboard-list">{recentProducts.length ? recentProducts.map((product) => <div className="dashboard-list-item" key={product.apiId || product.id}>
+      <article className="panel mini-panel dashboard-list-panel dashboard-products-panel">
+        <div className="panel-heading"><div><h2>Sản phẩm mới cập nhật</h2><small>Hiển thị {recentProducts.length} sản phẩm có tag Mới</small></div><button className="panel-link" onClick={() => onOpen("products")}>Mở danh sách →</button></div>
+        <div className="dashboard-list dashboard-products-list" role="region" aria-label="Sản phẩm có tag Mới" tabIndex={0}>{recentProducts.length ? recentProducts.map((product) => <div className="dashboard-list-item" key={product.apiId || product.id}>
           <ImageThumb src={product.image} alt={product.name}/><div className="dashboard-list-copy"><strong>{product.name}</strong><small>{product.id} · {product.category || product.productType || "Chưa phân loại"}</small><span className="dashboard-list-meta"><Status value={product.status}/><span>Tồn {product.stock}</span></span></div><div className="dashboard-list-value"><strong>{money(product.price)}</strong></div>
-        </div>) : <div className="dashboard-empty">Chưa có sản phẩm.</div>}</div>
+        </div>) : <div className="dashboard-empty">Chưa có sản phẩm gắn tag Mới.</div>}</div>
       </article>
 
       <article className="panel mini-panel dashboard-list-panel">

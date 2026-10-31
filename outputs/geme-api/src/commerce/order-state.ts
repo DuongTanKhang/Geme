@@ -1,6 +1,7 @@
-export type CommerceOrderStatus = "PENDING_CONFIRMATION" | "PROCESSING" | "SHIPPING" | "DELIVERED" | "CANCELLED";
+export type CommerceOrderStatus = "PENDING_PAYMENT" | "PENDING_CONFIRMATION" | "PROCESSING" | "SHIPPING" | "DELIVERED" | "CANCELLED";
 
 const allowedTransitions: Record<CommerceOrderStatus, readonly CommerceOrderStatus[]> = {
+  PENDING_PAYMENT: ["PENDING_CONFIRMATION", "CANCELLED"],
   PENDING_CONFIRMATION: ["PROCESSING", "CANCELLED"],
   PROCESSING: ["SHIPPING", "CANCELLED"],
   // Once handed to delivery, cancellation would incorrectly restore stock.

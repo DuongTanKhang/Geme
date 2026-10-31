@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { NewArrivalsGrouped, type NewArrivalsFilters } from "../components/new-arrivals-grouped";
 import { SiteFooter } from "../components/site-footer";
 import { SiteHeader } from "../components/site-header";
-import { getStoreBanner, getStoreFacets, getStoreJewelryStoneGroups, getStoreNewArrivals, getStoreNewArrivalsGroup, getStorePromotions, getStoreSiteSettings } from "../lib/store-api";
+import { getStoreBanner, getStoreFacets, getStoreJewelryStoneGroups, getStoreNewArrivals, getStoreNewArrivalsGroup, getStoreNewArrivalsMedia, getStorePromotions, getStoreSiteSettings } from "../lib/store-api";
 
 type SearchValue = string | string[] | undefined;
 type SearchParams = Record<string, SearchValue>;
@@ -96,6 +96,7 @@ export default async function NewArrivalsPage({ searchParams }: { searchParams: 
       connected={connected}
       errorMessage={errorMessage}
       heroImage={heroImage}
+      media={getStoreNewArrivalsMedia(site.settings)}
       filters={filters}
       totalProducts={totalProducts}
       groupPageInfo={listResult?.data?.pageInfo}

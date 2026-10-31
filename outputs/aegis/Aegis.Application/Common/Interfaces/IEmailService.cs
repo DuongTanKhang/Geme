@@ -12,6 +12,7 @@ namespace Aegis.Application.Common.Interfaces
         Task SendVerifyEmailAsync(string email, string token);
         Task SendAsync(string to, string subject, string body);
         Task SendRegistrationOtpAsync(string email, string customerName, string otp, TimeSpan lifetime);
+        Task SendPasswordResetOtpAsync(string email, string customerName, string otp, TimeSpan lifetime);
         Task SendOrderConfirmationAsync(OrderConfirmationEmail order);
     }
 }

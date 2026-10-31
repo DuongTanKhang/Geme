@@ -105,6 +105,17 @@ builder.Services.AddRateLimiter(options =>
             AutoReplenishment = true
         });
     });
+    options.AddPolicy("password-reset", context =>
+    {
+        var ip = context.Connection.RemoteIpAddress?.MapToIPv4().ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(ip, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 30,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        });
+    });
     options.AddPolicy("internal-email", context =>
     {
         var ip = context.Connection.RemoteIpAddress?.MapToIPv4().ToString() ?? "unknown";
@@ -217,5 +228,23 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseMiddleware<SessionValidationMiddleware>();
 app.UseAuthorization();
+app.MapGet("/health/ready", async (
+    AegisDbContext database,
+    IConnectionMultiplexer redis,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        if (!await database.Database.CanConnectAsync(cancellationToken))
+            return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+
+        await redis.GetDatabase().PingAsync();
+        return Results.Ok(new { status = "ready" });
+    }
+    catch
+    {
+        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    }
+}).AllowAnonymous();
 app.MapControllers();
 app.Run();

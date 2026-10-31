@@ -4,7 +4,9 @@ import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import { StoreProductCard } from "./store-product-grid";
-import type { StoreCategory, StoreJewelryStoneGroup, StoreNewArrivalsFacets, StoreNewArrivalsGroup, StoreNewArrivalsGroupProductsResponse, StorePromotion, StoreProduct } from "../lib/store-api";
+import { NewArrivalEditorial, NewArrivalsVideo } from "./new-arrivals";
+import { useProductListReturnState } from "./use-product-list-return-state";
+import type { StoreCategory, StoreJewelryStoneGroup, StoreNewArrivalsFacets, StoreNewArrivalsGroup, StoreNewArrivalsGroupProductsResponse, StoreNewArrivalsMedia, StorePromotion, StoreProduct } from "../lib/store-api";
 
 type Sort = "recommended" | "newest" | "best_selling" | "price_asc" | "price_desc";
 type PriceRange = "" | "under2" | "2to5" | "5to10" | "over10" | "custom";
@@ -32,6 +34,7 @@ type Props = {
   connected: boolean;
   errorMessage?: string;
   heroImage: string;
+  media: StoreNewArrivalsMedia;
   filters: NewArrivalsFilters;
   totalProducts: number;
   groupPageInfo?: { groupPage: number; groupPageSize: number; totalGroups: number; hasNextGroup: boolean; nextGroupPage: number | null };
@@ -66,7 +69,7 @@ function toggleValue(value: string, values: string[]) {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
 }
 
-export function NewArrivalsGrouped({ groups, selectedGroup, categories, stoneGroups, facets, promotions, connected, errorMessage, heroImage, filters, totalProducts, groupPageInfo }: Props) {
+export function NewArrivalsGrouped({ groups, selectedGroup, categories, stoneGroups, facets, promotions, connected, errorMessage, heroImage, media, filters, totalProducts, groupPageInfo }: Props) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -82,6 +85,12 @@ export function NewArrivalsGrouped({ groups, selectedGroup, categories, stoneGro
   const [draftMaxPrice, setDraftMaxPrice] = useState(filters.maxPrice == null ? "" : String(filters.maxPrice));
   const [searchText, setSearchText] = useState(filters.search);
   const [errorText, setErrorText] = useState("");
+  useProductListReturnState({
+    listId: "new-arrivals-grouped",
+    state: null,
+    onRestore: () => {},
+    readyKey: `${filters.page}:${filters.groupPage}:${selectedGroup?.products.length || 0}:${groups.length}`,
+  });
 
   useEffect(() => {
     setDraftCategoryIds(filters.categoryIds);
@@ -271,7 +280,19 @@ export function NewArrivalsGrouped({ groups, selectedGroup, categories, stoneGro
           {pending ? <div className="new-arrivals-message" role="status">Đang cập nhật danh sách…</div>
             : !connected ? <div className="new-arrivals-message is-error" role="alert"><p>{errorMessage || "Chưa tải được danh sách sản phẩm. Lỗi kết nối không được xem là danh sách rỗng."}</p><button type="button" onClick={() => router.refresh()}>Thử lại</button></div>
               : shownGroups.length === 0 ? <div className="new-arrivals-message" role="status"><p>{activeFilters ? "Không có sản phẩm phù hợp với bộ lọc này." : "Hiện chưa có sản phẩm đang mang nhãn Mới."}</p>{activeFilters && <button type="button" onClick={clearFilters}>Xóa bộ lọc</button>}</div>
-                : shownGroups.map((group) => <section className="new-arrivals-stone-section" key={group.id || group.slug} aria-labelledby={`stone-${group.slug}`}><header><div><h3 id={`stone-${group.slug}`}>{group.name}</h3><span>{group.total} sản phẩm</span></div>{!selectedGroup && group.hasMore && <a href={groupUrl(group)}>Xem tất cả {group.name} <span aria-hidden="true">→</span></a>}</header><div className="new-arrivals-product-grid">{group.products.map((product: StoreProduct) => <StoreProductCard key={product.id} product={product} promotions={promotions}/>)}</div></section>)}
+                : shownGroups.map((group, groupIndex) => {
+                  const featureGroup = groupIndex === 0 && !activeFilters && !selectedGroup;
+                  return <section className="new-arrivals-stone-section" key={group.id || group.slug} aria-labelledby={`stone-${group.slug}`}>
+                    <header><div><h3 id={`stone-${group.slug}`}>{group.name}</h3><span>{group.total} sản phẩm</span></div>{!selectedGroup && group.hasMore && <a href={groupUrl(group)}>Xem tất cả {group.name} <span aria-hidden="true">→</span></a>}</header>
+                    <div className={`new-arrivals-product-grid${featureGroup ? " new-arrivals-feature-grid" : ""}`}>
+                      {featureGroup && <NewArrivalEditorial media={media}/>}
+                      {group.products.map((product: StoreProduct, productIndex) => featureGroup && productIndex < 4
+                        ? <div className="new-arrivals-feature-product" key={product.id}><StoreProductCard product={product} promotions={promotions}/></div>
+                        : <StoreProductCard key={product.id} product={product} promotions={promotions}/>) }
+                    </div>
+                    {featureGroup && <NewArrivalsVideo media={media}/>}
+                  </section>;
+                })}
         </div>
         {selectedGroup?.pageInfo.hasNextPage && <a className="new-arrivals-load-more" href={pageUrl("page", selectedGroup.pageInfo.nextPage || filters.page + 1)}>Xem thêm sản phẩm <span aria-hidden="true">→</span></a>}
         {!selectedGroup && groupPageInfo?.hasNextGroup && groupPageInfo.nextGroupPage && <a className="new-arrivals-load-more" href={pageUrl("groupPage", groupPageInfo.nextGroupPage)}>Xem thêm nhóm đá <span aria-hidden="true">→</span></a>}

@@ -215,6 +215,7 @@ export type StoreSiteSettings = {
   footerContent?: Record<string, unknown>;
   catalogEditorialPromos?: StoreCatalogEditorialPromo[];
   newArrivalsMedia?: StoreNewArrivalsMedia;
+  bankQr?: { enabled: boolean; bankCode: string; accountNumber: string; accountName: string };
   [key: string]: unknown;
 };
 
@@ -567,8 +568,11 @@ export async function getStoreFacets() {
   };
 }
 
-export async function getStoreCatalog() {
-  const [products, facets] = await Promise.all([getAllStorefrontProducts(), getStoreFacets()]);
+export async function getStoreCatalog(search = "") {
+  const [products, facets] = await Promise.all([
+    search.trim() ? getStoreProducts({ search: search.trim(), limit: 500 }) : getAllStorefrontProducts(),
+    getStoreFacets(),
+  ]);
   return { ...products, ...facets };
 }
 

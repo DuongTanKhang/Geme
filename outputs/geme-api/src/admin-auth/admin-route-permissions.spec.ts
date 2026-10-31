@@ -1,8 +1,10 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { MODULE_METADATA } from "@nestjs/common/constants";
+import { AppModule } from "../app.module.js";
 import { ADMIN_PERMISSION_KEY } from "./admin-permissions.js";
-import { AiStudioController } from "../ai-studio/ai-studio.controller.js";
+import { AiStudioModule } from "../ai-studio/ai-studio.module.js";
 import { SocialController } from "../social/social.controller.js";
 
 function permissions(controller: Function, method: string) {
@@ -20,15 +22,7 @@ test("Social API separates drafting, approval, publishing, and Meta connection p
   }
 });
 
-test("AI Studio API separates draft work, approval, and product-writing side effects", () => {
-  assert.deepEqual(Reflect.getMetadata(ADMIN_PERMISSION_KEY, AiStudioController), ["ai-studio.read"]);
-  for (const method of ["createTask", "cancelTask", "createImageBatch", "uploadImage", "retryImage", "uploadProductAgentImages", "createProductDraftBatch", "updateProductDraft", "cancelProductDraft", "retryProductDraft", "salesAnswer", "createSalesKnowledge", "createSalesKnowledgeRevision", "createMarketingDraft", "updateMarketingDraft", "retryMarketingDraft"]) {
-    assert.deepEqual(permissions(AiStudioController, method), ["ai-studio.draft"], method);
-  }
-  for (const method of ["approve", "reject", "approveImage", "rejectImage", "bulkDecideProductDrafts", "approveProductDraft", "rejectProductDraft", "activateSalesKnowledge", "archiveSalesKnowledge", "approveMarketingDraft", "rejectMarketingDraft"]) {
-    assert.deepEqual(permissions(AiStudioController, method), ["ai-studio.approve"], method);
-  }
-  assert.deepEqual(permissions(AiStudioController, "attachImage"), ["ai-studio.approve", "catalog.content.write"]);
-  assert.deepEqual(permissions(AiStudioController, "attachTechnicalDrawing"), ["ai-studio.approve", "catalog.content.write"]);
-  assert.deepEqual(permissions(AiStudioController, "attachProductDraft"), ["ai-studio.approve", "catalog.content.write"]);
+test("AI Studio API is not registered in the active Nest application", () => {
+  const appImports = Reflect.getMetadata(MODULE_METADATA.IMPORTS, AppModule) as unknown[];
+  assert.equal(appImports.includes(AiStudioModule), false);
 });

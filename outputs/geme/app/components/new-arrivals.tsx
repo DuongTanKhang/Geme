@@ -2,8 +2,9 @@
 
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import { StoreProductCard } from "./store-product-grid";
+import { useProductListReturnState } from "./use-product-list-return-state";
 import { useViewportAutoplayVideo } from "./use-viewport-video";
 import type { StoreCategory, StoreMaterial, StoreNewArrivalsMedia, StoreProduct, StorePromotion } from "../lib/store-api";
 
@@ -69,7 +70,7 @@ function NewArrivalsSkeleton() {
   </div>;
 }
 
-function NewArrivalEditorial({ media }: { media: StoreNewArrivalsMedia }) {
+export function NewArrivalEditorial({ media }: { media: StoreNewArrivalsMedia }) {
   const configuredImage = media.editorialImageUrl.trim();
   const image = isLocalOrPublicMediaUrl(configuredImage) ? configuredImage : "/assets/new-arrivals-hero.png";
   return <article className="new-arrivals-editorial">
@@ -82,7 +83,7 @@ function NewArrivalEditorial({ media }: { media: StoreNewArrivalsMedia }) {
   </article>;
 }
 
-function NewArrivalsVideo({ media }: { media: StoreNewArrivalsMedia }) {
+export function NewArrivalsVideo({ media }: { media: StoreNewArrivalsMedia }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const configuredVideo = media.videoUrl.trim();
   const configuredPoster = media.videoPosterUrl.trim();
@@ -134,14 +135,28 @@ export function NewArrivals({
   const [isMobile, setIsMobile] = useState(false);
   const filterPanelRef = useRef<HTMLDivElement>(null);
   const committedFilters = useRef(filters);
+  const filtersKey = JSON.stringify(filters);
+  const previousFiltersKey = useRef(filtersKey);
+  const restoreVisibleCount = useCallback((saved: { visibleCount: number }) => {
+    if (saved && Number.isFinite(saved.visibleCount)) setVisibleCount(Math.max(PRODUCT_PAGE_SIZE, Math.floor(saved.visibleCount)));
+  }, []);
+  const restoringListRef = useProductListReturnState({
+    listId: "new-arrivals",
+    state: { visibleCount },
+    onRestore: restoreVisibleCount,
+    readyKey: visibleCount,
+  });
 
   useEffect(() => {
     committedFilters.current = filters;
     setDraftCategoryIds(filters.categoryIds);
     setDraftStoneKeys(filters.stoneKeys);
     setDraftPriceRange(filters.priceRange);
-    setVisibleCount(PRODUCT_PAGE_SIZE);
-  }, [filters]);
+    if (previousFiltersKey.current !== filtersKey) {
+      previousFiltersKey.current = filtersKey;
+      if (!restoringListRef.current) setVisibleCount(PRODUCT_PAGE_SIZE);
+    }
+  }, [filters, filtersKey, restoringListRef]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 767px)");

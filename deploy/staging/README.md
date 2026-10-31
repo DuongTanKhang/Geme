@@ -1,0 +1,22 @@
+# GEME staging VPS
+
+This stack is isolated from the development `compose.yaml` and uses only the test hostnames:
+
+- Storefront: `https://test.geme.vn`
+- Admin: `https://testadmin.geme.vn`
+
+It does not change DNS, connect to the production database, or enable Shopee, Viettel Post, or AI providers by default. Shopee can be enabled only with Sandbox credentials and a Sandbox shop; production credentials must not be placed in staging because real shop orders and customer data would be imported into the staging database. POS365 is disabled by default; credentials can be configured for read-only connection checks, while writes remain disabled unless `POS365_ENABLED=true` is explicitly set. PostgreSQL, Redis, and SQL Server stay on private Docker networks. The API and Aegis join a separate outbound network for POS365/R2 and OTP email calls; Aegis and SQL Server ports are not published on the VPS. Caddy obtains and renews HTTPS certificates after both DNS records resolve to this VPS and ports 80/443 are reachable.
+
+## Setup
+
+1. From the repository root, copy `deploy/staging/.env.example` to `.env` on the VPS. Generate fresh values there for `POSTGRES_PASSWORD`, `ADMIN_AUTH_JWT_SECRET`, `GEME_ORDER_EMAIL_API_KEY`, `AEGIS_OTP_HASHING_KEY`, and `AEGIS_JWT_KEY` (`openssl rand -hex 32`). For `AEGIS_SQL_PASSWORD`, use at least 32 random characters and include uppercase, lowercase, a number, and a symbol; avoid semicolons because it is also used in a SQL connection string. Do not reuse production secrets.
+2. Optionally set `ADMIN_EMAIL` and `ADMIN_PASSWORD` to create a staging-only bootstrap Admin. Use a unique password of at least 12 characters.
+3. Set SMTP credentials in `AEGIS_EMAIL_USERNAME`, `AEGIS_EMAIL_PASSWORD`, and `AEGIS_EMAIL_FROM_EMAIL`. For Gmail, use an app password and port `587` with `AEGIS_EMAIL_ENABLE_SSL=true`. Never commit `.env` or paste mail credentials into chat.
+4. `MEDIA_PUBLIC_BASE_URL` defaults to GEME's existing public media Worker for the `geme-media` bucket. Override it only when the staging data uses a different Worker; keep all R2 credentials server-side. Public product-image delivery uses the Worker binding and does not require API-side R2 credentials.
+5. To test POS365 connectivity without writing to POS, set `POS365_API_BASE_URL` to the HTTPS tenant URL, `POS365_USERNAME`, `POS365_PASSWORD`, and the selected `POS365_BRANCH_ID`; leave `POS365_ENABLED=false`. Admin's **Kiểm tra kết nối** only authenticates and reads branch data. Do not enable POS writes on staging unless staging actions and queued jobs should affect the selected POS365 store.
+6. To enable SePay only after the API deployment and migration, follow [`outputs/geme-api/SEPAY_SETUP.md`](../../outputs/geme-api/SEPAY_SETUP.md). The staging callback URL is `https://testadmin.geme.vn/api/v1/integrations/sepay/webhook`; use HMAC-SHA256 and keep the webhook secret plus SePay API token in this VPS `.env`. The token lets GEME retrieve its single active linked bank account for QR without storing bank details in Admin. Leave `SEPAY_WEBHOOK_ENABLED=false` until configured. POS365 payment recording additionally needs `POS365_ENABLED=true` and the correct `POS365_ACCOUNT_ID_BANK_TRANSFER`.
+7. To test Shopee on staging, enter only Sandbox credentials in `.env`, register `https://testadmin.geme.vn` as the app's Test Redirect URL Domain, and use a Sandbox shop. Keep `SHOPEE_ENABLED=false` until ready to authorize that test shop. The callback is `https://testadmin.geme.vn/api/v1/shopee/callback`; the Admin return URL is `https://testadmin.geme.vn/?view=shopee`.
+8. Run `docker compose --env-file .env -f deploy/staging/compose.yaml up -d --build` from the repository root. This stack includes a private Aegis + SQL Server authentication database; SQL Server is not published on the VPS, and customer data is separate from the commerce PostgreSQL database.
+9. Verify `docker compose --env-file .env -f deploy/staging/compose.yaml ps` and `docker compose --env-file .env -f deploy/staging/compose.yaml logs --tail=100 caddy api storefront admin aegis sqlserver`.
+
+The commerce database starts empty apart from the categories created by the Prisma seed. The separate Aegis database runs its own EF migrations at startup.

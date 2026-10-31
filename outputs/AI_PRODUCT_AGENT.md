@@ -1,5 +1,7 @@
 # GEME Product Agent (Phase 3)
 
+> **Trạng thái:** API AI Studio Phase 1–4 đã được tháo khỏi ứng dụng. Tài liệu này chỉ lưu đặc tả lịch sử; Product Agent không khả dụng trong runtime hiện tại. Dữ liệu, migration và ảnh đã lưu được giữ nguyên.
+
 Product Agent is a tab inside Admin → AI Studio. It accepts only private output images from approved Phase 2 `PRODUCT_PHOTO` batches. Technical drawings, unapproved images, and public media assets are rejected.
 
 ## Workflow and safety boundaries

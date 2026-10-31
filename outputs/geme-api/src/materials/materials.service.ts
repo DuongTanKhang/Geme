@@ -71,9 +71,36 @@ export class MaterialsService implements OnModuleInit {
       }),
       this.applicabilityMap(),
     ]);
-    return records.map((record) => Object.prototype.hasOwnProperty.call(map, record.id)
-      ? { ...record, appliedCategoryIds: map[record.id] }
-      : record);
+    const jewelryStoneIds = records
+      .filter((record) => record.scope === "JEWELRY" && record.kind === "STONE" && record.active)
+      .map((record) => record.id);
+    const productCategoryRows = jewelryStoneIds.length
+      ? await this.prisma.product.findMany({
+        where: {
+          kind: "JEWELRY",
+          status: "ACTIVE",
+          materialOptionId: { in: jewelryStoneIds },
+          categoryId: { not: null },
+          category: { is: { kind: "JEWELRY", usage: "PRODUCT_CATEGORY", status: "ACTIVE" } },
+        },
+        select: { materialOptionId: true, categoryId: true },
+        distinct: ["materialOptionId", "categoryId"],
+      })
+      : [];
+    const availableCategories = new Map<string, Set<string>>();
+    for (const row of productCategoryRows) {
+      if (!row.materialOptionId || !row.categoryId) continue;
+      const categoryIds = availableCategories.get(row.materialOptionId) ?? new Set<string>();
+      categoryIds.add(row.categoryId);
+      availableCategories.set(row.materialOptionId, categoryIds);
+    }
+    return records.map((record) => ({
+      ...record,
+      ...(Object.prototype.hasOwnProperty.call(map, record.id) ? { appliedCategoryIds: map[record.id] } : {}),
+      ...(record.scope === "JEWELRY" && record.kind === "STONE"
+        ? { availableCategoryIds: [...(availableCategories.get(record.id) ?? [])] }
+        : {}),
+    }));
   }
 
   events(): Observable<{ data: MaterialOption[] | ""; type?: string }> {

@@ -8,7 +8,7 @@ import { StructuredData } from "../components/structured-data";
 import { absoluteSiteUrl, plainText } from "../lib/seo";
 
 type SearchValue = string | string[] | undefined;
-type ProductsPageProps = { searchParams: Promise<{ loai?: SearchValue; "danh-muc"?: SearchValue; sort?: SearchValue }> };
+type ProductsPageProps = { searchParams: Promise<{ loai?: SearchValue; "danh-muc"?: SearchValue; sort?: SearchValue; search?: SearchValue }> };
 const firstValue = (value: SearchValue) => Array.isArray(value) ? value[0] || "" : value || "";
 
 export async function generateMetadata({ searchParams }: ProductsPageProps): Promise<Metadata> {
@@ -16,7 +16,8 @@ export async function generateMetadata({ searchParams }: ProductsPageProps): Pro
   const categorySlug = firstValue(params["danh-muc"]);
   const stoneSlug = firstValue(params.loai);
   const sort = firstValue(params.sort);
-  const hasFilters = Boolean(categorySlug || stoneSlug || sort);
+  const search = firstValue(params.search).trim();
+  const hasFilters = Boolean(categorySlug || stoneSlug || sort || search);
   let category: Awaited<ReturnType<typeof getStoreCatalog>>["categories"][number] | undefined;
   let stoneName = "";
   if (categorySlug || stoneSlug) {
@@ -35,9 +36,10 @@ export default async function ProductsPage({ searchParams }: ProductsPageProps) 
   const stoneSlug = Array.isArray(params.loai) ? params.loai[0] : params.loai;
   const categorySlug = Array.isArray(params["danh-muc"]) ? params["danh-muc"][0] : params["danh-muc"];
   const sortParam = Array.isArray(params.sort) ? params.sort[0] : params.sort;
+  const search = firstValue(params.search).trim().slice(0, 100);
   const bestSelling = sortParam === "best-selling";
   const [catalog, promotions, site, sales, featured] = await Promise.all([
-    getStoreCatalog(),
+    getStoreCatalog(search),
     getStorePromotions(),
     getStoreSiteSettings(),
     bestSelling ? getStoreSalesOverview() : Promise.resolve({ products: [], connected: false }),
@@ -68,7 +70,7 @@ export default async function ProductsPage({ searchParams }: ProductsPageProps) 
       <SiteHeader />
       <CollectionBanner slides={selectedCategory?.bannerUrl ? [{ id: `category-${selectedCategory.id}`, src: selectedCategory.bannerUrl, alt: selectedCategory.name, eyebrow: "COLLECTION / GEME", title: selectedCategory.name, description: selectedCategory.description || "Trang sức bạc tinh tế kết hợp đá quý thiên nhiên, lưu giữ vẻ đẹp riêng trong từng khoảnh khắc.", ctaLabel: "Khám phá trang sức", href: "#san-pham", position: "68% 50%" }] : configuredCollectionSlides.length ? configuredCollectionSlides : undefined} />
       <div className="catalog-breadcrumb catalog-breadcrumb-inline"><a href="/">Trang chủ</a><span>/</span><span>Sản phẩm</span><span>/</span><span>{selectedCategory?.name || "Tất cả sản phẩm"}</span></div>
-      <OpalCollection key={`${categorySlug ?? ""}-${stoneSlug ?? ""}-${sortParam ?? ""}`} products={products} categories={categories} materials={materials} connected={connected} promotions={promotions.promotions} editorialPromos={editorialPromos} initialCategoryId={selectedCategory?.id} initialCategory={selectedCategory?.name} initialStoneSlug={selectedStone?.slug} initialStoneName={selectedStone?.name} initialSort={bestSelling ? "best-selling" : "newest"} bestSellerOrder={bestSellerOrder} />
+      <OpalCollection key={`${categorySlug ?? ""}-${stoneSlug ?? ""}-${sortParam ?? ""}-${search}`} products={products} categories={categories} materials={materials} connected={connected} promotions={promotions.promotions} editorialPromos={editorialPromos} initialCategoryId={selectedCategory?.id} initialCategory={selectedCategory?.name} initialStoneSlug={selectedStone?.slug} initialStoneName={selectedStone?.name} initialSearch={search} initialSort={bestSelling ? "best-selling" : "newest"} bestSellerOrder={bestSellerOrder} />
     </main>
     <SiteFooter variant="catalog" />
   </>;

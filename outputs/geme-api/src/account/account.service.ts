@@ -165,11 +165,22 @@ export class AccountService {
         status: true,
         shippingProvider: true,
         shippingMethod: true,
+        qrPaymentStartedAt: true,
+        qrPaymentExpiresAt: true,
         trackingCode: true,
         carrierStatusName: true,
         carrierStatusAt: true,
         totalAmount: true,
         placedAt: true,
+        payments: {
+          select: {
+            method: true,
+            status: true,
+            amount: true,
+            refunds: { select: { amount: true } },
+          },
+          orderBy: { createdAt: "asc" },
+        },
         items: {
           select: {
             productName: true,
@@ -184,19 +195,34 @@ export class AccountService {
       take: 100,
     });
 
-    return orders.map((order) => ({
-      id: order.code,
-      date: order.placedAt,
-      status: order.status,
-      shippingProvider: order.shippingProvider,
-      shippingMethod: order.shippingMethod,
-      trackingCode: order.trackingCode,
-      carrierStatusName: order.carrierStatusName,
-      carrierStatusAt: order.carrierStatusAt,
-      title: order.items.map((item) => `${item.productName} × ${item.quantity}`).join(", "),
-      image: order.items[0]?.product?.images[0]?.url ?? null,
-      price: Number(order.totalAmount),
-    }));
+    return orders.map((order) => {
+      const captured = order.payments
+        .filter((payment) => ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"].includes(payment.status))
+        .reduce((sum, payment) => sum + Number(payment.amount), 0);
+      const refunded = order.payments.reduce((sum, payment) => sum + payment.refunds.reduce((refundSum, refund) => refundSum + Number(refund.amount), 0), 0);
+      const total = Number(order.totalAmount);
+      const paymentStatus = captured >= total
+        ? refunded >= captured ? "REFUNDED" : refunded > 0 ? "PARTIALLY_REFUNDED" : "PAID"
+        : captured > 0 ? "PARTIALLY_PAID" : order.payments.some((payment) => payment.status === "FAILED") ? "FAILED" : "PENDING";
+      return {
+        id: order.code,
+        date: order.placedAt,
+        status: order.status,
+        shippingProvider: order.shippingProvider,
+        shippingMethod: order.shippingMethod,
+        trackingCode: order.trackingCode,
+        carrierStatusName: order.carrierStatusName,
+        carrierStatusAt: order.carrierStatusAt,
+        title: order.items.map((item) => `${item.productName} × ${item.quantity}`).join(", "),
+        image: order.items[0]?.product?.images[0]?.url ?? null,
+        price: total,
+        paymentMethod: order.payments[0]?.method ?? "",
+        paymentStatus,
+        paymentBalance: Math.max(0, total - captured),
+        qrPaymentStartedAt: order.qrPaymentStartedAt,
+        paymentExpiresAt: order.qrPaymentExpiresAt,
+      };
+    });
   }
 
   async favorites(identity: AegisCustomerIdentity) {
@@ -252,9 +278,25 @@ export class AccountService {
         throw new ConflictException("Email khách hàng đã được liên kết với tài khoản khác.");
       }
       try {
-        return await this.prisma.customer.update({
-          where: { id: byEmail.id },
-          data: { authSubjectId: identity.id, name: identity.name },
+        return await this.prisma.$transaction(async (tx) => {
+          const linked = await tx.customer.updateMany({
+            where: { id: byEmail.id, authSubjectId: null },
+            data: { authSubjectId: identity.id, name: identity.name },
+          });
+          if (linked.count !== 1) {
+            const current = await tx.customer.findUnique({ where: { id: byEmail.id } });
+            if (current?.authSubjectId === identity.id) return current;
+            throw new ConflictException("Email khách hàng đã được liên kết với tài khoản khác.");
+          }
+          const customer = await tx.customer.findUniqueOrThrow({ where: { id: byEmail.id } });
+          await tx.adminNotification.create({ data: {
+            type: "CUSTOMER_REGISTERED",
+            title: "Khách hàng mới đăng ký",
+            message: `${customer.name} (${customer.email || email}) vừa liên kết tài khoản GEME.`,
+            entityType: "CUSTOMER",
+            entityId: customer.id,
+          } });
+          return customer;
         });
       } catch (error: any) {
         if (error?.code === "P2002") {
@@ -266,8 +308,18 @@ export class AccountService {
     }
 
     try {
-      return await this.prisma.customer.create({
-        data: { authSubjectId: identity.id, name: identity.name, email, status: "ACTIVE" },
+      return await this.prisma.$transaction(async (tx) => {
+        const customer = await tx.customer.create({
+          data: { authSubjectId: identity.id, name: identity.name, email, status: "ACTIVE" },
+        });
+        await tx.adminNotification.create({ data: {
+          type: "CUSTOMER_REGISTERED",
+          title: "Khách hàng mới đăng ký",
+          message: `${customer.name} (${customer.email || email}) vừa tạo hồ sơ GEME.`,
+          entityType: "CUSTOMER",
+          entityId: customer.id,
+        } });
+        return customer;
       });
     } catch (error: any) {
       if (error?.code === "P2002") {

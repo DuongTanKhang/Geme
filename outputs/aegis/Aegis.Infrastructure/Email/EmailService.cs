@@ -129,6 +129,50 @@ Cần hỗ trợ? Liên hệ {_options.SupportEmail}
         return SendInternalAsync(email, "Mã xác nhận tài khoản GEME", html, plainText);
     }
 
+    public Task SendPasswordResetOtpAsync(string email, string customerName, string otp, TimeSpan lifetime)
+    {
+        var safeName = string.IsNullOrWhiteSpace(customerName)
+            ? "bạn"
+            : WebUtility.HtmlEncode(customerName.Trim());
+        var safeOtp = WebUtility.HtmlEncode(otp);
+        var safeSupportEmail = WebUtility.HtmlEncode(_options.SupportEmail);
+        var durationMinutes = Math.Max(1, (int)Math.Ceiling(lifetime.TotalMinutes));
+        var duration = $"{durationMinutes} phút";
+        var year = DateTime.Now.Year;
+
+        var html = $$"""
+            <!doctype html>
+            <html lang="vi">
+              <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>Đặt lại mật khẩu GEME</title></head>
+              <body style="margin:0;padding:24px 12px;background:#FAFAF7;color:#103F35;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.6">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:600px;margin:0 auto;border:1px solid #D9E2DD;background:#FAFAF7">
+                  <tr><td style="padding:28px 32px 24px;border-bottom:1px solid #D9E2DD"><div style="font-family:Georgia,'Times New Roman',serif;font-size:28px;letter-spacing:5px;color:#103F35">✦ GEME</div><div style="margin-top:2px;font-size:11px;letter-spacing:1.2px;color:#63766F">Natural Gemstones · Fine Jewelry · For You</div></td></tr>
+                  <tr><td style="padding:28px 32px 32px"><h1 style="margin:0 0 18px;font-family:Georgia,'Times New Roman',serif;font-size:28px;font-weight:normal;line-height:1.25;color:#103F35">Đặt lại mật khẩu</h1><p style="margin:0 0 12px">Chào {{safeName}},</p><p style="margin:0 0 20px">Nhập mã xác nhận dưới đây để đặt mật khẩu mới cho tài khoản GEME:</p><table role="presentation" cellspacing="0" cellpadding="0" border="0" style="width:100%;margin:0 0 18px;background:#EAF1EC;border:1px solid #D3E1D9"><tr><td align="center" style="padding:17px 12px;font-family:Arial,Helvetica,sans-serif;font-size:34px;font-weight:bold;letter-spacing:8px;line-height:1.3;color:#103F35;white-space:nowrap">{{safeOtp}}</td></tr></table><p style="margin:0 0 12px">Mã có hiệu lực trong {{duration}}, chỉ dùng một lần.</p><p style="margin:0 0 22px">Nếu bạn không yêu cầu đặt lại mật khẩu, hãy bỏ qua email này và không chia sẻ mã với bất kỳ ai.</p><p style="margin:0">Đội ngũ GEME</p></td></tr>
+                  <tr><td style="padding:16px 32px;border-top:1px solid #D9E2DD;font-size:13px;color:#63766F">Cần hỗ trợ? Liên hệ {{safeSupportEmail}}<br>© {{year}} GEME. All rights reserved.</td></tr>
+                </table>
+              </body>
+            </html>
+            """;
+
+        var greeting = string.IsNullOrWhiteSpace(customerName) ? "Chào bạn," : $"Chào {customerName.Trim()},";
+        var plainText = $"""
+            GEME
+            Đặt lại mật khẩu
+
+            {greeting}
+
+            Nhập mã xác nhận sau để đặt mật khẩu mới: {otp}
+            Mã có hiệu lực trong {duration}, chỉ dùng một lần.
+
+            Nếu bạn không yêu cầu đặt lại mật khẩu, hãy bỏ qua email này và không chia sẻ mã với bất kỳ ai.
+
+            Cần hỗ trợ? Liên hệ {_options.SupportEmail}
+            © {year} GEME. All rights reserved.
+            """;
+
+        return SendInternalAsync(email, "Mã xác nhận đặt lại mật khẩu GEME", html, plainText);
+    }
+
     public Task SendOrderConfirmationAsync(OrderConfirmationEmail order)
     {
         var safeName = string.IsNullOrWhiteSpace(order.CustomerName)

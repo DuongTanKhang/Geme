@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service.js";
 
 type Pos365Status = {
@@ -923,6 +923,27 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     const matches = this.rows(page).filter((row) => String(row.Code || "") === code);
     if (matches.length > 1) throw new Error(`POS365 trả về nhiều đơn cùng mã ${code}; cần kiểm tra thủ công.`);
     return matches[0] || null;
+  }
+
+  async verifyOrderPayment(codeInput: string, expectedAmountInput: number) {
+    if (!this.isSyncEnabled()) throw new BadRequestException("POS365 chưa được cấu hình để đối soát thanh toán.");
+    const code = String(codeInput || "").trim();
+    const expectedAmount = Number(expectedAmountInput);
+    if (!code || !Number.isSafeInteger(expectedAmount) || expectedAmount <= 0) throw new BadRequestException("Mã đơn hoặc tổng tiền cần đối soát không hợp lệ.");
+
+    const config = this.readConfiguration();
+    const sessionId = await this.authenticate(config);
+    const remote = await this.findOrder(config, sessionId, code);
+    if (!remote) throw new ConflictException(`Không tìm thấy đơn ${code} trên POS365. Chưa ghi nhận đã thanh toán.`);
+    if (String(remote.Code || "") !== code || Number(remote.BranchId) !== config.branchId) {
+      throw new ConflictException(`Đơn ${code} trên POS365 không khớp mã đơn hoặc chi nhánh đã cấu hình.`);
+    }
+    if (Number(remote.Status) === 3) throw new ConflictException(`Đơn ${code} đã bị hủy trên POS365.`);
+    const receivedAmount = Number(remote.TotalPayment);
+    if (!Number.isSafeInteger(receivedAmount) || receivedAmount !== expectedAmount) {
+      throw new ConflictException(`POS365 đang ghi nhận ${Number.isSafeInteger(receivedAmount) ? `${receivedAmount.toLocaleString("vi-VN")} ₫` : "không có số tiền hợp lệ"}; cần đúng ${expectedAmount.toLocaleString("vi-VN")} ₫. GEME chưa đánh dấu đã thanh toán.`);
+    }
+    return { orderCode: code, remoteOrderId: String(remote.Id), receivedAmount };
   }
 
   private async processPendingReceipts(onlyReceiptId?: string) {

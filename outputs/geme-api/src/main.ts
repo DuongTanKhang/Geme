@@ -6,7 +6,7 @@ import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import helmet from "helmet";
 import { AppModule } from "./app.module.js";
 
-type RateLimitRequest = { method: string; path: string; ip?: string; socket: { remoteAddress?: string } };
+type RateLimitRequest = { method: string; path: string; url?: string; ip?: string; socket: { remoteAddress?: string } };
 type RateLimitResponse = {
   setHeader(name: string, value: string): unknown;
   status(code: number): RateLimitResponse;
@@ -30,7 +30,7 @@ async function bootstrap() {
   const readLimit = requestsPerMinute("API_READ_REQUESTS_PER_MINUTE", 30_000, 100);
   const writeLimit = requestsPerMinute("API_WRITE_REQUESTS_PER_MINUTE", 120, 20);
   const maxTrackedClients = 50_000;
-  const requestWindows = new Map<string, { startedAt: number; reads: number; writes: number; adminLogins: number; guestOrders: number; accountOrders: number; contactMessages: number }>();
+  const requestWindows = new Map<string, { startedAt: number; reads: number; writes: number; adminLogins: number; guestOrders: number; accountOrders: number; contactMessages: number; sepayWebhooks: number }>();
   let requestCount = 0;
   app.use((request: RateLimitRequest, response: RateLimitResponse, next: () => void) => {
     const path = request.path || "";
@@ -56,7 +56,7 @@ async function bootstrap() {
         const leastRecentlyUsed = requestWindows.keys().next().value;
         if (leastRecentlyUsed !== undefined) requestWindows.delete(leastRecentlyUsed);
       }
-      window = { startedAt: now, reads: 0, writes: 0, adminLogins: 0, guestOrders: 0, accountOrders: 0, contactMessages: 0 };
+      window = { startedAt: now, reads: 0, writes: 0, adminLogins: 0, guestOrders: 0, accountOrders: 0, contactMessages: 0, sepayWebhooks: 0 };
       requestWindows.set(client, window);
     } else {
       // Keep the least-recently-used client first so the table remains bounded
@@ -70,8 +70,9 @@ async function bootstrap() {
     const isGuestOrder = request.method === "POST" && path === "/api/v1/orders";
     const isAccountOrder = request.method === "POST" && path === "/api/v1/account/orders";
     const isContactMessage = request.method === "POST" && path === "/api/v1/contact";
-    const count = isAdminLogin ? ++window.adminLogins : isGuestOrder ? ++window.guestOrders : isAccountOrder ? ++window.accountOrders : isContactMessage ? ++window.contactMessages : isRead ? ++window.reads : ++window.writes;
-    const limit = isAdminLogin ? 10 : isGuestOrder ? 5 : isAccountOrder ? 600 : isContactMessage ? 5 : isRead ? readLimit : writeLimit;
+    const isSepayWebhook = request.method === "POST" && path === "/api/v1/integrations/sepay/webhook";
+    const count = isAdminLogin ? ++window.adminLogins : isGuestOrder ? ++window.guestOrders : isAccountOrder ? ++window.accountOrders : isContactMessage ? ++window.contactMessages : isSepayWebhook ? ++window.sepayWebhooks : isRead ? ++window.reads : ++window.writes;
+    const limit = isAdminLogin ? 10 : isGuestOrder ? 5 : isAccountOrder ? 600 : isContactMessage ? 5 : isSepayWebhook ? 1200 : isRead ? readLimit : writeLimit;
     if (count > limit) {
       response.setHeader("Retry-After", String(Math.max(1, Math.ceil((window.startedAt + 60_000 - now) / 1000))));
       response.status(429).json({ statusCode: 429, message: "Có quá nhiều yêu cầu từ kết nối này. Vui lòng thử lại sau." });
@@ -83,7 +84,15 @@ async function bootstrap() {
 
   // Apply limits before parsing request bodies so rejected traffic cannot
   // consume JSON parser memory or CPU first.
-  app.useBodyParser("json", { limit: "12mb" });
+  app.useBodyParser("json", {
+    limit: "12mb",
+    verify: (request, _response, buffer) => {
+      const requestPath = String(request.url ?? "").split("?", 1)[0];
+      if (requestPath === "/api/v1/integrations/sepay/webhook") {
+        (request as typeof request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
+      }
+    },
+  });
   app.useBodyParser("urlencoded", { extended: true, limit: "12mb" });
 
   const configuredOrigins = process.env.CORS_ORIGINS?.trim();

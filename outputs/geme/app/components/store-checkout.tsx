@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { formatStorePrice } from "../lib/store-format";
 import { normalizeApiBaseUrl } from "../lib/api-base";
+import { getVietQrImageUrl, getVietQrTransferInfo, type BankQrSettings } from "../lib/bank-qr";
+import { PaymentCountdown } from "./payment-countdown";
 
 type CheckoutLine = {
   key: string;
@@ -52,7 +54,11 @@ export function StoreCheckout() {
   const [ready, setReady] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [order, setOrder] = useState<{ code: string; totalAmount: number } | null>(null);
+  const [order, setOrder] = useState<{ code: string; totalAmount: number; paymentMethod: string; paymentExpiresAt: string | null; idempotencyKey: string; paymentStatus: string } | null>(null);
+  const [bankQr, setBankQr] = useState<BankQrSettings>({ enabled: false, bankCode: "", accountNumber: "", accountName: "" });
+  const [bankQrLoaded, setBankQrLoaded] = useState(false);
+  const [bankQrImageFailed, setBankQrImageFailed] = useState(false);
+  const [qrPaymentExpired, setQrPaymentExpired] = useState(false);
   const [quote, setQuote] = useState<{ signature: string; value: CheckoutQuote } | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState("");
@@ -76,6 +82,25 @@ export function StoreCheckout() {
     setLines(directLines.length ? directLines : read(CART_KEY));
     setReady(true);
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    void fetch(`${API_BASE}/settings/public`, { cache: "no-store", signal: AbortSignal.timeout(8000) })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Không tải được thông tin thanh toán.");
+        return response.json() as Promise<{ bankQr?: Partial<BankQrSettings> }>;
+      })
+      .then((settings) => {
+        if (!alive) return;
+        const value = settings.bankQr && typeof settings.bankQr === "object" ? settings.bankQr : {};
+        setBankQr({ enabled: value.enabled === true, bankCode: String(value.bankCode || ""), accountNumber: String(value.accountNumber || ""), accountName: String(value.accountName || "") });
+      })
+      .catch(() => { /* The QR option stays unavailable until public bank details can be loaded. */ })
+      .finally(() => { if (alive) setBankQrLoaded(true); });
+    return () => { alive = false; };
+  }, []);
+
+  const bankQrReady = bankQr.enabled && /^[a-z0-9.-]{2,20}$/i.test(bankQr.bankCode.trim()) && /^[0-9]{6,20}$/.test(bankQr.accountNumber.trim()) && Boolean(bankQr.accountName.trim());
 
   useEffect(() => {
     let alive = true;
@@ -193,7 +218,9 @@ export function StoreCheckout() {
         if (response.status >= 400 && response.status < 500 && response.status !== 429) setQuoteRefreshVersion((version) => version + 1);
         throw new Error(Array.isArray(result.message) ? result.message.join(" ") : result.message || "Không thể tạo đơn hàng.");
       }
-      setOrder({ code: result.code, totalAmount: Number(result.totalAmount) || total });
+      setOrder({ code: result.code, totalAmount: Number(result.totalAmount) || total, paymentMethod, paymentExpiresAt: result.qrPaymentExpiresAt ? String(result.qrPaymentExpiresAt) : null, idempotencyKey, paymentStatus: "PENDING" });
+      setQrPaymentExpired(false);
+      setBankQrImageFailed(false);
       try {
         const saved = JSON.parse(sessionStorage.getItem(idempotencyStoreKey) || "{}") as Record<string, string>;
         delete saved[fingerprint];
@@ -210,8 +237,44 @@ export function StoreCheckout() {
     }
   }
 
+  const orderCode = order?.code ?? "";
+  const orderIdempotencyKey = order?.idempotencyKey ?? "";
+  const orderPaymentMethod = order?.paymentMethod ?? "";
+  const orderPaymentStatus = order?.paymentStatus ?? "";
+  useEffect(() => {
+    if (!orderCode || !orderIdempotencyKey || orderPaymentMethod !== "BANK_TRANSFER_QR" || orderPaymentStatus === "PAID") return;
+    let stopped = false;
+    let checking = false;
+    const checkPayment = async () => {
+      if (stopped || checking) return;
+      checking = true;
+      try {
+        const response = await fetch(`${API_BASE}/orders/${encodeURIComponent(orderCode)}/payment-status`, {
+          cache: "no-store",
+          headers: { "Idempotency-Key": orderIdempotencyKey, "Cache-Control": "no-cache" },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) return;
+        const result = await response.json() as { paymentStatus?: string };
+        if (!stopped && result.paymentStatus === "PAID") {
+          setOrder((current) => current?.code === orderCode ? { ...current, paymentStatus: "PAID" } : current);
+          setQrPaymentExpired(false);
+        }
+      } catch { /* Keep showing the QR and retry while the order is unpaid. */ }
+      finally { checking = false; }
+    };
+    void checkPayment();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void checkPayment();
+    }, 3000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [orderCode, orderIdempotencyKey, orderPaymentMethod, orderPaymentStatus]);
+
   if (!ready) return <main className="checkout-page"><p>Đang tải giỏ hàng…</p></main>;
-  if (order) return <main className="checkout-page"><section className="checkout-success" role="status"><span>✓</span><h1>Đặt hàng thành công</h1><p>Mã đơn hàng <strong>{order.code}</strong></p><p>Tổng tiền: <strong>{formatStorePrice(order.totalAmount)}</strong></p>{accountSignedIn && <a href="/tai-khoan?tab=orders">Xem đơn hàng và trạng thái</a>}<a href="/san-pham">Tiếp tục mua sắm</a></section></main>;
+  if (order) {
+    const qrImageUrl = order.paymentMethod === "BANK_TRANSFER_QR" ? getVietQrImageUrl(bankQr, order.totalAmount, order.code) : null;
+    return <main className="checkout-page"><section className="checkout-success" role="status"><span>✓</span><h1>Đặt hàng thành công</h1><p>Mã đơn hàng <strong>{order.code}</strong></p><p>Tổng tiền: <strong>{formatStorePrice(order.totalAmount)}</strong></p>{order.paymentMethod === "BANK_TRANSFER_QR" && (order.paymentStatus === "PAID" ? <div className="checkout-payment-success" role="status"><strong>✓　Thanh toán thành công</strong><p>GEME đã nhận đủ tiền. Đơn hàng đang chờ GEME xác nhận.</p></div> : <div className="checkout-bank-qr"><h2>Quét mã để chuyển khoản</h2><PaymentCountdown expiresAt={order.paymentExpiresAt} onExpire={() => setQrPaymentExpired(true)} />{qrPaymentExpired ? <p role="alert">Đã hết 15 phút thanh toán QR. Đơn đang được tự hủy và hoàn tồn kho.</p> : <>{qrImageUrl && !bankQrImageFailed ? <img src={qrImageUrl} alt={`Mã VietQR thanh toán đơn ${order.code}`} onError={() => setBankQrImageFailed(true)} /> : <p role="alert">Không tải được mã QR. Vui lòng chuyển khoản thủ công với nội dung <strong>{getVietQrTransferInfo(order.code, bankQr.bankCode)}</strong> hoặc liên hệ GEME.</p>}<p>Ngân hàng: <strong>{bankQr.bankCode}</strong></p><p>Số tài khoản: <strong>{bankQr.accountNumber}</strong></p><p>Chủ tài khoản: <strong>{bankQr.accountName}</strong></p><p>Nội dung: <strong>{getVietQrTransferInfo(order.code, bankQr.bankCode)}</strong></p><p>QR có hiệu lực 15 phút và đã điền sẵn tổng đơn <strong>{formatStorePrice(order.totalAmount)}</strong>. Trang sẽ tự cập nhật và ẩn mã QR khi GEME nhận đủ tiền.</p></>}</div>)}{accountSignedIn && <a href="/tai-khoan?tab=orders">Xem đơn hàng và trạng thái</a>}<a href="/san-pham">Tiếp tục mua sắm</a></section></main>;
+  }
 
   return <main className="checkout-page">
     <nav className="detail-breadcrumb" aria-label="Đường dẫn"><a href="/">Trang chủ</a><span>/</span><span>Giỏ hàng</span><span>/</span><span>Đặt hàng</span></nav>
@@ -240,7 +303,8 @@ export function StoreCheckout() {
         <label>Họ và tên<input required value={customer.name} onChange={(event) => { customerTouched.current.add("name"); setCustomer({ ...customer, name: event.target.value }); }} autoComplete="name" /></label>
         <div className="checkout-form-row"><label>Số điện thoại<input required type="tel" value={customer.phone} onChange={(event) => { customerTouched.current.add("phone"); setCustomer({ ...customer, phone: event.target.value }); }} autoComplete="tel" /></label><label>Email<input required type="email" value={customer.email} onChange={(event) => { customerTouched.current.add("email"); setCustomer({ ...customer, email: event.target.value }); }} autoComplete="email" /></label></div>
         <label>Địa chỉ nhận hàng<textarea required rows={3} value={customer.address} onChange={(event) => { customerTouched.current.add("address"); setCustomer({ ...customer, address: event.target.value }); }} autoComplete="street-address" /></label>
-        <label>Phương thức thanh toán<select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option value="COD">Thanh toán khi nhận hàng</option><option value="BANK_TRANSFER">Chuyển khoản</option></select></label>
+        <label>Phương thức thanh toán<select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option value="COD">Thanh toán khi nhận hàng</option><option value="BANK_TRANSFER">Chuyển khoản thủ công</option><option value="BANK_TRANSFER_QR" disabled={!bankQrLoaded || !bankQrReady}>Quét mã QR VietQR · tự điền số tiền{!bankQrReady ? " (chưa cấu hình)" : ""}</option></select></label>
+        {paymentMethod === "BANK_TRANSFER_QR" && <p className="checkout-payment-note">QR được tạo riêng theo đúng tổng tiền và mã đơn. GEME sẽ xác nhận sau khi đối soát giao dịch.</p>}
         <label>Ghi chú<textarea rows={2} value={customer.note} onChange={(event) => { customerTouched.current.add("note"); setCustomer({ ...customer, note: event.target.value }); }} /></label>
         {error && <p className="checkout-error" role="alert">{error}</p>}
         <button className="checkout-submit" type="submit" disabled={submitting || quoteLoading || !activeQuote}>{submitting ? "ĐANG GỬI ĐƠN…" : quoteLoading || !activeQuote ? "ĐANG KIỂM TRA GIÁ…" : `XÁC NHẬN ĐẶT HÀNG · ${formatStorePrice(total)}`}</button>

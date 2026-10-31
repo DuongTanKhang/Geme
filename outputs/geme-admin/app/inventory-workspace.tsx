@@ -35,6 +35,196 @@ const stoneNameOf = (product: InventoryProduct) => product.kind === "GEMSTONE"
   : product.materialOption?.kind === "STONE" ? product.materialOption.name : "";
 const tabTitle: Record<Tab, string> = { stock: "Tồn kho sản phẩm", inbound: "Nhập hàng", receipts: "Phiếu nhập", outbound: "Xuất kho", history: "Lịch sử tồn kho" };
 
+function normalizeReceiptProductSearch(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").trim();
+}
+
+function ReceiptProductPicker({ products, selectedProduct, selectedVariant, onSelect, label }: {
+  products: InventoryProduct[];
+  selectedProduct?: InventoryProduct;
+  selectedVariant?: Variant;
+  onSelect: (product: InventoryProduct, variant?: Variant) => void;
+  label: string;
+}) {
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+  const normalizedSearch = normalizeReceiptProductSearch(search);
+  const matches = useMemo<Array<{ product: InventoryProduct; variant?: Variant }>>(() => {
+    if (!normalizedSearch) return [] as Array<{ product: InventoryProduct; variant?: Variant }>;
+
+    const skuMatches: Array<{ product: InventoryProduct; variant?: Variant; exact: boolean }> = [];
+    for (const product of products) {
+      const productSku = normalizeReceiptProductSearch(product.sku);
+      if (productSku.includes(normalizedSearch)) skuMatches.push({ product, exact: productSku === normalizedSearch });
+      for (const variant of product.variants) {
+        const variantSku = normalizeReceiptProductSearch(variant.sku || "");
+        if (variantSku && variantSku.includes(normalizedSearch)) skuMatches.push({ product, variant, exact: variantSku === normalizedSearch });
+      }
+    }
+    if (skuMatches.length) return skuMatches.sort((a, b) => Number(b.exact) - Number(a.exact)).slice(0, 20);
+
+    return products.filter((product) => normalizeReceiptProductSearch([
+      product.name,
+      product.category?.name,
+      stoneNameOf(product),
+      ...product.variants.map(variantLabel),
+    ].join(" ")).includes(normalizedSearch)).slice(0, 20).map((product) => ({ product }));
+  }, [normalizedSearch, products]);
+
+  const selectedSku = selectedVariant?.sku || selectedProduct?.sku;
+  const selectMatch = (match: { product: InventoryProduct; variant?: Variant }) => {
+    onSelect(match.product, match.variant);
+    setSearch("");
+    setOpen(false);
+  };
+
+  return <div className="receipt-product-picker">
+    <input
+      type="search"
+      role="combobox"
+      aria-label={label}
+      aria-expanded={open}
+      aria-autocomplete="list"
+      value={open ? search : selectedProduct ? `${selectedProduct.name} · ${selectedSku}` : search}
+      placeholder="Tìm theo SKU, tên sản phẩm, loại đá…"
+      readOnly={Boolean(selectedProduct) && !open}
+      aria-haspopup="listbox"
+      onFocus={() => {
+        if (!open) {
+          setSearch("");
+          setOpen(true);
+        }
+      }}
+      onChange={(event) => { setSearch(event.target.value); setOpen(true); }}
+      onBlur={() => window.setTimeout(() => { setOpen(false); setSearch(""); }, 120)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") setOpen(false);
+        if (event.key === "Enter" && open && matches[0]) {
+          event.preventDefault();
+          selectMatch(matches[0]);
+        }
+      }}
+    />
+    {selectedProduct && !open && <small className="receipt-product-picker-meta">SKU {selectedSku || selectedProduct.sku} · {[categoryForReceiptProduct(selectedProduct), stoneNameOf(selectedProduct)].filter(Boolean).join(" · ")}</small>}
+    {open && <div className="receipt-product-picker-results" role="listbox" aria-label="Kết quả sản phẩm">
+      {!normalizedSearch ? <p>Nhập SKU hoặc tên để lọc sản phẩm trong kho.</p> : matches.length ? <>
+        {matches.map((match) => {
+          const sku = match.variant?.sku || match.product.sku;
+          return <button key={`${match.product.id}:${match.variant?.id || "product"}`} type="button" role="option" aria-selected="false" onMouseDown={(event) => event.preventDefault()} onClick={() => selectMatch(match)}>
+            <strong>{match.product.name}</strong>
+            <small>SKU {sku}{match.variant ? ` · ${variantLabel(match.variant)}` : ""}</small>
+            <small>{[categoryForReceiptProduct(match.product), stoneNameOf(match.product), `Tồn ${money(match.variant?.stock ?? match.product.stock)}`].filter(Boolean).join(" · ")}</small>
+          </button>;
+        })}
+        {matches.length === 20 && <small className="receipt-product-picker-limit">Đang hiển thị tối đa 20 kết quả. Hãy nhập thêm ký tự để lọc chính xác hơn.</small>}
+      </> : <p>Không tìm thấy sản phẩm hoặc SKU phù hợp.</p>}
+    </div>}
+  </div>;
+}
+
+type ReceiptProductMatch = { product: InventoryProduct; variant?: Variant };
+
+function ExistingReceiptProductDialog({ products, onClose, onSelect }: {
+  products: InventoryProduct[];
+  onClose: () => void;
+  onSelect: (product: InventoryProduct, variant?: Variant) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [kindFilter, setKindFilter] = useState<"" | InventoryProduct["kind"]>("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [stoneFilter, setStoneFilter] = useState("");
+  const normalizedSearch = normalizeReceiptProductSearch(search);
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  const kindProducts = useMemo(
+    () => products.filter((product) => !kindFilter || product.kind === kindFilter),
+    [kindFilter, products],
+  );
+  const categoryOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    for (const product of kindProducts) {
+      options.set(product.category?.id || "__uncategorized__", product.category?.name || "Chưa có danh mục");
+    }
+    return [...options].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "vi"));
+  }, [kindProducts]);
+  const categoryProducts = useMemo(
+    () => kindProducts.filter((product) => !categoryFilter || (product.category?.id || "__uncategorized__") === categoryFilter),
+    [categoryFilter, kindProducts],
+  );
+  const stoneOptions = useMemo(() => {
+    const options = new Set<string>();
+    for (const product of categoryProducts) options.add(stoneNameOf(product) || product.materialOption?.name || "__no_stone__");
+    return [...options].sort((a, b) => a.localeCompare(b, "vi"));
+  }, [categoryProducts]);
+  const filteredProducts = useMemo(
+    () => categoryProducts.filter((product) => !stoneFilter || (stoneNameOf(product) || product.materialOption?.name || "__no_stone__") === stoneFilter),
+    [categoryProducts, stoneFilter],
+  );
+  const matches = useMemo<ReceiptProductMatch[]>(() => {
+    const result: Array<ReceiptProductMatch & { exactSku: boolean; prefixSku: boolean }> = [];
+    for (const product of filteredProducts) {
+      const productSku = normalizeReceiptProductSearch(product.sku);
+      const productText = normalizeReceiptProductSearch([
+        product.name,
+        product.category?.name,
+        stoneNameOf(product),
+        product.materialOption?.name,
+        ...product.variants.map(variantLabel),
+      ].join(" "));
+      const productSkuMatch = Boolean(normalizedSearch && productSku.includes(normalizedSearch));
+      const productTextMatch = Boolean(normalizedSearch && productText.includes(normalizedSearch));
+      if (product.variants.length) {
+        for (const variant of product.variants) {
+          const variantSku = normalizeReceiptProductSearch(variant.sku || "");
+          const variantSkuMatch = Boolean(normalizedSearch && variantSku.includes(normalizedSearch));
+          if (normalizedSearch && !variantSkuMatch && !productSkuMatch && !productTextMatch) continue;
+          result.push({ product, variant, exactSku: Boolean(normalizedSearch && variantSku === normalizedSearch), prefixSku: Boolean(normalizedSearch && variantSku.startsWith(normalizedSearch)) });
+        }
+      } else {
+        if (normalizedSearch && !productSkuMatch && !productTextMatch) continue;
+        result.push({ product, exactSku: Boolean(normalizedSearch && productSku === normalizedSearch), prefixSku: Boolean(normalizedSearch && productSku.startsWith(normalizedSearch) && productSku !== normalizedSearch) });
+      }
+    }
+    if (normalizedSearch) result.sort((a, b) => Number(b.exactSku) - Number(a.exactSku) || Number(b.prefixSku) - Number(a.prefixSku));
+    return result.slice(0, 60).map(({ product, variant }) => ({ product, variant }));
+  }, [filteredProducts, normalizedSearch]);
+
+  return <div className="inventory-modal-backdrop receipt-existing-product-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="inventory-modal receipt-existing-product-modal" role="dialog" aria-modal="true" aria-labelledby="existingReceiptProductTitle">
+      <header><div><span className="inventory-eyebrow">NHẬP KHO</span><h2 id="existingReceiptProductTitle">Chọn sản phẩm có sẵn</h2><p>Lọc theo nhóm, danh mục, loại đá hoặc tìm trực tiếp bằng tên và SKU.</p></div><button type="button" onClick={onClose} aria-label="Đóng">×</button></header>
+      <label className="receipt-existing-product-search"><span>Tìm theo tên hoặc SKU</span><input autoFocus type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Ví dụ: NSSREM110, nhẫn Topaz…"/></label>
+      <div className="receipt-existing-product-filters">
+        <label>Nhóm sản phẩm<select value={kindFilter} onChange={(event) => { setKindFilter(event.target.value as "" | InventoryProduct["kind"]); setCategoryFilter(""); setStoneFilter(""); }}><option value="">Tất cả nhóm</option><option value="JEWELRY">Trang sức</option><option value="GEMSTONE">Đá quý</option></select></label>
+        <label>Danh mục<select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setStoneFilter(""); }}><option value="">Tất cả danh mục</option>{categoryOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>
+        <label>Loại đá / chất liệu<select value={stoneFilter} onChange={(event) => setStoneFilter(event.target.value)}><option value="">Tất cả loại đá / chất liệu</option>{stoneOptions.map((name) => <option key={name} value={name}>{name === "__no_stone__" ? "Chưa phân loại" : name}</option>)}</select></label>
+      </div>
+      <div className="receipt-existing-product-results-heading"><strong>Kết quả phù hợp</strong><span>{matches.length}{matches.length === 60 ? "+ SKU" : " SKU"}</span></div>
+      <div className="receipt-existing-product-results" role="listbox" aria-label="Danh sách sản phẩm có sẵn">
+        {matches.length ? matches.map(({ product, variant }) => {
+          const sku = variant?.sku || product.sku;
+          const stock = variant?.stock ?? product.stock;
+          return <button key={`${product.id}:${variant?.id || "product"}`} type="button" role="option" aria-selected="false" onClick={() => onSelect(product, variant)}>
+            <span><strong>{product.name}</strong><small>{variant ? variantLabel(variant) : productKindLabel(product)} · {categoryForReceiptProduct(product)}</small></span>
+            <span><b>{sku}</b><small>{stoneNameOf(product) || product.materialOption?.name || "Chưa phân loại"} · Tồn {money(stock)}</small></span>
+          </button>;
+        }) : <p>{normalizedSearch ? "Không tìm thấy sản phẩm hoặc SKU phù hợp với bộ lọc." : "Không có sản phẩm phù hợp với bộ lọc hiện tại."}</p>}
+      </div>
+      <footer><span>Chọn một SKU để thêm vào phiếu nhập.</span><button type="button" className="button button-quiet" onClick={onClose}>Đóng</button></footer>
+    </section>
+  </div>;
+}
+
+function categoryForReceiptProduct(product: InventoryProduct) {
+  return product.category?.name || (product.kind === "GEMSTONE" ? "Đá quý" : "Trang sức");
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBaseUrl}/${path}`, { ...init, cache: "no-store", headers: { "Content-Type": "application/json", ...init?.headers } });
   if (!response.ok) {
@@ -513,6 +703,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const [note, setNote] = useState("");
   const [additionalNote, setAdditionalNote] = useState("");
   const [lines, setLines] = useState<ReceiptLine[]>([]);
+  const [existingProductPickerOpen, setExistingProductPickerOpen] = useState(false);
   const [documents, setDocuments] = useState<ReceiptDocument[]>([]);
   const [documentBusy, setDocumentBusy] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -674,6 +865,10 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
 
   const updateLine = (key: string, update: Partial<ReceiptLine>) => setLines((current) => current.map((line) => line.key === key ? { ...line, ...update } : line));
   const addEmptyLine = () => setLines((current) => [...current, { key: crypto.randomUUID(), quantity: 1, unitCost: 0 }]);
+  const addExistingProductLine = (product: InventoryProduct, variant?: Variant) => {
+    setLines((current) => [...current, { key: crypto.randomUUID(), productId: product.id, variantId: variant?.id, quantity: 1, unitCost: 0 }]);
+    setExistingProductPickerOpen(false);
+  };
   const createInventoryCategory = async () => {
     const name = newCategoryName.trim();
     const prefix = newCategoryPrefix.trim().toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "");
@@ -1035,7 +1230,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
           <label>Người nhập<input value={receiver} onChange={(event) => setReceiver(event.target.value)} placeholder="Tên người nhập"/></label><label>Kho nhập <b>*</b><select value={warehouseName} onChange={(event) => setWarehouseName(event.target.value)}><option>Kho chính</option></select></label><label>Hình thức thanh toán<select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option>Chuyển khoản</option><option>Tiền mặt</option><option>Công nợ</option></select></label>
         </div><label className="receipt-note-field">Ghi chú<textarea rows={2} maxLength={500} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Nhập ghi chú cho phiếu nhập..."/><small>{note.length}/500</small></label></section>
 
-        <section className="receipt-card receipt-items-card"><div className="receipt-card-heading"><div><h2>Danh sách sản phẩm nhập</h2><p>Tạo mặt hàng mới hoặc chọn sản phẩm đã có trong kho.</p></div><div className="receipt-card-actions"><button className="button button-quiet" onClick={() => setRuleModal(true)}>⚙ Quy tắc mã hàng</button><button className="button button-quiet" onClick={addEmptyLine}>＋ Chọn hàng có sẵn</button><button className="button button-primary" onClick={() => { setNewSkuSequence(""); setNewSkuPreview(""); setNewSkuError(""); setNewSkuLookup(null); setNewBangleShape(""); setNewBangleQuality(""); setNewBangleSizeMm(""); setNewProductModal(true); }}>＋ Thêm sản phẩm mới</button><label className="button button-quiet receipt-file-import">⇧ Thêm từ CSV<input type="file" accept=".csv,.txt,text/csv" onChange={(event) => {
+        <section className="receipt-card receipt-items-card"><div className="receipt-card-heading"><div><h2>Danh sách sản phẩm nhập</h2><p>Tạo mặt hàng mới hoặc chọn sản phẩm đã có trong kho.</p></div><div className="receipt-card-actions"><button type="button" className="button button-quiet" onClick={() => setRuleModal(true)}>⚙ Quy tắc mã hàng</button><button type="button" className="button button-quiet" onClick={() => setExistingProductPickerOpen(true)}>＋ Chọn hàng có sẵn</button><button type="button" className="button button-primary" onClick={() => { setNewSkuSequence(""); setNewSkuPreview(""); setNewSkuError(""); setNewSkuLookup(null); setNewBangleShape(""); setNewBangleQuality(""); setNewBangleSizeMm(""); setNewProductModal(true); }}>＋ Thêm sản phẩm mới</button><label className="button button-quiet receipt-file-import">⇧ Thêm từ CSV<input type="file" accept=".csv,.txt,text/csv" onChange={(event) => {
             const file = event.target.files?.[0]; event.currentTarget.value = ""; if (!file) return;
             void importReceiptCsv(file).catch((cause) => onNotify(cause instanceof Error ? cause.message : "Không thể đọc file CSV."));
           }}/></label></div></div>
@@ -1046,7 +1241,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
             const productSku = variant?.sku || product?.sku || line.newProduct?.sku || "—";
             const classification = line.newProduct ? `${categoryOptions.find((item) => item.id === line.newProduct?.categoryId)?.name || "—"} · ${line.newProduct.materialOptionId ? materialOptions.find((material) => material.id === line.newProduct?.materialOptionId)?.name || "Loại đá" : "—"}` : product ? `${categoryForProduct(product)} · ${materialForProduct(product)}` : "—";
             const newVariants = line.newProduct?.variants || [];
-            return <tr key={line.key}><td>{index + 1}</td><td>{line.newProduct ? <span className="receipt-new-item"><strong>{productName}</strong><small>{line.newProduct.standalonePremiumGemstone ? `SKU đã đối chiếu · ${line.newProduct.lengthCm} × ${line.newProduct.widthCm} cm` : "Mã do người nhập chọn"}</small>{newVariants.length > 0 && <details className="receipt-variant-summary"><summary>{newVariants.length} biến thể · xem số lượng và SKU</summary>{newVariants.map((item) => <span key={`${item.quality}:${item.beadSize}`}><b>{[item.quality !== "Kích thước" ? item.quality : "", item.beadSize].filter(Boolean).join(" · ")}</b><small>{money(item.quantity)} cái · SKU {item.sku || "Mã sẽ được tạo khi lưu"} · Đơn giá nhập {money(item.unitCost)} ₫/cái</small></span>)}</details>}</span> : <select aria-label={`Sản phẩm dòng ${index + 1}`} value={line.productId || ""} onChange={(event) => { const selected = products.find((item) => item.id === event.target.value); updateLine(line.key, { productId: selected?.id, variantId: selected?.variants[0]?.id }); }}><option value="">Chọn sản phẩm</option>{products.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}</td><td><strong className="receipt-sku">{productSku}</strong></td><td>{classification}{product?.variants.length ? <select aria-label={`Phiên bản dòng ${index + 1}`} value={line.variantId || ""} onChange={(event) => updateLine(line.key, { variantId: event.target.value || undefined })}><option value="">Chọn biến thể</option>{product.variants.map((item) => <option key={item.id} value={item.id}>{variantLabel(item)} · {item.sku || "Không có mã riêng"}</option>)}</select> : null}{newVariants.length > 0 && <small className="receipt-variant-kind">{line.newProduct?.variants?.length} biến thể</small>}</td><td>{newVariants.length > 0 ? money(line.quantity) : <input type="number" min="1" max="100000" value={line.quantity} onChange={(event) => updateLine(line.key, { quantity: Number(event.target.value) })}/>}</td><td>{newVariants.length > 0 ? <small>Theo từng biến thể</small> : <input type="text" inputMode="numeric" pattern="[0-9]*" aria-label={`Đơn giá nhập dòng ${index + 1}; để trống nếu chưa có dữ liệu`} value={line.unitCost ?? ""} onFocus={(event) => event.currentTarget.select()} onChange={(event) => { const raw = event.target.value.replace(/\D/g, ""); updateLine(line.key, { unitCost: raw ? Number(raw) : null }); }}/>}</td><td>{line.unitCost == null ? <small>Chưa có giá</small> : money(amountForLine(line))}</td><td><button className="receipt-remove-line" aria-label={`Xóa dòng ${index + 1}`} onClick={() => setLines((current) => current.filter((item) => item.key !== line.key))}>×</button></td></tr>;
+            return <tr key={line.key}><td>{index + 1}</td><td>{line.newProduct ? <span className="receipt-new-item"><strong>{productName}</strong><small>{line.newProduct.standalonePremiumGemstone ? `SKU đã đối chiếu · ${line.newProduct.lengthCm} × ${line.newProduct.widthCm} cm` : "Mã do người nhập chọn"}</small>{newVariants.length > 0 && <details className="receipt-variant-summary"><summary>{newVariants.length} biến thể · xem số lượng và SKU</summary>{newVariants.map((item) => <span key={`${item.quality}:${item.beadSize}`}><b>{[item.quality !== "Kích thước" ? item.quality : "", item.beadSize].filter(Boolean).join(" · ")}</b><small>{money(item.quantity)} cái · SKU {item.sku || "Mã sẽ được tạo khi lưu"} · Đơn giá nhập {money(item.unitCost)} ₫/cái</small></span>)}</details>}</span> : <ReceiptProductPicker products={products} selectedProduct={product} selectedVariant={variant} label={`Tìm sản phẩm hoặc SKU cho dòng ${index + 1}`} onSelect={(selected, selectedVariant) => updateLine(line.key, { productId: selected.id, variantId: selectedVariant?.id || selected.variants[0]?.id })}/>}</td><td><strong className="receipt-sku">{productSku}</strong></td><td>{classification}{product?.variants.length ? <select aria-label={`Phiên bản dòng ${index + 1}`} value={line.variantId || ""} onChange={(event) => updateLine(line.key, { variantId: event.target.value || undefined })}><option value="">Chọn biến thể</option>{product.variants.map((item) => <option key={item.id} value={item.id}>{variantLabel(item)} · {item.sku || "Không có mã riêng"}</option>)}</select> : null}{newVariants.length > 0 && <small className="receipt-variant-kind">{line.newProduct?.variants?.length} biến thể</small>}</td><td>{newVariants.length > 0 ? money(line.quantity) : <input type="number" min="1" max="100000" value={line.quantity} onChange={(event) => updateLine(line.key, { quantity: Number(event.target.value) })}/>}</td><td>{newVariants.length > 0 ? <small>Theo từng biến thể</small> : <input type="text" inputMode="numeric" pattern="[0-9]*" aria-label={`Đơn giá nhập dòng ${index + 1}; để trống nếu chưa có dữ liệu`} value={line.unitCost ?? ""} onFocus={(event) => event.currentTarget.select()} onChange={(event) => { const raw = event.target.value.replace(/\D/g, ""); updateLine(line.key, { unitCost: raw ? Number(raw) : null }); }}/>}</td><td>{line.unitCost == null ? <small>Chưa có giá</small> : money(amountForLine(line))}</td><td><button className="receipt-remove-line" aria-label={`Xóa dòng ${index + 1}`} onClick={() => setLines((current) => current.filter((item) => item.key !== line.key))}>×</button></td></tr>;
           }) : <tr><td className="receipt-empty" colSpan={8}>Chưa có mặt hàng. Hãy thêm sản phẩm hoặc tạo mã hàng mới.</td></tr>}</tbody></table></div>
           <div className="receipt-table-footer"><button className="button button-quiet" onClick={addEmptyLine}>＋ Thêm dòng</button><div><span>Tiền hàng trước điều chỉnh</span><strong>{money(subtotalAmount)} VND</strong></div></div>
         </section>
@@ -1060,6 +1255,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
       </aside>
     </div>
 
+    {existingProductPickerOpen && <ExistingReceiptProductDialog products={products} onClose={() => setExistingProductPickerOpen(false)} onSelect={addExistingProductLine}/>}
     {ruleModal && <div className="inventory-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setRuleModal(false); }}><section className="inventory-modal receipt-rule-modal" role="dialog" aria-modal="true" aria-labelledby="skuRuleTitle"><header><div><span className="inventory-eyebrow">THIẾT LẬP KHO</span><h2 id="skuRuleTitle">Quy tắc mã hàng</h2></div><button onClick={() => setRuleModal(false)} aria-label="Đóng">×</button></header><p className="receipt-rule-intro">Tạo tiền tố SKU theo danh mục Trang sức hoặc loại đá. Với đá quý, mã SKU con sẽ nối tiếp mã dạng cắt và size.</p>{savedSkuRules.length > 0 ? <div className="receipt-saved-rules"><div className="receipt-saved-rules-heading"><strong>Quy tắc đã tạo</strong><span>{savedSkuRules.length}</span></div><div className="receipt-saved-rules-list">{savedSkuRules.map((rule) => <button key={rule.categoryId} type="button" className={`receipt-saved-rule${rule.categoryId === ruleCategoryId ? " active" : ""}`} onClick={() => { setRuleCategoryId(rule.categoryId); setRuleNotice(null); }}><span className="receipt-saved-rule-copy"><b>{rule.category ? categoryPath(rule.category, categoryOptions) : "Danh mục không còn hoạt động"}</b><small>{rule.prefix}{rule.materialSummary ? ` + ${rule.materialSummary}` : ""}{rule.skuFormat === "BANGLE_SHAPE_QUALITY_SIZE" ? " · Dáng + chất lượng + size" : " · Số thứ tự"}</small></span><span className="receipt-saved-rule-action">{rule.categoryId === ruleCategoryId ? "Đang chọn" : "Chỉnh sửa →"}</span></button>)}</div></div> : <div className="receipt-saved-rules empty"><strong>Quy tắc đã tạo</strong><p>Chưa có quy tắc nào. Tạo tiền tố bên dưới rồi bấm “Lưu quy tắc”.</p></div>}<label>Danh mục đã tạo<select disabled={!ruleCategories.length} value={ruleCategoryId} onChange={(event) => setRuleCategoryId(event.target.value)}><option value="">{ruleCategories.length ? "Chọn danh mục" : "Chưa có danh mục sản phẩm đang hoạt động"}</option>{ruleCategories.map((category) => <option key={category.id} value={category.id}>{categoryLabel(category)}</option>)}</select></label><label>{ruleCategory?.kind === "Đá quý" ? "Tiền tố loại đá" : "Tiền tố danh mục"}<input value={rulePrefix} onChange={(event) => setRulePrefix(event.target.value.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, ""))} placeholder="Ví dụ: NSSR" maxLength={16}/><small>Chỉ chữ và số, tối đa 16 ký tự.</small></label>{ruleCategory?.slug === "vong-kieng" && <label>Cách tạo SKU<select value={ruleSkuFormat || "BANGLE_SHAPE_QUALITY_SIZE"} onChange={(event) => setRuleSkuFormat(event.target.value as SkuRule["skuFormat"])}><option value="BANGLE_SHAPE_QUALITY_SIZE">Mã đá + dáng + chất lượng + size</option><option value="SEQUENTIAL">Số thứ tự thông thường</option></select><small>Kiềng: NSB + mã đá + R/O/SQ + mã chất lượng 2 số + S + size.</small></label>}{ruleCategory?.kind === "Đá quý" && <div className="receipt-stone-prefixes"><strong>Quy tắc SKU cho loại đá</strong><small>Quy tắc này áp dụng cho loại đá {ruleCategory.name}. SKU cha thêm số thứ tự; SKU con nối thêm mã dạng cắt và size.</small></div>}{ruleCategory?.kind !== "Đá quý" && ruleCategory && <div className="receipt-stone-prefixes"><strong>Loại đá áp dụng cho {ruleCategory.name}</strong><small>Chọn riêng loại đá được dùng cho danh mục này. Các danh mục cấp 3 khác có thể có danh sách riêng.</small>{ruleScopeMaterials.length ? ruleScopeMaterials.map((material) => <div className="receipt-stone-choice" key={material.id}><label><input type="checkbox" checked={stoneMaterialIdsDraft.includes(material.id)} onChange={(event) => setStoneMaterialIdsDraft((current) => event.target.checked ? [...new Set([...current, material.id])] : current.filter((id) => id !== material.id))}/><span>{material.name}</span></label>{stoneMaterialIdsDraft.includes(material.id) && <label className="receipt-stone-prefix-input"><span>Tiền tố SKU (không bắt buộc)</span><input value={stonePrefixDraft[material.id] || ""} maxLength={16} placeholder="Ví dụ: EM" onChange={(event) => setStonePrefixDraft((current) => ({ ...current, [material.id]: event.target.value.toLocaleUpperCase("en").replace(/[^A-Z0-9]/g, "") }))}/></label>}</div>) : <small>Chưa có loại đá hoạt động trong nhóm này. Bạn có thể thêm một loại bên dưới.</small>}{addingRuleMaterial ? <div className="receipt-rule-material-form"><input autoFocus value={ruleMaterialName} onChange={(event) => setRuleMaterialName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void createRuleMaterial(); } }} placeholder="Tên loại đá mới" maxLength={120}/><div><button type="button" className="button button-quiet" onClick={() => { setAddingRuleMaterial(false); setRuleMaterialName(""); }}>Hủy</button><button type="button" className="button button-primary" onClick={() => void createRuleMaterial()} disabled={savingRuleMaterial || !ruleMaterialName.trim()}>{savingRuleMaterial ? "Đang lưu…" : "Lưu loại đá"}</button></div></div> : <button type="button" className="receipt-add-rule-material" onClick={() => { setRuleNotice(null); setAddingRuleMaterial(true); }}>＋ Thêm loại đá</button>}</div>}<div className="receipt-rule-preview">Mã sẽ có dạng <b>{ruleSkuFormat === "BANGLE_SHAPE_QUALITY_SIZE" ? `${rulePrefix || "NSB"} + mã đá + R/O/SQ + 01…99 + S + size` : `${rulePrefix || "MÃ DANH MỤC"}${ruleCategory?.kind !== "Đá quý" && ruleCategory && ruleMaterials.find((material) => stonePrefixDraft[material.id]) ? stonePrefixDraft[ruleMaterials.find((material) => stonePrefixDraft[material.id])!.id] : ""}0001`}</b></div>{ruleNotice && <div className={`receipt-rule-notice ${ruleNotice.kind}`} role={ruleNotice.kind === "error" ? "alert" : "status"}>{ruleNotice.text}</div>}<footer><button className="button button-quiet" onClick={() => void removeSkuRule()} disabled={ruleSaving || !skuRules.some((rule) => rule.categoryId === ruleCategoryId)}>Xóa quy tắc</button><button type="button" className="button button-quiet" onClick={() => setRuleModal(false)}>Đóng</button><button type="button" className="button button-primary" onClick={() => void saveSkuRule()} disabled={ruleSaving || !ruleCategoryId}>{ruleSaving ? "Đang lưu…" : "Lưu quy tắc"}</button></footer></section></div>}
 
     {newProductModal && <div className="inventory-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !creatingOption) setNewProductModal(false); }}><section className="inventory-modal receipt-new-product-modal receipt-new-product-flow" role="dialog" aria-modal="true" aria-labelledby="newInventoryProductTitle"><header><div><span className="inventory-eyebrow">TẠO MẶT HÀNG NHẬP KHO</span><h2 id="newInventoryProductTitle">Thêm sản phẩm mới</h2></div><button type="button" onClick={() => setNewProductModal(false)} aria-label="Đóng">×</button></header>

@@ -4,7 +4,7 @@ import { UnrecoverableError, Worker, type Job } from "bullmq";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../generated/prisma/client.js";
 import { Redis } from "ioredis";
-import { redisConnectionOptions } from "../ai-studio/ai-studio.queue.js";
+import { redisConnectionOptions } from "../queue/redis-connection.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { ShopeeSyncQueue, SHOPEE_SYNC_QUEUE, SHOPEE_WORKER_HEARTBEAT_KEY, type ShopeeSyncPayload } from "./shopee.queue.js";
 import { ShopeeService } from "./shopee.service.js";

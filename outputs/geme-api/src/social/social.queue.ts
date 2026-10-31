@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, ServiceUnavailableException } from "@nestjs/common";
 import { Queue } from "bullmq";
-import { redisConnectionOptions } from "../ai-studio/ai-studio.queue.js";
+import { redisConnectionOptions } from "../queue/redis-connection.js";
 
 export const SOCIAL_PUBLISH_QUEUE = "geme-social-publish";
 export type SocialPublishPayload = { targetId: string; revision: number };

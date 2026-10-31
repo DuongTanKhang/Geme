@@ -1,3 +1,12 @@
+export const QR_PAYMENT_WINDOW_MS = 15 * 60_000;
+
+export function getQrPaymentWindow(startedAt = new Date()) {
+  return {
+    startedAt,
+    expiresAt: new Date(startedAt.getTime() + QR_PAYMENT_WINDOW_MS),
+  };
+}
+
 export function getInventoryReservationExpiry(
   paymentMethod: string,
   paid: boolean,

@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CatalogEditorialGrid } from "./catalog-editorial-grid";
+import { useProductListReturnState } from "./use-product-list-return-state";
 import type { StoreCatalogEditorialPromo, StoreCategory, StoreMaterial, StoreProduct, StorePromotion } from "../lib/store-api";
 
 type CollectionProps = {
@@ -15,11 +16,21 @@ type CollectionProps = {
   initialCategory?: string;
   initialStoneSlug?: string;
   initialStoneName?: string;
+  initialSearch?: string;
   initialSort?: string;
   bestSellerOrder?: string[];
 };
 
 const PRODUCT_BATCH_SIZE = 40;
+type CollectionReturnState = {
+  selectedTypes: string[];
+  selectedStones: string[];
+  selectedSizes: string[];
+  priceRange: string;
+  sort: string;
+  visibleCount: number;
+  search?: string;
+};
 
 const priceOptions = [
   ["under2", "Dưới 2.000.000 ₫"],
@@ -49,7 +60,7 @@ function FilterChevron() {
   return <svg className="catalog-facet-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.25" /></svg>;
 }
 
-export function OpalCollection({ products, categories, materials, connected, promotions, editorialPromos = [], initialCategoryId, initialCategory, initialStoneSlug, initialStoneName, initialSort = "newest", bestSellerOrder = [] }: CollectionProps) {
+export function OpalCollection({ products, categories, materials, connected, promotions, editorialPromos = [], initialCategoryId, initialCategory, initialStoneSlug, initialStoneName, initialSearch = "", initialSort = "newest", bestSellerOrder = [] }: CollectionProps) {
   const [selectedTypes, setSelectedTypes] = useState<string[]>(initialCategoryId ? [initialCategoryId] : []);
   const [selectedStones, setSelectedStones] = useState<string[]>(initialStoneSlug ? [initialStoneSlug] : []);
   const [selectedSizes, setSelectedSizes] = useState<string[]>([]);
@@ -60,9 +71,26 @@ export function OpalCollection({ products, categories, materials, connected, pro
   const [draftPriceRange, setDraftPriceRange] = useState("");
   const [sort, setSort] = useState(initialSort);
   const [visibleCount, setVisibleCount] = useState(PRODUCT_BATCH_SIZE);
+  const [search, setSearch] = useState(initialSearch);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const filterPanelRef = useRef<HTMLDivElement>(null);
+  const returnState = useMemo<CollectionReturnState>(() => ({ selectedTypes, selectedStones, selectedSizes, priceRange, sort, visibleCount, search }), [selectedTypes, selectedStones, selectedSizes, priceRange, sort, visibleCount, search]);
+  const restoreCollectionState = useCallback((saved: CollectionReturnState) => {
+    if (!saved || !Array.isArray(saved.selectedTypes) || !Array.isArray(saved.selectedStones) || !Array.isArray(saved.selectedSizes) || !Number.isFinite(saved.visibleCount)) return;
+    setSelectedTypes(saved.selectedTypes);
+    setSelectedStones(saved.selectedStones);
+    setSelectedSizes(saved.selectedSizes);
+    setDraftTypes(saved.selectedTypes);
+    setDraftStones(saved.selectedStones);
+    setDraftSizes(saved.selectedSizes);
+    setPriceRange(typeof saved.priceRange === "string" ? saved.priceRange : "");
+    setDraftPriceRange(typeof saved.priceRange === "string" ? saved.priceRange : "");
+    setSort(typeof saved.sort === "string" ? saved.sort : initialSort);
+    setVisibleCount(Math.max(PRODUCT_BATCH_SIZE, Math.floor(saved.visibleCount)));
+    setSearch(typeof saved.search === "string" ? saved.search : initialSearch);
+  }, [initialSearch, initialSort]);
+  const restoringListRef = useProductListReturnState({ listId: `jewelry-catalog:${initialSearch.trim().toLocaleLowerCase("vi")}`, state: returnState, onRestore: restoreCollectionState, readyKey: visibleCount });
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 767px)");
@@ -149,27 +177,45 @@ export function OpalCollection({ products, categories, materials, connected, pro
     const roots = categoryOptions.filter(({ depth }) => depth === 0);
     return roots.length ? roots : categoryOptions;
   }, [categoryOptions]);
-  const stoneCounts = useMemo(() => new Map(enabledStones.map((stone) => [stone.slug, products.filter((product) => product.materialOption?.slug === stone.slug || product.gemstoneType?.slug === stone.slug).length])), [enabledStones, products]);
+  // A category tab represents a fresh collection view. Scope stone choices to
+  // products in that collection so the filter never offers stones that cannot
+  // produce a result for the selected category.
+  const stoneScopeTypes = filtersOpen ? draftTypes : selectedTypes;
+  const stoneCounts = useMemo(() => {
+    const scopedProducts = stoneScopeTypes.length
+      ? products.filter((product) => stoneScopeTypes.some((categoryId) => categoryDescendants.get(categoryId)?.has(product.categoryId || "")))
+      : products;
+    return new Map(enabledStones.map((stone) => [stone.slug, scopedProducts.filter((product) => product.materialOption?.slug === stone.slug || product.gemstoneType?.slug === stone.slug).length]));
+  }, [enabledStones, products, categoryDescendants, stoneScopeTypes]);
+  const availableStones = useMemo(() => enabledStones.filter((stone) => (stoneCounts.get(stone.slug) || 0) > 0), [enabledStones, stoneCounts]);
   const sizeOptions = useMemo(() => {
     const sizes = new Set(products.flatMap((product) => product.variants.map((variant) => variant.beadSize).filter((size): size is string => Boolean(size?.trim()))));
     return [...sizes].sort((a, b) => a.localeCompare(b, "vi", { numeric: true })).map((size) => ({ size, count: products.filter((product) => product.variants.some((variant) => variant.beadSize === size)).length }));
   }, [products]);
   const filteredProducts = useMemo(() => {
+    const normalizedSearch = search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").trim();
     const filtered = products.filter((product) => {
       const matchesType = selectedTypes.length === 0 || selectedTypes.some((categoryId) => categoryDescendants.get(categoryId)?.has(product.categoryId || ""));
       const productStones = [product.materialOption?.slug, product.gemstoneType?.slug].filter(Boolean);
       const matchesStone = selectedStones.length === 0 || selectedStones.some((slug) => productStones.includes(slug));
       const matchesSize = selectedSizes.length === 0 || product.variants.some((variant) => selectedSizes.includes(variant.beadSize || ""));
       const matchesPrice = !priceRange || (!product.isPremiumGemstone && (priceRange === "under2" ? product.price < 2_000_000 : priceRange === "2to5" ? product.price >= 2_000_000 && product.price <= 5_000_000 : priceRange === "5to10" ? product.price > 5_000_000 && product.price <= 10_000_000 : product.price > 10_000_000));
-      return matchesType && matchesStone && matchesSize && matchesPrice;
+      const searchable = `${product.name} ${product.sku} ${product.variants.map((variant) => variant.sku || "").join(" ")}`.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi");
+      const matchesSearch = !normalizedSearch || searchable.includes(normalizedSearch);
+      return matchesType && matchesStone && matchesSize && matchesPrice && matchesSearch;
     });
     return filtered.sort((a, b) => sort === "price-asc" ? Number(a.isPremiumGemstone) - Number(b.isPremiumGemstone) || a.price - b.price : sort === "price-desc" ? Number(a.isPremiumGemstone) - Number(b.isPremiumGemstone) || b.price - a.price : sort === "best-selling" ? (bestSellerRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (bestSellerRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER) : compareNewestByGemstone(a, b));
-  }, [products, categoryDescendants, selectedTypes, selectedStones, selectedSizes, priceRange, sort, bestSellerRanks]);
+  }, [products, categoryDescendants, selectedTypes, selectedStones, selectedSizes, priceRange, sort, bestSellerRanks, search]);
   const visibleProducts = useMemo(() => filteredProducts.slice(0, visibleCount), [filteredProducts, visibleCount]);
 
+  const filterStateKey = JSON.stringify([selectedTypes, selectedStones, selectedSizes, priceRange, sort, search]);
+  const previousFilterStateKey = useRef(filterStateKey);
   useEffect(() => {
+    if (previousFilterStateKey.current === filterStateKey) return;
+    previousFilterStateKey.current = filterStateKey;
+    if (restoringListRef.current) return;
     setVisibleCount(PRODUCT_BATCH_SIZE);
-  }, [selectedTypes, selectedStones, selectedSizes, priceRange, sort]);
+  }, [filterStateKey, restoringListRef]);
 
   const toggle = (value: string, current: string[], update: (next: string[]) => void) => update(current.includes(value) ? current.filter((item) => item !== value) : [...current, value]);
   const openFilters = () => {
@@ -190,12 +236,16 @@ export function OpalCollection({ products, categories, materials, connected, pro
   const reset = () => {
     setSelectedTypes([]); setSelectedStones([]); setSelectedSizes([]); setPriceRange("");
     setDraftTypes([]); setDraftStones([]); setDraftSizes([]); setDraftPriceRange("");
+    setSearch("");
+    const url = new URL(window.location.href);
+    url.searchParams.delete("search");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
     setVisibleCount(PRODUCT_BATCH_SIZE);
   };
-  const activeFilterCount = selectedTypes.length + selectedStones.length + selectedSizes.length + Number(Boolean(priceRange));
+  const activeFilterCount = selectedTypes.length + selectedStones.length + selectedSizes.length + Number(Boolean(priceRange)) + Number(Boolean(search));
   const selectedCategoryName = selectedTypes.length === 1 ? categories.find((category) => category.id === selectedTypes[0])?.name || initialCategory : undefined;
   const selectedStoneName = selectedStones.length === 1 ? enabledStones.find((stone) => stone.slug === selectedStones[0])?.name || initialStoneName : undefined;
-  const title = selectedCategoryName ? selectedCategoryName + (selectedStoneName ? ` · ${selectedStoneName}` : "") : selectedStoneName ? `Trang sức ${selectedStoneName}` : sort === "best-selling" ? "Sản phẩm bán chạy" : "Tất cả sản phẩm";
+  const title = search ? `Kết quả tìm kiếm · ${search}` : selectedCategoryName ? selectedCategoryName + (selectedStoneName ? ` · ${selectedStoneName}` : "") : selectedStoneName ? `Trang sức ${selectedStoneName}` : sort === "best-selling" ? "Sản phẩm bán chạy" : "Tất cả sản phẩm";
 
   return <section className="catalog-shell catalog-jewelry-toolbar" id="san-pham" aria-label="Danh sách sản phẩm">
     <div className="new-arrivals-toolbar">
@@ -204,10 +254,25 @@ export function OpalCollection({ products, categories, materials, connected, pro
         <p role="status" aria-live="polite">{connected ? `${filteredProducts.length} sản phẩm` : "Không thể tải dữ liệu sản phẩm"}</p>
       </div>
       <div className="new-arrivals-tabs" role="group" aria-label="Lọc theo loại trang sức">
-        <button type="button" className={!selectedTypes.length ? "is-selected" : ""} aria-pressed={!selectedTypes.length} onClick={() => { setSelectedTypes([]); setDraftTypes([]); setVisibleCount(PRODUCT_BATCH_SIZE); }}>Tất cả</button>
+        <button type="button" className={!selectedTypes.length ? "is-selected" : ""} aria-pressed={!selectedTypes.length} onClick={() => {
+          setSelectedTypes([]); setDraftTypes([]);
+          setSelectedStones([]); setDraftStones([]);
+          setSelectedSizes([]); setDraftSizes([]);
+          setPriceRange(""); setDraftPriceRange("");
+          setVisibleCount(PRODUCT_BATCH_SIZE);
+        }}>Tất cả</button>
         {tabs.map(({ category }) => {
           const selected = selectedTypes.includes(category.id) || selectedTypes.some((id) => categoryDescendants.get(category.id)?.has(id));
-          return <button type="button" key={category.id} className={selected ? "is-selected" : ""} aria-pressed={selected} onClick={() => { setSelectedTypes([category.id]); setDraftTypes([category.id]); setVisibleCount(PRODUCT_BATCH_SIZE); }}>{category.name}</button>;
+          return <button type="button" key={category.id} className={selected ? "is-selected" : ""} aria-pressed={selected} onClick={() => {
+            setSelectedTypes([category.id]); setDraftTypes([category.id]);
+            // Switching from one jewelry category to another must show the
+            // complete category, not retain a stone/size/price filter from
+            // the previously selected category.
+            setSelectedStones([]); setDraftStones([]);
+            setSelectedSizes([]); setDraftSizes([]);
+            setPriceRange(""); setDraftPriceRange("");
+            setVisibleCount(PRODUCT_BATCH_SIZE);
+          }}>{category.name}</button>;
         })}
       </div>
       <div className="new-arrivals-actions">
@@ -228,9 +293,9 @@ export function OpalCollection({ products, categories, materials, connected, pro
           <legend>Loại sản phẩm</legend>
           {categoryOptions.map(({ category, depth, count }) => <label key={category.id} style={{ marginInlineStart: Math.min(depth, 3) * 12 }}><input type="checkbox" checked={draftTypes.includes(category.id)} onChange={() => toggle(category.id, draftTypes, setDraftTypes)} />{category.name} <span>({count})</span></label>)}
         </fieldset>}
-        {enabledStones.some((stone) => (stoneCounts.get(stone.slug) || 0) > 0) && <fieldset>
+        {availableStones.length > 0 && <fieldset>
           <legend>Loại đá</legend>
-          {enabledStones.filter((stone) => (stoneCounts.get(stone.slug) || 0) > 0).map((stone) => <label key={stone.id}><input type="checkbox" checked={draftStones.includes(stone.slug)} onChange={() => toggle(stone.slug, draftStones, setDraftStones)} />{stone.name} <span>({stoneCounts.get(stone.slug) || 0})</span></label>)}
+          {availableStones.map((stone) => <label key={stone.id}><input type="checkbox" checked={draftStones.includes(stone.slug)} onChange={() => toggle(stone.slug, draftStones, setDraftStones)} />{stone.name} <span>({stoneCounts.get(stone.slug) || 0})</span></label>)}
         </fieldset>}
         {sizeOptions.length > 0 && <fieldset>
           <legend>Kích thước</legend>

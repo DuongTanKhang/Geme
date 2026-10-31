@@ -15,7 +15,7 @@ function makeResponse() {
   };
 }
 
-test("legacy SKU product images stream through the public-asset check instead of redirecting to the restrictive Worker", async () => {
+test("legacy SKU product images redirect to the public Worker delivery path", async () => {
   const imageBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
   let readCalls = 0;
   const media = {
@@ -28,10 +28,10 @@ test("legacy SKU product images stream through the public-asset check instead of
 
   await controller.media("asset-1", { headers: {} }, response as never);
 
-  assert.equal(response.redirectResult, undefined);
-  assert.deepEqual(response.body, imageBytes);
-  assert.equal(response.headers.get("content-type"), "image/jpeg");
-  assert.equal(readCalls, 1);
+  assert.deepEqual(response.redirectResult, { status: 302, url: "https://media.example.test/product-images/NSBAFO04S50/NSBAFO04S50-1.jpg" });
+  assert.equal(response.body, undefined);
+  assert.equal(response.headers.get("content-type"), undefined);
+  assert.equal(readCalls, 0);
 });
 
 test("content-addressed media keeps the CDN redirect path", async () => {
