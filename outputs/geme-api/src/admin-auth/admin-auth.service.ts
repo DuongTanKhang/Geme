@@ -14,32 +14,32 @@ export type AdminIdentity = {
   correlationId?: string;
 };
 
-type AdminTokenPayload = AdminIdentity & { sub: string; iat: number; exp: number; iss: "geme-admin" };
+type AdminTokenPayload = AdminIdentity & { sub: string; iat: number; exp: number; authVersion?: number; iss: "geme-admin" };
 
 @Injectable()
 export class AdminAuthService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async login(emailInput: unknown, passwordInput: unknown) {
-    const email = typeof emailInput === "string" ? emailInput.trim().toLowerCase().slice(0, 320) : "";
+  async login(accountInput: unknown, passwordInput: unknown) {
+    const account = typeof accountInput === "string" ? accountInput.trim().toLowerCase().slice(0, 320) : "";
     const password = typeof passwordInput === "string" ? passwordInput : "";
-    if (!email || !password || password.length > 256) throw new UnauthorizedException("Email hoặc mật khẩu không đúng.");
+    if (!account || !password || password.length > 256) throw new UnauthorizedException("Tài khoản hoặc mật khẩu không đúng.");
 
-    const admin = await this.prisma.adminUser.findUnique({
-      where: { email },
-      select: { id: true, email: true, passwordHash: true, displayName: true, role: true, isActive: true, lockedUntil: true },
+    const admin = await this.prisma.adminUser.findFirst({
+      where: { OR: [{ email: account }, { username: account }] },
+      select: { id: true, email: true, username: true, passwordHash: true, displayName: true, role: true, isActive: true, lockedUntil: true, authVersion: true },
     });
     if (admin?.lockedUntil && admin.lockedUntil > new Date()) {
-      throw new UnauthorizedException("Email hoặc mật khẩu không đúng.");
+      throw new UnauthorizedException("Tài khoản hoặc mật khẩu không đúng.");
     }
     const matches = admin?.isActive ? await compare(password, admin.passwordHash) : false;
     if (!admin || !admin.isActive || !matches) {
       if (admin?.isActive) await this.recordFailedLogin(admin.id);
-      throw new UnauthorizedException("Email hoặc mật khẩu không đúng.");
+      throw new UnauthorizedException("Tài khoản hoặc mật khẩu không đúng.");
     }
     const identity: AdminIdentity = { id: admin.id, email: admin.email, displayName: admin.displayName, role: admin.role };
     await this.prisma.adminUser.update({ where: { id: admin.id }, data: { lastLoginAt: new Date(), failedLoginAttempts: 0, lockedUntil: null } });
-    return { accessToken: this.sign(identity), expiresIn: TOKEN_LIFETIME_SECONDS, admin: identity };
+    return { accessToken: this.sign(identity, admin.authVersion), expiresIn: TOKEN_LIFETIME_SECONDS, admin: identity };
   }
 
   async authenticateAuthorization(value: unknown): Promise<AdminIdentity | null> {
@@ -50,16 +50,16 @@ export class AdminAuthService {
 
     const admin = await this.prisma.adminUser.findUnique({
       where: { id: payload.sub },
-      select: { id: true, email: true, displayName: true, role: true, isActive: true },
+      select: { id: true, email: true, displayName: true, role: true, isActive: true, authVersion: true },
     });
-    if (!admin?.isActive || admin.email !== payload.email || admin.role !== payload.role) return null;
+    if (!admin?.isActive || admin.email !== payload.email || admin.role !== payload.role || admin.authVersion !== (payload.authVersion ?? 0)) return null;
     return { id: admin.id, email: admin.email, displayName: admin.displayName, role: admin.role };
   }
 
-  private sign(identity: AdminIdentity) {
+  private sign(identity: AdminIdentity, authVersion = 0) {
     const issuedAt = Math.floor(Date.now() / 1000);
     const header = this.encode({ alg: "HS256", typ: "JWT" });
-    const payload = this.encode({ ...identity, sub: identity.id, iat: issuedAt, exp: issuedAt + TOKEN_LIFETIME_SECONDS, iss: "geme-admin" });
+    const payload = this.encode({ ...identity, authVersion, sub: identity.id, iat: issuedAt, exp: issuedAt + TOKEN_LIFETIME_SECONDS, iss: "geme-admin" });
     const input = `${header}.${payload}`;
     return `${input}.${this.signature(input)}`;
   }
@@ -84,7 +84,8 @@ export class AdminAuthService {
         || typeof payload.displayName !== "string" || typeof payload.role !== "string"
         || typeof payload.exp !== "number" || payload.exp <= now
         || typeof payload.iat !== "number" || payload.iat > now + 30
-        || !["SUPER_ADMIN", "ADMIN", "CONTENT_EDITOR"].includes(payload.role)) return null;
+        || !["SUPER_ADMIN", "ADMIN", "CONTENT_EDITOR", "STAFF"].includes(payload.role)
+        || (payload.authVersion !== undefined && (!Number.isInteger(payload.authVersion) || payload.authVersion < 0))) return null;
       return payload as AdminTokenPayload;
     } catch {
       return null;

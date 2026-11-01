@@ -175,10 +175,10 @@ export class CommerceController {
   @Post("orders/:id/email/retry") @admin("orders.write") retryOrderEmail(@Param("id") id: string) { return this.commerce.retryOrderConfirmationEmail(id); }
 
   @Get("promotions/storefront") storefrontPromotions() { return this.commerce.storefrontPromotions(); }
-  @Get("promotions") @admin("content.read") promotions(@Query() query: Record<string, string>) { return this.commerce.promotions(query); }
-  @Post("promotions") @admin("content.write") createPromotion(@Body() body: Record<string, any>) { return this.commerce.savePromotion(body); }
-  @Patch("promotions/:id") @admin("content.write") updatePromotion(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.savePromotion(body, id); }
-  @Delete("promotions/:id") @admin("content.write") deletePromotion(@Param("id") id: string) { return this.commerce.deletePromotion(id); }
+  @Get("promotions") @admin("promotions.read") promotions(@Query() query: Record<string, string>) { return this.commerce.promotions(query); }
+  @Post("promotions") @admin("promotions.write") createPromotion(@Body() body: Record<string, any>) { return this.commerce.savePromotion(body); }
+  @Patch("promotions/:id") @admin("promotions.write") updatePromotion(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.savePromotion(body, id); }
+  @Delete("promotions/:id") @admin("promotions.write") deletePromotion(@Param("id") id: string) { return this.commerce.deletePromotion(id); }
 
   @Get("blog") posts(@Query() query: Record<string, string>) {
     const publicQuery: Record<string, string> = {};

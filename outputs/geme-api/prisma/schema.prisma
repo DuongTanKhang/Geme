@@ -11,6 +11,7 @@ enum AdminRole {
   SUPER_ADMIN
   ADMIN
   CONTENT_EDITOR
+  STAFF
 
   @@map("admin_role")
 }
@@ -351,10 +352,13 @@ enum ReviewStatus {
 model AdminUser {
   id           String     @id @default(uuid()) @db.Uuid
   email        String     @unique @db.VarChar(320)
+  username     String?    @unique @db.VarChar(64)
   passwordHash String     @map("password_hash") @db.VarChar(255)
   displayName  String     @map("display_name") @db.VarChar(120)
+  jobTitle     String?    @map("job_title") @db.VarChar(80)
   role         AdminRole  @default(ADMIN)
   isActive     Boolean    @default(true) @map("is_active")
+  authVersion  Int        @default(0) @map("auth_version")
   failedLoginAttempts Int @default(0) @map("failed_login_attempts")
   lockedUntil  DateTime?  @map("locked_until") @db.Timestamptz(3)
   lastLoginAt  DateTime?  @map("last_login_at") @db.Timestamptz(3)

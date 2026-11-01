@@ -18,7 +18,7 @@ function jsonError(message: string, status: number) {
 
 async function login(request: NextRequest) {
   if (!hasSameOrigin(request)) return jsonError("Yêu cầu không hợp lệ.", 403);
-  let body: { email?: unknown; password?: unknown };
+  let body: { account?: unknown; email?: unknown; password?: unknown };
   try {
     body = await request.json() as typeof body;
   } catch {
@@ -28,7 +28,7 @@ async function login(request: NextRequest) {
     const upstream = await fetch(`${apiBaseUrl()}/admin/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ email: body.email, password: body.password }),
+      body: JSON.stringify({ account: body.account ?? body.email, email: body.email, password: body.password }),
       cache: "no-store",
       signal: AbortSignal.timeout(10_000),
     });

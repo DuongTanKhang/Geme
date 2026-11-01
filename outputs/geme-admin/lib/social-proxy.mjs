@@ -8,6 +8,7 @@ const READ_ONLY_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
  * @param {string[]} segments
  */
 function mapAdminSegments(segments) {
+  if (segments[0] === "auth") return ["admin", ...segments];
   const isSocialAdminRoute = segments[0] === "social"
     && !(segments[1] === "meta" && segments[2] === "callback");
   if (isSocialAdminRoute) return ["admin", ...segments];
