@@ -1,1 +1,16 @@
 .workspace{display:grid;gap:20px;color:#1e2a26}.header{display:flex;align-items:flex-end;justify-content:space-between;gap:24px}.header h1{font:600 25px/1.25 var(--sans);letter-spacing:-.03em;color:#263731;margin:0}.header p{font-size:16px}.header p{margin:0;color:#75807b}.eyebrow{font-size:14px;letter-spacing:.16em;color:#74837b}.list{display:grid;gap:12px}.card{background:#fff;border:1px solid #e2e8e4;border-radius:12px;padding:20px 22px;box-shadow:0 5px 20px #1d38220a}.cardHead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}.cardHead h2{font:600 17px/1.3 var(--sans);margin:6px 0 3px}.cardHead small,.note{color:#78827e;font-size:16px}.subject{font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:#78827e}.status{border-radius:20px;padding:6px 10px;background:#f3f4f2;color:#58615c;font-size:16px;white-space:nowrap}.new{background:#fff3df;color:#8d5b12}.in_progress{background:#eaf1fa;color:#385e88}.resolved{background:#e8f4ec;color:#3b7753}.archived{background:#f0efed;color:#777}.contacts{display:flex;gap:18px;margin-top:16px;flex-wrap:wrap}.contacts a{color:#3d6b56;text-decoration:underline;text-underline-offset:3px;font-size:17px}.message{white-space:pre-wrap;line-height:1.65;background:#f8faf8;border-radius:8px;padding:14px 16px;margin:16px 0;color:#34463d}.note{display:block;margin-top:-8px;margin-bottom:14px}.actions{display:flex;gap:8px;flex-wrap:wrap}.error{border:1px solid #e7b4a8;background:#fff8f6;color:#963f31;padding:12px 16px;border-radius:8px}.empty{padding:30px;color:#7c8581;text-align:center;background:#fff;border:1px solid #e2e8e4;border-radius:12px}@media(max-width:650px){.header{align-items:flex-start;flex-direction:column}.card{padding:16px}.cardHead{flex-direction:column}}
+.dialogBackdrop{position:fixed;z-index:80;inset:0;display:grid;place-items:center;padding:18px;background:rgba(28,39,33,.48);backdrop-filter:blur(2px)}
+.noteDialog{width:min(520px,100%);padding:24px;border:1px solid #e2e8e4;border-radius:12px;background:#fff;box-shadow:0 20px 64px rgba(24,39,30,.22);font-family:var(--sans)}
+.dialogEyebrow{color:#789084;font-size:13px;font-weight:600;letter-spacing:.13em}
+.noteDialog h2{margin:7px 0 5px;color:#263731;font-size:22px;font-weight:600;line-height:1.3}
+.noteDialog p{margin:0 0 18px;color:#78847d;font-size:15px;line-height:1.55}
+.noteDialog form{display:grid;gap:8px}
+.noteDialog label{color:#52645a;font-size:15px;font-weight:600}
+.noteDialog textarea{width:100%;min-height:112px;padding:11px 12px;border:1px solid #dfe7e2;border-radius:7px;outline:0;color:#34453b;background:#fff;font:16px/1.5 var(--sans);resize:vertical}
+.noteDialog textarea::placeholder{color:#9aa59e}
+.noteDialog textarea:focus{border-color:#80a991;box-shadow:0 0 0 3px rgba(67,133,108,.14)}
+.noteDialog textarea[aria-invalid="true"]{border-color:#ca7567}
+.dialogError{color:#a64f45;font-size:14px}
+.noteDialog footer{display:flex;justify-content:flex-end;gap:9px;margin-top:8px;padding-top:15px;border-top:1px solid #edf0ee}
+.noteDialog footer button{min-height:38px;padding:0 15px;font-size:15px}
+@media(max-width:560px){.dialogBackdrop{align-items:end;padding:10px}.noteDialog{padding:20px 17px;border-radius:12px 12px 9px 9px}.noteDialog h2{font-size:20px}}

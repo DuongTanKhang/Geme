@@ -828,7 +828,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
         Status: status,
         BranchId: config.branchId,
         ...(partnerId ? { PartnerId: partnerId } : {}),
-        Discount: Math.round(Number(order.discountAmount) || 0),
+        Discount: Math.round((Number(order.discountAmount) || 0) + (Number(order.loyaltyDiscountAmount) || 0)),
         ExcessCash: 0,
         VAT: 0,
         ShippingCost: Math.round(Number(order.shippingFee) || 0),

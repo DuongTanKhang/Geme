@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { callAegis, upstreamError } from "../../../lib/customer-session";
+import { callAegis, clearAuthCookies, isSameOriginRequest, upstreamError } from "../../../lib/customer-session";
 
 export async function POST(request: NextRequest) {
+  if (!isSameOriginRequest(request, true)) {
+    return NextResponse.json({ message: "Yêu cầu đặt lại mật khẩu không hợp lệ." }, { status: 403 });
+  }
   try {
     const body = await request.json();
     const email = String(body.email ?? "").trim().toLowerCase();
@@ -32,7 +35,9 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({ email, otp, newPassword }),
     });
     if (!upstream.ok) return upstreamError(upstream);
-    return NextResponse.json(await upstream.json());
+    const response = NextResponse.json(await upstream.json());
+    clearAuthCookies(response);
+    return response;
   } catch {
     return NextResponse.json({ message: "Không kết nối được máy chủ xác thực. Vui lòng thử lại sau." }, { status: 503 });
   }

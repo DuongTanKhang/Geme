@@ -32,6 +32,7 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      CSP_CONNECT_ORIGINS: ${CSP_CONNECT_ORIGINS:-}
       GEME_API_BASE_URL: http://api:4000/api/v1
       NEXT_PUBLIC_API_BASE_URL: https://test.geme.vn/api/v1
       AEGIS_AUTH_API_URL: http://aegis:5130
@@ -58,12 +59,15 @@ services:
       args:
         NEXT_PUBLIC_API_BASE_URL: https://testadmin.geme.vn/api/v1
         GEME_API_BASE_URL: http://api:4000/api/v1
+        MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://geme-public-media.geme-media-gateway.workers.dev}
         GEME_STOREFRONT_ASSETS_URL: http://storefront:3000
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      CSP_CONNECT_ORIGINS: ${CSP_CONNECT_ORIGINS:-}
       NEXT_PUBLIC_API_BASE_URL: https://testadmin.geme.vn/api/v1
       GEME_API_BASE_URL: http://api:4000/api/v1
+      MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://geme-public-media.geme-media-gateway.workers.dev}
       GEME_STOREFRONT_ASSETS_URL: http://storefront:3000
       AEGIS_AUTH_API_URL: http://aegis:5130
     expose: ["3001"]
@@ -95,6 +99,7 @@ services:
       CORS_ORIGINS: https://test.geme.vn,https://testadmin.geme.vn
       DATABASE_URL: postgresql://geme:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/geme?schema=public
       REDIS_URL: redis://redis:6379/0
+      API_RATE_LIMIT_PREFIX: ${API_RATE_LIMIT_PREFIX:-geme:staging:rate-limit:v1}
       AEGIS_AUTH_API_URL: http://aegis:5130
       AEGIS_ORDER_EMAIL_URL: http://aegis:5130
       GEME_ORDER_EMAIL_API_KEY: ${GEME_ORDER_EMAIL_API_KEY:?Set GEME_ORDER_EMAIL_API_KEY in .env}
@@ -138,7 +143,8 @@ services:
         condition: service_healthy
       aegis:
         condition: service_healthy
-    command: ["sh", "-c", "pnpm db:deploy && pnpm db:seed && pnpm start"]
+    # Apply migrations explicitly during release; seed only for first installation.
+    command: ["pnpm", "start"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/v1/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s

@@ -292,7 +292,7 @@ export function StoreProductDetail({
             </button>)}</div>
           </fieldset>}
 
-          <div className="detail-stock-status" role="status">{product.isPremiumGemstone ? "Liên hệ để được tư vấn và kiểm tra tình trạng hàng" : stock > 0 ? "Còn " + stock + " sản phẩm" : "Tạm hết hàng"}</div>
+          <div className="detail-stock-status" role="status">{product.isPremiumGemstone ? "Liên hệ để được tư vấn và kiểm tra tình trạng hàng" : stock > 0 ? "Còn hàng" : "Tạm hết hàng"}</div>
           {product.isPremiumGemstone
             ? <div className="detail-contact-only"><a href="/lien-he">LIÊN HỆ GEME ĐỂ ĐƯỢC TƯ VẤN</a></div>
             : <div className="detail-buy-row">

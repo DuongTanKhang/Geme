@@ -733,6 +733,14 @@ img { display: block; max-width: 100%; }
 .profile-panel-heading > span, .profile-panel-heading > button { color: #817b72; font-size: 13px; }
 .profile-panel-heading > button { padding: 3px 0; border: 0; background: none; cursor: pointer; }
 .profile-panel-heading > button span { margin-left: 5px; }
+.profile-loyalty-panel > p { color: #68766d; line-height: 1.6; }
+.profile-loyalty-ledger { display: grid; }
+.profile-loyalty-ledger article { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 13px 0; border-top: 1px solid #e8e5df; }
+.profile-loyalty-ledger article > span { display: grid; gap: 4px; }
+.profile-loyalty-ledger small { color: #878177; }
+.profile-loyalty-ledger b { white-space: nowrap; }
+.profile-loyalty-ledger .is-earned { color: #287b55; }
+.profile-loyalty-ledger .is-redeemed { color: #9a5a4f; }
 .profile-orders { display: grid; }
 .profile-order { display: grid; grid-template-columns: 62px minmax(120px, 1fr) auto; gap: 13px; align-items: center; padding: 10px 0; border-top: 1px solid #ebe8e2; }
 .profile-order > img { width: 62px; height: 58px; object-fit: cover; }
@@ -1454,6 +1462,10 @@ img { display: block; max-width: 100%; }
 .checkout-total { display: grid; gap: 8px; margin-top: 17px; color: #625e57; font-size: 14px; }
 .checkout-total-row { display: flex; justify-content: space-between; gap: 16px; }
 .checkout-total-row.is-grand-total { margin-top: 4px; padding-top: 11px; border-top: 1px solid #dfe5df; color: #143f34; font-size: 16px; }
+.checkout-loyalty { display: grid; gap: 10px; padding: 14px; border: 1px solid #d9e6dd; background: #f4f8f4; }
+.checkout-loyalty > div { display: grid; gap: 3px; color: #234b3b; }
+.checkout-loyalty > div span, .checkout-loyalty small { color: #68786f; font-size: 13px; }
+.checkout-loyalty label { max-width: 320px; }
 .checkout-total strong { color: #373a32; font-size: 17px; }
 .checkout-form { display: grid; gap: 13px; }
 .checkout-form h2 { margin: 0 0 3px; font: 400 24px/1.2 var(--serif); }

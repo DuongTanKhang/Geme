@@ -124,6 +124,24 @@ public class AuthController : ControllerBase
         return Ok(new { message = "Mật khẩu đã được đặt lại. Vui lòng đăng nhập bằng mật khẩu mới." });
     }
 
+    [HttpPost("change-password")]
+    [Authorize]
+    [EnableRateLimiting("password-reset")]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        var sub = User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value
+            ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (!Guid.TryParse(sub, out var userId))
+            return Unauthorized();
+
+        await _mediator.Send(new ChangePasswordCommand(
+            userId,
+            request.CurrentPassword,
+            request.NewPassword,
+            HttpContext.Connection.RemoteIpAddress?.ToString()));
+        return Ok(new { message = "Đổi mật khẩu thành công. Vui lòng đăng nhập lại." });
+    }
+
     [HttpPost("verify-2fa")]
     public async Task<IActionResult> VerifyTwoFactor([FromBody] VerifyTwoFactorRequest request)
     {
@@ -251,3 +269,4 @@ public sealed record ResendEmailVerificationRequest(string Email);
 public sealed record ResendLoginOtpRequest(Guid UserId);
 public sealed record ForgotPasswordRequest(string Email);
 public sealed record ResetPasswordRequest(string Email, string Otp, string NewPassword);
+public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword);

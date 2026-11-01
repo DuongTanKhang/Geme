@@ -7,6 +7,7 @@ import { CommerceService } from "./commerce.service.js";
 import { onlineOrderInput, onlineOrderQuoteInput } from "./online-order-input.js";
 import { MediaAssetsService } from "../media/media-assets.service.js";
 import { SePayBankAccountService } from "../sepay/sepay-bank-account.service.js";
+import { LoyaltyService } from "../loyalty/loyalty.service.js";
 
 type MediaResponse = { setHeader(name: string, value: string): void; end(data?: Uint8Array): void; redirect(status: number, url: string): unknown };
 type AuthorizationRequest = { headers: { authorization?: string } };
@@ -18,7 +19,7 @@ const admin = (...permissions: AdminPermission[]) => permissions.length
 
 @Controller()
 export class CommerceController {
-  constructor(private readonly commerce: CommerceService, private readonly adminAuth: AdminAuthService, private readonly adminPermissions: AdminPermissionService, private readonly mediaStore: MediaAssetsService, private readonly sepayBankAccount: SePayBankAccountService) {}
+  constructor(private readonly commerce: CommerceService, private readonly adminAuth: AdminAuthService, private readonly adminPermissions: AdminPermissionService, private readonly mediaStore: MediaAssetsService, private readonly sepayBankAccount: SePayBankAccountService, private readonly loyalty: LoyaltyService) {}
 
   @Get("categories/public")
   @Header("Cache-Control", "no-store")
@@ -149,6 +150,10 @@ export class CommerceController {
   @Get("customers") @admin("customers.read") customers(@Query() query: Record<string, string>) { return this.commerce.customers(query); }
   @Post("customers") @admin("customers.write") createCustomer(@Body() body: Record<string, any>) { return this.commerce.saveCustomer(body); }
   @Patch("customers/:id") @admin("customers.write") updateCustomer(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.saveCustomer(body, id); }
+
+  @Get("loyalty") @admin("customers.read") loyaltyOverview(@Query("limit") limit?: string) { return this.loyalty.adminOverview(limit); }
+  @Patch("loyalty/settings") @admin("customers.write") saveLoyaltySettings(@Req() request: AdminRequest, @Body() body: Record<string, unknown>) { return this.loyalty.saveSettings(body, request.adminIdentity); }
+  @Post("loyalty/customers/:customerId/adjustment") @admin("customers.write") adjustLoyaltyPoints(@Req() request: AdminRequest, @Param("customerId") customerId: string, @Body() body: Record<string, unknown>) { return this.loyalty.adjustCustomer(customerId, body.points, body.note, request.adminIdentity); }
 
   @Get("orders") @admin("orders.read") orders(@Query() query: Record<string, string>) { return this.commerce.orders(query); }
   @Get("orders/:code/payment-status")

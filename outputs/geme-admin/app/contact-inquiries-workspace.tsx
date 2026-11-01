@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import styles from "./contact-inquiries-workspace.module.css";
 
 type Inquiry = { id: string; name: string; email: string; phone: string; subject: string; message: string; status: string; resolutionNote: string | null; createdAt: string; handledAt: string | null; handledBy?: { displayName: string } | null };
@@ -13,6 +13,9 @@ export default function ContactInquiriesWorkspace({ request, canManage }: Props)
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [noteDialog, setNoteDialog] = useState<{ item: Inquiry; status: string } | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [noteError, setNoteError] = useState("");
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try { const result = await request("admin/contact-inquiries?limit=100"); setItems(Array.isArray(result) ? result : []); }
@@ -21,16 +24,27 @@ export default function ContactInquiriesWorkspace({ request, canManage }: Props)
   }, [request]);
   useEffect(() => { void load(); }, [load]);
 
-  const changeStatus = async (item: Inquiry, status: string) => {
-    let note = "";
-    if (status === "RESOLVED" || status === "ARCHIVED") {
-      note = window.prompt(status === "RESOLVED" ? "Ghi chú xử lý (tối thiểu 5 ký tự)" : "Lý do lưu trữ (tối thiểu 5 ký tự)")?.trim() || "";
-      if (note.length < 5) return;
-    }
+  const saveStatus = async (item: Inquiry, status: string, note = "") => {
     setBusy(item.id); setError("");
-    try { await request(`admin/contact-inquiries/${item.id}/status`, "PATCH", { status, note }); await load(); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Không cập nhật được trạng thái."); }
+    try { await request(`admin/contact-inquiries/${item.id}/status`, "PATCH", { status, note }); await load(); return true; }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Không cập nhật được trạng thái."); return false; }
     finally { setBusy(""); }
+  };
+
+  const changeStatus = (item: Inquiry, status: string) => {
+    if (status === "RESOLVED" || status === "ARCHIVED") {
+      setNoteDraft(""); setNoteError(""); setNoteDialog({ item, status });
+      return;
+    }
+    void saveStatus(item, status);
+  };
+
+  const submitNote = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!noteDialog) return;
+    const note = noteDraft.trim();
+    if (note.length < 5) { setNoteError("Vui lòng nhập ghi chú ít nhất 5 ký tự."); return; }
+    if (await saveStatus(noteDialog.item, noteDialog.status, note)) setNoteDialog(null);
   };
 
   return <div className={styles.workspace}>
@@ -45,5 +59,21 @@ export default function ContactInquiriesWorkspace({ request, canManage }: Props)
         <div className={styles.actions}><a className="button button-quiet" href={`mailto:${encodeURIComponent(item.email)}?subject=${encodeURIComponent("GEME · " + item.subject)}`}>Trả lời email</a>{canManage && item.status === "NEW" && <button className="button button-primary" disabled={busy === item.id} onClick={() => void changeStatus(item, "IN_PROGRESS")}>Nhận xử lý</button>}{canManage && ["NEW", "IN_PROGRESS"].includes(item.status) && <button className="button button-primary" disabled={busy === item.id} onClick={() => void changeStatus(item, "RESOLVED")}>Đánh dấu đã giải quyết</button>}{canManage && item.status !== "ARCHIVED" && <button className="button button-quiet" disabled={busy === item.id} onClick={() => void changeStatus(item, "ARCHIVED")}>Lưu trữ</button>}</div>
       </article>)}
     </section> : <div className={styles.empty}>Chưa có tin nhắn liên hệ.</div>}
+    {noteDialog && <div className={styles.dialogBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setNoteDialog(null); }}>
+      <section className={styles.noteDialog} role="dialog" aria-modal="true" aria-labelledby="contact-note-title" aria-describedby="contact-note-description">
+        <span className={styles.dialogEyebrow}>HỖ TRỢ KHÁCH HÀNG</span>
+        <h2 id="contact-note-title">{noteDialog.status === "RESOLVED" ? "Ghi chú xử lý" : "Lý do lưu trữ"}</h2>
+        <p id="contact-note-description">{noteDialog.status === "RESOLVED" ? "Ghi lại nội dung xử lý để lưu cùng tin nhắn liên hệ." : "Nhập lý do lưu trữ tin nhắn này."} Tối thiểu 5 ký tự.</p>
+        <form onSubmit={(event) => void submitNote(event)}>
+          <label htmlFor="contact-resolution-note">Nội dung ghi chú</label>
+          <textarea id="contact-resolution-note" autoFocus rows={4} maxLength={1000} value={noteDraft} onChange={(event) => { setNoteDraft(event.target.value); setNoteError(""); }} placeholder="Nhập ghi chú…" aria-invalid={Boolean(noteError)} aria-describedby={noteError ? "contact-note-error" : undefined} />
+          {noteError && <small id="contact-note-error" className={styles.dialogError} role="alert">{noteError}</small>}
+          <footer>
+            <button className="button button-quiet" type="button" onClick={() => setNoteDialog(null)} disabled={Boolean(busy)}>Hủy</button>
+            <button className="button button-primary" type="submit" disabled={Boolean(busy)}>{busy ? "Đang lưu…" : "Xác nhận"}</button>
+          </footer>
+        </form>
+      </section>
+    </div>}
   </div>;
 }

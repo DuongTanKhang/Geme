@@ -21,7 +21,8 @@
     "db:studio": "prisma studio",
     "blog:migrate-images": "tsx scripts/migrate-blog-images.ts",
     "media:migrate-r2": "tsx scripts/migrate-media-assets-to-r2.ts",
-    "data:backfill-first-published": "tsx scripts/backfill-first-published.ts"
+    "data:backfill-first-published": "tsx scripts/backfill-first-published.ts",
+    "test:security": "tsx --test src/security/*.spec.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.0",
@@ -41,7 +42,7 @@
     "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
-    "sanitize-html": "^2.18.0"
+    "sanitize-html": "^2.18.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

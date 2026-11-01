@@ -18,7 +18,7 @@ function onlineOrderItems(body: Record<string, any>) {
 
 /** A price/stock quote only needs cart lines. Contact details are required when creating the order. */
 export function onlineOrderQuoteInput(body: Record<string, any>) {
-  return { items: onlineOrderItems(body), shippingFee: 0 };
+  return { items: onlineOrderItems(body), shippingFee: 0, loyaltyPointsToRedeem: body.loyaltyPointsToRedeem ?? 0 };
 }
 
 /** Accept only checkout fields; validate instead of silently truncating buyer data. */
@@ -50,6 +50,11 @@ export function onlineOrderInput(body: Record<string, any>) {
     if (!Number.isSafeInteger(expectedTotalAmount) || expectedTotalAmount < 0) throw new BadRequestException("Tổng tiền kiểm tra không hợp lệ. Hãy tải lại báo giá.");
   }
 
+  const loyaltyPointsToRedeem = body.loyaltyPointsToRedeem === undefined || body.loyaltyPointsToRedeem === null || body.loyaltyPointsToRedeem === ""
+    ? 0
+    : Number(body.loyaltyPointsToRedeem);
+  if (!Number.isSafeInteger(loyaltyPointsToRedeem) || loyaltyPointsToRedeem < 0) throw new BadRequestException("Số điểm dùng để thanh toán không hợp lệ.");
+
   return {
     customerName: name,
     phone,
@@ -65,6 +70,7 @@ export function onlineOrderInput(body: Record<string, any>) {
     discountAmount: 0,
     shippingFee: 0,
     expectedTotalAmount,
+    loyaltyPointsToRedeem,
     shippingMethod: "Giao hàng",
   };
 }

@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import type { Metadata } from "next";
 import { CatalogLiveSync } from "./components/catalog-live-sync";
 import { StructuredData } from "./components/structured-data";
@@ -19,7 +20,8 @@ export const metadata: Metadata = {
   twitter: { card: "summary_large_image", title: "GEME — Đá quý tự nhiên, dấu ấn riêng", description: "Trang sức đá quý tự nhiên, tinh tế và độc bản từ GEME." },
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  await connection(); // Per-request CSP nonce; explicit data caches remain available.
   const organization = { "@context": "https://schema.org", "@type": "Organization", "@id": `${absoluteSiteUrl("/")}#organization`, name: "GEME", url: absoluteSiteUrl("/") };
   return (
     <html lang="vi">

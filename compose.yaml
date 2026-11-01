@@ -14,6 +14,7 @@ services:
     environment:
       NODE_ENV: development
       CI: "true"
+      CSP_CONNECT_ORIGINS: ${CSP_CONNECT_ORIGINS:-}
       NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:4000/api/v1
       GEME_API_BASE_URL: http://geme-api:4000/api/v1
       GEME_SITE_URL: ${GEME_SITE_URL:-https://geme.vn}
@@ -38,11 +39,15 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:4000/api/v1}
+        GEME_API_BASE_URL: http://geme-api:4000/api/v1
+        MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-}
         GEME_STOREFRONT_ASSETS_URL: ${GEME_STOREFRONT_ASSETS_URL:-http://storefront:3000}
     environment:
       NODE_ENV: development
+      CSP_CONNECT_ORIGINS: ${CSP_CONNECT_ORIGINS:-}
       NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:4000/api/v1
       GEME_API_BASE_URL: http://geme-api:4000/api/v1
+      MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-}
       GEME_STOREFRONT_ASSETS_URL: http://storefront:3000
       AEGIS_AUTH_API_URL: http://aegis:5130
     ports:

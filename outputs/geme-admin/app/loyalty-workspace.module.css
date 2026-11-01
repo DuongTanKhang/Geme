@@ -1,0 +1,26 @@
+.workspace { display: grid; gap: 18px; }
+.cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.card, .panel { border: 1px solid #e4e8e5; border-radius: 12px; background: #fff; box-shadow: 0 4px 18px #173c2b08; }
+.card { padding: 18px; display: grid; gap: 7px; }
+.card span, .muted, .panel p { color: #738078; font-size: 14px; }
+.card strong { color: #173f34; font-size: 26px; }
+.panel { padding: 20px; }
+.panel h2 { margin: 0 0 8px; color: #183d34; font-size: 19px; }
+.settings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 18px 0; }
+.field { display: grid; gap: 7px; color: #45534b; font-size: 14px; }
+.field input, .field select, .adjust select, .adjust input, .adjust textarea { width: 100%; min-height: 40px; border: 1px solid #dce3de; border-radius: 8px; padding: 8px 10px; background: #fff; color: #273a31; font: inherit; }
+.toggle { display: flex; align-items: center; gap: 9px; padding: 12px 0; color: #39483f; }
+.actions { display: flex; justify-content: flex-end; gap: 8px; }
+.button { border: 1px solid #285847; border-radius: 8px; background: #285847; color: #fff; padding: 10px 16px; cursor: pointer; font: inherit; }
+.button:disabled { opacity: .55; cursor: wait; }
+.adjust { display: grid; grid-template-columns: minmax(190px, 1.4fr) minmax(120px, .5fr) minmax(220px, 1.6fr) auto; gap: 10px; align-items: end; margin-top: 14px; }
+.adjust label { display: grid; gap: 6px; color: #58665e; font-size: 13px; }
+.tableWrap { overflow: auto; margin-top: 12px; }
+.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.table th, .table td { padding: 11px 10px; border-bottom: 1px solid #edf0ed; text-align: left; white-space: nowrap; }
+.table th { color: #68776e; font-weight: 600; }
+.positive { color: #287b55; font-weight: 650; }
+.negative { color: #a55e50; font-weight: 650; }
+.error { color: #a43a32; }
+@media (max-width: 800px) { .cards, .settings { grid-template-columns: 1fr 1fr; } .adjust { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 520px) { .cards, .settings, .adjust { grid-template-columns: 1fr; } .panel { padding: 14px; } }

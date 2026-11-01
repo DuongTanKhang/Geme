@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { callAegis, upstreamError } from "../../../lib/customer-session";
+import { callAegis, isSameOriginRequest, upstreamError } from "../../../lib/customer-session";
 
 export async function POST(request: NextRequest) {
+  if (!isSameOriginRequest(request, true)) {
+    return NextResponse.json({ message: "Yêu cầu gửi mã đặt lại mật khẩu không hợp lệ." }, { status: 403 });
+  }
   try {
     const body = await request.json();
     const email = String(body.email ?? "").trim().toLowerCase();

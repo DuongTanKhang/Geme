@@ -40,6 +40,7 @@ export const ADMIN_PAGE_ACCESS_CATALOG = [
   { id: "shipping", label: "Quản lý giao hàng", permissions: ["shipping.read", "shipping.manage"] },
   { id: "products", label: "Sản phẩm", permissions: ["catalog.read", "catalog.write", "catalog.content.write", "catalog.price.write", "catalog.publish", "catalog.delete"] },
   { id: "customers", label: "Khách hàng", permissions: ["customers.read", "customers.write"] },
+  { id: "loyalty", label: "Điểm thưởng", permissions: ["customers.read", "customers.write"] },
   { id: "contacts", label: "Tin nhắn liên hệ", permissions: ["contacts.read", "contacts.manage"] },
   { id: "promotions", label: "Khuyến mãi", permissions: ["promotions.read", "promotions.write"] },
   { id: "posts", label: "Bài viết / Blog", permissions: ["content.read", "content.write"] },

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service.js";
 import type { AegisCustomerIdentity } from "../auth/aegis-customer.guard.js";
 import { MediaAssetsService } from "../media/media-assets.service.js";
+import { LoyaltyService } from "../loyalty/loyalty.service.js";
 
 type Input = Record<string, unknown>;
 
@@ -32,7 +33,7 @@ export class AccountService {
   private storefrontVisibilityCache: { expiresAt: number; where: Record<string, unknown> } | null = null;
   private storefrontVisibilityLoad: Promise<Record<string, unknown>> | null = null;
 
-  constructor(private readonly prisma: PrismaService, private readonly mediaAssets: MediaAssetsService) {}
+  constructor(private readonly prisma: PrismaService, private readonly mediaAssets: MediaAssetsService, private readonly loyalty: LoyaltyService) {}
 
   private async storefrontProductVisibilityWhere() {
     if (this.storefrontVisibilityCache && this.storefrontVisibilityCache.expiresAt > Date.now()) return this.storefrontVisibilityCache.where;
@@ -81,6 +82,10 @@ export class AccountService {
     return customer.id;
   }
 
+  async loyaltySummary(customerId: string) {
+    return this.loyalty.customerSummary(customerId);
+  }
+
   async profile(identity: AegisCustomerIdentity) {
     const customer = await this.ensureCustomer(identity);
     await this.attachVerifiedEmailOrders(customer.id, identity.email);
@@ -101,6 +106,7 @@ export class AccountService {
       orderCount,
       reviewCount,
       favoriteCount,
+      loyaltyPoints: await this.loyalty.balance(customer.id),
     };
   }
 

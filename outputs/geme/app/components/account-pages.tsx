@@ -18,6 +18,7 @@ type AccountProfile = {
   avatarUrl: string | null;
   orderCount: number;
   favoriteCount?: number;
+  loyaltyPoints?: number;
 };
 type AccountOrder = {
   id: string;
@@ -175,6 +176,10 @@ export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage
     if (!isRegister) {
       const prefilledEmail = new URLSearchParams(window.location.search).get("email")?.trim();
       if (prefilledEmail) setEmail(prefilledEmail);
+      if (new URLSearchParams(window.location.search).get("passwordChanged") === "1") {
+        setMessage("Mật khẩu đã được cập nhật. Vui lòng đăng nhập lại bằng mật khẩu mới.");
+        setSubmitted(true);
+      }
     }
   }, [isRegister]);
 
@@ -400,7 +405,7 @@ export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage
       setMessage(result.message || "Mật khẩu đã được đặt lại. Vui lòng đăng nhập bằng mật khẩu mới.");
       setSubmitted(true);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Không kết nối được máy chủ xác thực. Mã xác nhận vẫn được giữ lại.");
+      setMessage(error instanceof Error ? error.message : "Không kết nối được máy chủ xác thực. Nếu không thể đặt lại, hãy yêu cầu mã mới.");
       setSubmitted(false);
     } finally {
       setBusy(false);
@@ -504,7 +509,7 @@ export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage
 }
 
 const accountTabs = [
-  ["overview", "Tổng quan", "grid"], ["orders", "Đơn hàng của tôi", "orders"], ["favorites", "Sản phẩm yêu thích", "heart"], ["addresses", "Địa chỉ giao hàng", "pin"], ["profile", "Thông tin tài khoản", "user"], ["password", "Đổi mật khẩu", "lock"],
+  ["overview", "Tổng quan", "grid"], ["orders", "Đơn hàng của tôi", "orders"], ["favorites", "Sản phẩm yêu thích", "heart"], ["points", "Điểm thưởng", "star"], ["addresses", "Địa chỉ giao hàng", "pin"], ["profile", "Thông tin tài khoản", "user"], ["password", "Đổi mật khẩu", "lock"],
 ] as const;
 
 const orderStatusLabels: Record<string, string> = {
@@ -527,6 +532,9 @@ export function ProfilePage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [defaultAddress, setDefaultAddress] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [avatarPreview, setAvatarPreview] = useState("");
   const [avatarDataUrl, setAvatarDataUrl] = useState("");
   const [avatarBusy, setAvatarBusy] = useState(false);
@@ -536,6 +544,7 @@ export function ProfilePage() {
   const [payingOrderId, setPayingOrderId] = useState("");
   const [failedQrOrderId, setFailedQrOrderId] = useState("");
   const [startingQrOrderId, setStartingQrOrderId] = useState("");
+  const [loyalty, setLoyalty] = useState<{ availablePoints: number; settings: { enabled: boolean; pointValueVnd: number; minimumRedeemPoints: number; maximumRedeemPercent: number }; ledger: Array<{ id: string; type: string; points: number; note?: string | null; createdAt: string }> } | null>(null);
   const orderRefreshInFlight = useRef(false);
 
   const refreshOrdersAfterPaymentExpiry = useCallback(async () => {
@@ -603,6 +612,19 @@ export function ProfilePage() {
     }, 3000);
     return () => window.clearInterval(timer);
   }, [orders, payingOrderId, refreshOrdersAfterPaymentExpiry]);
+
+  useEffect(() => {
+    if (tab !== "points") return;
+    let cancelled = false;
+    void fetch("/api/account/loyalty", { cache: "no-store", headers: { "Cache-Control": "no-cache" } })
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || "Không tải được lịch sử điểm thưởng.");
+        if (!cancelled) setLoyalty(result);
+      })
+      .catch((error) => { if (!cancelled) setNotice(error instanceof Error ? error.message : "Không tải được lịch sử điểm thưởng."); });
+    return () => { cancelled = true; };
+  }, [tab]);
 
   useEffect(() => {
     const requestedTab = new URLSearchParams(window.location.search).get("tab");
@@ -702,6 +724,38 @@ export function ProfilePage() {
     finally { window.location.assign("/dang-nhap"); }
   }
 
+  async function changePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (newPassword !== confirmNewPassword) {
+      setNotice("Mật khẩu xác nhận chưa khớp.");
+      return;
+    }
+    if (newPassword === currentPassword) {
+      setNotice("Mật khẩu mới phải khác mật khẩu hiện tại.");
+      return;
+    }
+    setBusy(true);
+    setNotice("");
+    try {
+      const response = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Không đổi được mật khẩu.");
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setNotice(result.message || "Đổi mật khẩu thành công. Vui lòng đăng nhập lại.");
+      window.setTimeout(() => window.location.assign("/dang-nhap?passwordChanged=1"), 900);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Không đổi được mật khẩu. Vui lòng thử lại.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function selectAvatar(file?: File) {
     if (!file) return;
     setAvatarBusy(true);
@@ -728,14 +782,15 @@ export function ProfilePage() {
         {!loading && !profile && <p className="profile-orders-empty">Không tải được hồ sơ khách hàng.</p>}
         {!loading && profile && <>
           {tab === "overview" && <>
-            <div className="profile-stats"><div><AccountIcon name="calendar" /><strong>{profile.orderCount}</strong><span>Đơn hàng</span></div><div><AccountIcon name="heart" /><strong>{favorites.length}</strong><span>Sản phẩm yêu thích</span></div><div><AccountIcon name="star" /><strong>0</strong><span>Điểm thưởng</span></div><div><AccountIcon name="gift" /><strong>0</strong><span>Ưu đãi đang có</span></div></div>
+            <div className="profile-stats"><div><AccountIcon name="calendar" /><strong>{profile.orderCount}</strong><span>Đơn hàng</span></div><div><AccountIcon name="heart" /><strong>{favorites.length}</strong><span>Sản phẩm yêu thích</span></div><div><AccountIcon name="star" /><strong>{Number(profile.loyaltyPoints || 0).toLocaleString("vi-VN")}</strong><span>Điểm thưởng</span></div><div><AccountIcon name="gift" /><strong>0</strong><span>Ưu đãi đang có</span></div></div>
             <section className="profile-panel"><div className="profile-panel-heading"><h2>Đơn hàng gần đây</h2><button type="button" onClick={() => setTab("orders")}>Xem tất cả <span>→</span></button></div><OrderList orders={orders.slice(0, 5)} bankQr={bankQr} bankQrReady={bankQrReady} payingOrderId={payingOrderId} failedQrOrderId={failedQrOrderId} startingQrOrderId={startingQrOrderId} onTogglePayment={toggleOrderPayment} onPaymentExpired={refreshOrdersAfterPaymentExpiry} onQrError={setFailedQrOrderId} /></section>
           </>}
           {tab === "orders" && <section className="profile-panel"><div className="profile-panel-heading"><h2>Đơn hàng của tôi</h2><span>{orders.length} đơn hàng</span></div><OrderList orders={orders} bankQr={bankQr} bankQrReady={bankQrReady} payingOrderId={payingOrderId} failedQrOrderId={failedQrOrderId} startingQrOrderId={startingQrOrderId} onTogglePayment={toggleOrderPayment} onPaymentExpired={refreshOrdersAfterPaymentExpiry} onQrError={setFailedQrOrderId} /></section>}
           {tab === "favorites" && <section className="profile-panel"><div className="profile-panel-heading"><h2>Sản phẩm yêu thích</h2><span>{favorites.length} sản phẩm</span></div>{favorites.length ? <div className="profile-favorites-grid">{favorites.map((product) => <StoreProductCard key={product.id} product={product} promotions={[]} />)}</div> : <div className="profile-favorites-empty">Bạn chưa có sản phẩm yêu thích.</div>}</section>}
+          {tab === "points" && <section className="profile-panel profile-loyalty-panel"><div className="profile-panel-heading"><h2>Điểm thưởng GEME</h2><strong>{Number(loyalty?.availablePoints ?? profile.loyaltyPoints ?? 0).toLocaleString("vi-VN")} điểm</strong></div>{loyalty?.settings.enabled && <p>Mỗi {loyalty.settings.minimumRedeemPoints.toLocaleString("vi-VN")} điểm có thể bắt đầu đổi; 1 điểm tương đương {loyalty.settings.pointValueVnd.toLocaleString("vi-VN")} ₫ khi thanh toán. Điểm tối đa đổi cho đơn là {loyalty.settings.maximumRedeemPercent}% giá trị hàng.</p>}{loyalty?.ledger.length ? <div className="profile-loyalty-ledger">{loyalty.ledger.map((entry) => <article key={entry.id}><span><strong>{entry.note || entry.type}</strong><small>{new Date(entry.createdAt).toLocaleString("vi-VN")}</small></span><b className={entry.points >= 0 ? "is-earned" : "is-redeemed"}>{entry.points > 0 ? "+" : ""}{entry.points.toLocaleString("vi-VN")} điểm</b></article>)}</div> : <p className="profile-orders-empty">{loyalty ? "Chưa có giao dịch điểm thưởng." : "Đang tải lịch sử điểm thưởng…"}</p>}</section>}
           {tab === "addresses" && <section className="profile-panel profile-edit-panel"><div className="profile-panel-heading"><h2>Địa chỉ giao hàng mặc định</h2><span>Được dùng khi đặt hàng</span></div><form className="profile-form" onSubmit={saveProfile}><label>Số điện thoại<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Nhập số điện thoại" /></label><label>Địa chỉ giao hàng<textarea value={defaultAddress} onChange={(event) => setDefaultAddress(event.target.value)} placeholder="Nhập địa chỉ giao hàng" rows={3} /></label><button type="submit" disabled={busy}>{busy ? "ĐANG LƯU..." : "LƯU THAY ĐỔI"}</button></form></section>}
           {tab === "profile" && <section className="profile-panel profile-edit-panel"><div className="profile-panel-heading"><h2>Thông tin tài khoản</h2><span>Email đăng nhập đã xác minh bởi AEGIS</span></div><div className="profile-avatar-editor"><div className="profile-avatar profile-avatar-large">{avatarPreview ? <img src={avatarPreview} alt="Ảnh đại diện xem trước"/> : <AccountIcon name="user" />}</div><label>Ảnh đại diện<span className="profile-avatar-upload"><input type="file" accept="image/png,image/jpeg,image/webp" disabled={avatarBusy || busy} onChange={(event) => { void selectAvatar(event.currentTarget.files?.[0]); event.currentTarget.value = ""; }}/><span>{avatarBusy ? "Đang xử lý ảnh…" : "↑　Chọn ảnh đại diện"}</span></span><small>{avatarBusy ? "Đang xử lý ảnh…" : "PNG, JPG hoặc WebP. Ảnh sẽ được thu nhỏ và nén trước khi lưu."}</small></label></div><form className="profile-form" onSubmit={saveProfile}><label>Họ và tên<input value={name} onChange={(event) => setName(event.target.value)} maxLength={160} autoComplete="name" required /></label><label>Email<input type="email" value={email} readOnly /></label><label>Số điện thoại<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Nhập số điện thoại" autoComplete="tel" /></label><label>Địa chỉ giao hàng<textarea value={defaultAddress} onChange={(event) => setDefaultAddress(event.target.value)} placeholder="Nhập địa chỉ giao hàng" rows={3} /></label><button type="submit" disabled={busy || avatarBusy}>{busy ? "ĐANG LƯU..." : "LƯU THAY ĐỔI"}</button></form></section>}
-          {tab === "password" && <section className="profile-panel profile-edit-panel"><div className="profile-panel-heading"><h2>Đổi mật khẩu</h2><span>Bảo vệ tài khoản của bạn</span></div><p className="profile-address-empty">Luồng đổi mật khẩu chưa được bật trên AEGIS. Hãy liên hệ GEME để được hỗ trợ.</p></section>}
+          {tab === "password" && <section className="profile-panel profile-edit-panel"><div className="profile-panel-heading"><h2>Đổi mật khẩu</h2><span>Bảo vệ tài khoản của bạn</span></div><form className="profile-form" onSubmit={changePassword}><label>Mật khẩu hiện tại<input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" required maxLength={128}/></label><label>Mật khẩu mới<input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" required minLength={10} maxLength={128}/><small>Từ 10 đến 128 ký tự, có chữ hoa, chữ thường, số và ký tự đặc biệt.</small></label><label>Nhập lại mật khẩu mới<input type="password" value={confirmNewPassword} onChange={(event) => setConfirmNewPassword(event.target.value)} autoComplete="new-password" required minLength={10} maxLength={128}/></label><button type="submit" disabled={busy}>{busy ? "ĐANG CẬP NHẬT…" : "ĐỔI MẬT KHẨU"}</button></form></section>}
         </>}
       </section>
     </div>

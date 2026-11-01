@@ -16,6 +16,7 @@ public sealed class ResetPasswordCommandHandler : IRequestHandler<ResetPasswordC
     private readonly IOtpService _otpService;
     private readonly IPasswordHasher _passwordHasher;
     private readonly ISessionRepository _sessionRepository;
+    private readonly IRefreshTokenRepository _refreshTokenRepository;
     private readonly ISecurityAuditRepository _securityAuditRepository;
 
     public ResetPasswordCommandHandler(
@@ -23,12 +24,14 @@ public sealed class ResetPasswordCommandHandler : IRequestHandler<ResetPasswordC
         IOtpService otpService,
         IPasswordHasher passwordHasher,
         ISessionRepository sessionRepository,
+        IRefreshTokenRepository refreshTokenRepository,
         ISecurityAuditRepository securityAuditRepository)
     {
         _userRepository = userRepository;
         _otpService = otpService;
         _passwordHasher = passwordHasher;
         _sessionRepository = sessionRepository;
+        _refreshTokenRepository = refreshTokenRepository;
         _securityAuditRepository = securityAuditRepository;
     }
 
@@ -60,6 +63,7 @@ public sealed class ResetPasswordCommandHandler : IRequestHandler<ResetPasswordC
         await _userRepository.UpdateAsync(user);
 
         // A password recovery invalidates every existing browser/device session.
+        await _refreshTokenRepository.RevokeAllAsync(user.Id, request.IpAddress);
         await _sessionRepository.RevokeAllByUserId(user.Id);
         await _securityAuditRepository.AddAsync(
             user.Id,

@@ -449,6 +449,7 @@ model Customer {
   reviews        ProductReview[]
   promotions     PromotionUsage[]
   favorites      CustomerFavorite[]
+  loyaltyPointTransactions LoyaltyPointTransaction[]
 
   @@index([status, createdAt])
   @@index([createdAt(sort: Desc), id(sort: Desc)])
@@ -759,6 +760,8 @@ model Order {
   carrierFee       Decimal?       @map("carrier_fee") @db.Decimal(14, 0)
   subtotal        Decimal         @db.Decimal(14, 0)
   discountAmount  Decimal         @default(0) @map("discount_amount") @db.Decimal(14, 0)
+  loyaltyPointsRedeemed Int       @default(0) @map("loyalty_points_redeemed")
+  loyaltyDiscountAmount Decimal   @default(0) @map("loyalty_discount_amount") @db.Decimal(14, 0)
   inventoryReservedAt DateTime?   @map("inventory_reserved_at") @db.Timestamptz(3)
   inventoryCommittedAt DateTime?  @map("inventory_committed_at") @db.Timestamptz(3)
   inventoryReleasedAt DateTime?   @map("inventory_released_at") @db.Timestamptz(3)
@@ -788,6 +791,7 @@ model Order {
   returns         OrderReturn[]
   codReconciliationItems CodReconciliationItem[]
   promotionUsage  PromotionUsage?
+  loyaltyPointTransactions LoyaltyPointTransaction[]
 
   @@index([status, placedAt(sort: Desc)])
   @@index([customerId, placedAt(sort: Desc)])
@@ -799,6 +803,26 @@ model Order {
   @@index([inventoryReservedAt, inventoryCommittedAt, inventoryReleasedAt])
   @@index([status, inventoryReservationExpiresAt])
   @@map("orders")
+}
+
+model LoyaltyPointTransaction {
+  id             String    @id @default(uuid()) @db.Uuid
+  customerId     String    @map("customer_id") @db.Uuid
+  orderId        String?   @map("order_id") @db.Uuid
+  idempotencyKey String    @unique @map("idempotency_key") @db.VarChar(180)
+  type           String    @db.VarChar(40)
+  status         String    @default("POSTED") @db.VarChar(16)
+  points         Int
+  amountVnd      Decimal?  @map("amount_vnd") @db.Decimal(14, 0)
+  note           String?   @db.VarChar(500)
+  expiresAt      DateTime? @map("expires_at") @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  customer       Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order          Order?    @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, status, createdAt(sort: Desc)])
+  @@index([orderId, type])
+  @@map("loyalty_point_transactions")
 }
 
 model OrderItem {

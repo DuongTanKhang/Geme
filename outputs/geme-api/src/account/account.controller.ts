@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Headers, Param, Patch, Post, Req, UseGuards } from "@nestjs/common";
 import { AegisCustomerGuard, type AegisCustomerIdentity } from "../auth/aegis-customer.guard.js";
 import { CommerceService } from "../commerce/commerce.service.js";
-import { onlineOrderInput } from "../commerce/online-order-input.js";
+import { onlineOrderInput, onlineOrderQuoteInput } from "../commerce/online-order-input.js";
 import { AccountService } from "./account.service.js";
 
 type AuthenticatedRequest = { customerIdentity: AegisCustomerIdentity };
@@ -27,6 +27,18 @@ export class AccountController {
   @Get("orders")
   orders(@Req() request: AuthenticatedRequest) {
     return this.account.orders(request.customerIdentity);
+  }
+
+  @Post("orders/quote")
+  async quoteOrder(@Req() request: AuthenticatedRequest, @Body() body: Record<string, any>) {
+    const customerId = await this.account.customerId(request.customerIdentity);
+    return this.commerce.quoteOrder(onlineOrderQuoteInput(body), customerId);
+  }
+
+  @Get("loyalty")
+  async loyalty(@Req() request: AuthenticatedRequest) {
+    const customerId = await this.account.customerId(request.customerIdentity);
+    return this.account.loyaltySummary(customerId);
   }
 
   @Post("orders/:code/qr-payment")

@@ -19,6 +19,7 @@ public sealed class OtpService : IOtpService
     private readonly IMemoryCache _memoryCache;
     private readonly OtpEmailQueue _emailQueue;
     private readonly OtpOptions _options;
+    private readonly object _memoryOtpGate = new();
 
     public OtpService(
         IConnectionMultiplexer redis,
@@ -175,8 +176,36 @@ public sealed class OtpService : IOtpService
             return OtpVerificationResult.Invalid;
         }
 
-        await DeleteAsync(userId, purpose, includeCooldown: true);
-        return OtpVerificationResult.Valid;
+        if (_redis.IsConnected)
+        {
+            // Consume only the exact value we verified. A Redis script makes OTP use
+            // one-time even when two reset requests race across API replicas.
+            const string consumeIfUnchanged = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1], KEYS[2], KEYS[3], KEYS[4]) else return 0 end";
+            var consumed = await _database.ScriptEvaluateAsync(
+                consumeIfUnchanged,
+                new RedisKey[]
+                {
+                    OtpKey(userId, purpose),
+                    DeliveryKey(userId, purpose),
+                    AttemptsKey(userId, purpose),
+                    CooldownKey(userId, purpose)
+                },
+                new RedisValue[] { stored });
+            return (long)consumed > 0
+                ? OtpVerificationResult.Valid
+                : OtpVerificationResult.ExpiredOrAlreadyUsed;
+        }
+
+        lock (_memoryOtpGate)
+        {
+            var current = _memoryCache.Get<MemoryOtp>(OtpKey(userId, purpose));
+            if (current is null || !string.Equals(current.Value, stored, StringComparison.Ordinal))
+                return OtpVerificationResult.ExpiredOrAlreadyUsed;
+
+            _memoryCache.Remove(OtpKey(userId, purpose));
+            _memoryCache.Remove(CooldownKey(userId, purpose));
+            return OtpVerificationResult.Valid;
+        }
     }
 
     private byte[] ComputeHash(Guid userId, string email, OtpPurpose purpose, string otp, byte[] salt)
@@ -201,11 +230,14 @@ public sealed class OtpService : IOtpService
 
     private bool ReserveMemoryCooldown(string key, TimeSpan cooldown)
     {
-        if (_memoryCache.TryGetValue(key, out _))
-            return false;
+        lock (_memoryOtpGate)
+        {
+            if (_memoryCache.TryGetValue(key, out _))
+                return false;
 
-        _memoryCache.Set(key, true, cooldown);
-        return true;
+            _memoryCache.Set(key, true, cooldown);
+            return true;
+        }
     }
 
     private async Task<long> IncrementAttemptsAsync(Guid userId, OtpPurpose purpose)
@@ -218,12 +250,15 @@ public sealed class OtpService : IOtpService
             return attempts;
         }
 
-        var entry = _memoryCache.Get<MemoryOtp>(OtpKey(userId, purpose));
-        if (entry is null)
-            return 0;
+        lock (_memoryOtpGate)
+        {
+            var entry = _memoryCache.Get<MemoryOtp>(OtpKey(userId, purpose));
+            if (entry is null)
+                return 0;
 
-        entry.Attempts++;
-        return entry.Attempts;
+            entry.Attempts++;
+            return entry.Attempts;
+        }
     }
 
     private async Task DeleteAsync(Guid userId, OtpPurpose purpose, bool includeCooldown)
@@ -237,9 +272,12 @@ public sealed class OtpService : IOtpService
             return;
         }
 
-        _memoryCache.Remove(OtpKey(userId, purpose));
-        if (includeCooldown)
-            _memoryCache.Remove(CooldownKey(userId, purpose));
+        lock (_memoryOtpGate)
+        {
+            _memoryCache.Remove(OtpKey(userId, purpose));
+            if (includeCooldown)
+                _memoryCache.Remove(CooldownKey(userId, purpose));
+        }
     }
 
     private sealed class MemoryOtp(string value, string deliveryId)

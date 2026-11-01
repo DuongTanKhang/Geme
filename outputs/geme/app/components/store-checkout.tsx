@@ -39,6 +39,9 @@ type CheckoutQuoteItem = {
 type CheckoutQuote = {
   subtotal: number;
   discountAmount: number;
+  loyaltyPointsRedeemed: number;
+  loyaltyDiscountAmount: number;
+  loyalty?: { enabled: boolean; availablePoints: number; pointsToRedeem: number; pointValueVnd: number; minimumRedeemPoints: number; maximumRedeemPercent: number; maxRedeemablePoints: number };
   shippingFee: number;
   totalAmount: number;
   items: CheckoutQuoteItem[];
@@ -64,6 +67,7 @@ export function StoreCheckout() {
   const [quoteError, setQuoteError] = useState("");
   const [quoteRefreshVersion, setQuoteRefreshVersion] = useState(0);
   const [accountSignedIn, setAccountSignedIn] = useState<boolean | null>(null);
+  const [pointsToRedeem, setPointsToRedeem] = useState(0);
   const [paymentMethod, setPaymentMethod] = useState("COD");
   const [customer, setCustomer] = useState({ name: "", phone: "", email: "", address: "", note: "" });
   const customerTouched = useRef(new Set<string>());
@@ -123,12 +127,13 @@ export function StoreCheckout() {
           address: !customerTouched.current.has("address") && !current.address ? profile.defaultAddress?.trim() || "" : current.address,
         }));
       })
-      .catch(() => { /* Guests can enter their details normally if no profile is available. */ });
+      .catch(() => { if (alive) setAccountSignedIn(false); /* Guests can enter their details normally if no profile is available. */ });
     return () => { alive = false; };
   }, []);
 
   const cartSignature = useMemo(() => JSON.stringify(lines.map((line) => ({ productId: line.productId, variantId: line.variantId, sku: line.sku, quantity: line.quantity }))), [lines]);
-  const activeQuote = quote?.signature === cartSignature ? quote.value : null;
+  const quoteSignature = `${cartSignature}:${accountSignedIn === null ? "pending" : accountSignedIn ? "member" : "guest"}:${pointsToRedeem}`;
+  const activeQuote = quote?.signature === quoteSignature ? quote.value : null;
   const total = activeQuote?.totalAmount ?? 0;
 
   useEffect(() => {
@@ -139,26 +144,29 @@ export function StoreCheckout() {
       setQuoteLoading(false);
       return;
     }
+    if (accountSignedIn === null) return;
     const controller = new AbortController();
     setQuote(null);
     setQuoteError("");
     setQuoteLoading(true);
-    void fetch(`${API_BASE}/orders/quote`, {
+    const authenticatedQuote = accountSignedIn === true;
+    const endpoint = authenticatedQuote ? "/api/account/orders/quote" : `${API_BASE}/orders/quote`;
+    void fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId, sku: line.sku, quantity: line.quantity })) }),
+      body: JSON.stringify({ items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId, sku: line.sku, quantity: line.quantity })), loyaltyPointsToRedeem: authenticatedQuote ? pointsToRedeem : 0 }),
       signal: controller.signal,
     }).then(async (response) => {
       const result = await response.json();
       if (!response.ok) throw new Error(Array.isArray(result.message) ? result.message.join(" ") : result.message || "Không kiểm tra được giá và tồn kho.");
-      setQuote({ signature: cartSignature, value: result as CheckoutQuote });
+      setQuote({ signature: quoteSignature, value: result as CheckoutQuote });
     }).catch((caught) => {
       if (!controller.signal.aborted) setQuoteError(caught instanceof Error ? caught.message : "Không thể kiểm tra giá và tồn kho.");
     }).finally(() => {
       if (!controller.signal.aborted) setQuoteLoading(false);
     });
     return () => controller.abort();
-  }, [cartSignature, lines, ready, quoteRefreshVersion]);
+  }, [accountSignedIn, cartSignature, lines, pointsToRedeem, quoteSignature, ready, quoteRefreshVersion]);
 
   const changeQuantity = (key: string, direction: number) => {
     setLines((current) => current.map((line) => line.key === key
@@ -190,6 +198,7 @@ export function StoreCheckout() {
         note: customer.note,
         paymentMethod,
         expectedTotalAmount: activeQuote.totalAmount,
+        loyaltyPointsToRedeem: authenticated ? pointsToRedeem : 0,
         items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId, sku: line.sku, quantity: line.quantity })),
       };
       const fingerprintBytes = new TextEncoder().encode(JSON.stringify(payload));
@@ -293,6 +302,7 @@ export function StoreCheckout() {
           {activeQuote ? <>
             <div className="checkout-total-row"><span>Tạm tính</span><strong>{formatStorePrice(activeQuote.subtotal)}</strong></div>
             {activeQuote.discountAmount > 0 && <div className="checkout-total-row"><span>Khuyến mãi</span><strong>− {formatStorePrice(activeQuote.discountAmount)}</strong></div>}
+            {activeQuote.loyaltyDiscountAmount > 0 && <div className="checkout-total-row"><span>Điểm thưởng ({activeQuote.loyaltyPointsRedeemed.toLocaleString("vi-VN")} điểm)</span><strong>− {formatStorePrice(activeQuote.loyaltyDiscountAmount)}</strong></div>}
             <div className="checkout-total-row"><span>Phí vận chuyển</span><strong>{formatStorePrice(activeQuote.shippingFee)}</strong></div>
             <div className="checkout-total-row is-grand-total"><span>Tổng thanh toán</span><strong>{formatStorePrice(total)}</strong></div>
           </> : <span>{quoteLoading ? "Đang xác nhận giá và tồn kho…" : "Chưa thể xác nhận giá và tồn kho."}</span>}
@@ -300,6 +310,11 @@ export function StoreCheckout() {
       </section>
       <form className="checkout-form" onSubmit={submitOrder}>
         <h2>Thông tin nhận hàng</h2>
+        {accountSignedIn === true && activeQuote?.loyalty?.enabled && <section className="checkout-loyalty" aria-label="Sử dụng điểm thưởng">
+          <div><strong>Điểm GEME của bạn</strong><span>Đang có {activeQuote.loyalty.availablePoints.toLocaleString("vi-VN")} điểm · {activeQuote.loyalty.pointValueVnd.toLocaleString("vi-VN")} ₫/điểm</span></div>
+          <label>Dùng điểm để giảm giá<input type="number" inputMode="numeric" min={0} max={activeQuote.loyalty.maxRedeemablePoints} step={1} value={pointsToRedeem || ""} onChange={(event) => setPointsToRedeem(Math.max(0, Number(event.target.value) || 0))} placeholder={`Tối đa ${activeQuote.loyalty.maxRedeemablePoints.toLocaleString("vi-VN")}`} /></label>
+          <small>Dùng từ {activeQuote.loyalty.minimumRedeemPoints.toLocaleString("vi-VN")} điểm; tối đa {activeQuote.loyalty.maximumRedeemPercent}% phần tiền hàng. Không áp dụng cho phí giao hàng.</small>
+        </section>}
         <label>Họ và tên<input required value={customer.name} onChange={(event) => { customerTouched.current.add("name"); setCustomer({ ...customer, name: event.target.value }); }} autoComplete="name" /></label>
         <div className="checkout-form-row"><label>Số điện thoại<input required type="tel" value={customer.phone} onChange={(event) => { customerTouched.current.add("phone"); setCustomer({ ...customer, phone: event.target.value }); }} autoComplete="tel" /></label><label>Email<input required type="email" value={customer.email} onChange={(event) => { customerTouched.current.add("email"); setCustomer({ ...customer, email: event.target.value }); }} autoComplete="email" /></label></div>
         <label>Địa chỉ nhận hàng<textarea required rows={3} value={customer.address} onChange={(event) => { customerTouched.current.add("address"); setCustomer({ ...customer, address: event.target.value }); }} autoComplete="street-address" /></label>

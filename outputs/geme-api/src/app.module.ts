@@ -1,3 +1,4 @@
+import { RequestRateLimitModule } from "./security/request-rate-limit.module.js";
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { AccountModule } from "./account/account.module.js";
@@ -14,6 +15,6 @@ import { ContactModule } from "./contact/contact.module.js";
 import { SePayModule } from "./sepay/sepay.module.js";
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, AdminAuthModule, SocialModule, ShopeeModule, ContactModule, SePayModule, HealthModule, MaterialsModule, CommerceModule, AccountModule, Pos365Module, ViettelPostModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), RequestRateLimitModule, PrismaModule, AdminAuthModule, SocialModule, ShopeeModule, ContactModule, SePayModule, HealthModule, MaterialsModule, CommerceModule, AccountModule, Pos365Module, ViettelPostModule],
 })
 export class AppModule {}

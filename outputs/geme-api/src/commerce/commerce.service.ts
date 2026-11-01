@@ -12,6 +12,7 @@ import { canTransitionOrder } from "./order-state.js";
 import { getInventoryReservationExpiry, getQrPaymentWindow } from "./reservation-expiry.js";
 import { assertBangleQualityImages, normalizeBangleQuality, synchronizeBangleVariantMedia } from "./bangle-variant-media.js";
 import { isNewLabelActive } from "./new-arrivals.rules.js";
+import { LoyaltyService } from "../loyalty/loyalty.service.js";
 
 type Input = Record<string, any>;
 const inventoryReceiptDuplicateWindowMs = 5 * 60 * 1000;
@@ -235,12 +236,12 @@ const mapStorefrontProducts = (products: any[]) => {
   }));
 };
 const selectAdminOrder = {
-  id: true, code: true, status: true, customerName: true, customerEmail: true, customerPhone: true,
+  id: true, code: true, status: true, customerId: true, customerName: true, customerEmail: true, customerPhone: true,
   shippingAddress: true, shippingMethod: true, trackingCode: true, shippingProvider: true,
   shippingServiceCode: true, carrierShipmentStatus: true, carrierShipmentError: true,
   carrierFreightPayment: true, carrierCodAmount: true, carrierStatusCode: true,
   carrierStatusName: true, carrierStatusAt: true, carrierLocation: true, carrierFee: true,
-  subtotal: true, discountAmount: true, shippingFee: true, totalAmount: true, note: true,
+  subtotal: true, discountAmount: true, loyaltyPointsRedeemed: true, loyaltyDiscountAmount: true, shippingFee: true, totalAmount: true, note: true,
   pos365SyncStatus: true, pos365SyncError: true, placedAt: true,
   customer: { select: { name: true, phone: true, email: true } },
   items: {
@@ -282,7 +283,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   private readonly productReadLoads = new Map<string, Promise<any[]>>();
   private productReadGeneration = 0;
 
-  constructor(private readonly prisma: PrismaService, private readonly pos365: Pos365Service, private readonly mediaStore: MediaAssetsService) {}
+  constructor(private readonly prisma: PrismaService, private readonly pos365: Pos365Service, private readonly mediaStore: MediaAssetsService, private readonly loyalty: LoyaltyService) {}
 
   private async queueProductStockSync(client: any, productIds: Iterable<string>) {
     const ids = [...new Set(productIds)].filter(Boolean);
@@ -744,6 +745,12 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   async products(query: Record<string, string>) {
+    // The endpoint is also reachable without the storefront UI. Keep the
+    // database `contains` filters bounded even when a caller sends an
+    // unusually large search term directly to the API.
+    const search = typeof query.search === "string"
+      ? query.search.normalize("NFKC").trim().slice(0, 120)
+      : "";
     const where: Input = {};
     if (query.all !== "true") where.status = "ACTIVE";
     if (["JEWELRY", "GEMSTONE"].includes(query.kind)) where.kind = query.kind;
@@ -752,10 +759,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (query.materialOptionId) where.materialOptionId = query.materialOptionId;
     if (query.new === "true") where.isNew = true;
     if (query.featured === "true") where.isFeatured = true;
-    if (query.search) where.OR = [
-      { name: { contains: query.search, mode: "insensitive" } },
-      { sku: { contains: query.search, mode: "insensitive" } },
-      { variants: { some: { sku: { contains: query.search, mode: "insensitive" } } } },
+    if (search) where.OR = [
+      { name: { contains: search, mode: "insensitive" } },
+      { sku: { contains: search, mode: "insensitive" } },
+      { variants: { some: { sku: { contains: search, mode: "insensitive" } } } },
     ];
     if (query.all !== "true") where.AND = (where.AND || []).concat(await this.storefrontProductVisibilityWhere());
     const orderBy = [{ isNew: "desc" as const }, { createdAt: "desc" as const }, { id: "asc" as const }];
@@ -764,7 +771,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const skip = Math.min(Math.max(Math.floor(Number(query.offset) || 0), 0), 1_000_000);
     if (query.view === "sitemap") {
       const loadSitemapEntries = () => this.prisma.product.findMany({ where, select: { slug: true, createdAt: true, updatedAt: true }, orderBy, take, skip });
-      if (query.all === "true" || query.search) return loadSitemapEntries();
+      if (query.all === "true" || search) return loadSitemapEntries();
       const cacheKey = JSON.stringify(Object.entries(query).sort(([left], [right]) => left.localeCompare(right)));
       return this.cachedPublicProductRead(cacheKey, loadSitemapEntries);
     }
@@ -775,7 +782,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         : query.view === "admin-list"
           ? this.prisma.product.findMany({ where, select: selectAdminProductList, orderBy, take, skip }).then((records) => records.map((record) => ({ ...record, adminSummary: true })))
         : this.prisma.product.findMany({ where, include: query.view === "storefront" ? includeStorefrontProduct : includeProduct, orderBy, take, skip }).then((records) => query.view === "storefront" ? mapStorefrontProducts(records) : records);
-    if (query.all === "true" || query.search || !["storefront", "storefront-list"].includes(query.view)) return load();
+    if (query.all === "true" || search || !["storefront", "storefront-list"].includes(query.view)) return load();
     const cacheKey = JSON.stringify(Object.entries(query).sort(([left], [right]) => left.localeCompare(right)));
     return this.cachedPublicProductRead(cacheKey, load);
   }
@@ -1875,7 +1882,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     }
     const reason = String(query.reason || "");
     if (["ORDER", "CUSTOMER", "TRANSFER", "OTHER"].includes(reason)) where.reason = reason;
-    const term = String(query.search || "").trim();
+    const term = String(query.search || "").normalize("NFKC").trim().slice(0, 120);
     if (term) where.OR = [
       { issueNo: { contains: term, mode: "insensitive" } },
       { recipient: { contains: term, mode: "insensitive" } },
@@ -2808,7 +2815,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
 
     const where: Input = {};
     if (query.status === "ACTIVE" || query.status === "INACTIVE") where.status = query.status;
-    if (query.search) where.OR = [{ name: { contains: query.search, mode: "insensitive" } }, { email: { contains: query.search, mode: "insensitive" } }, { phone: { contains: query.search, mode: "insensitive" } }];
+    const search = typeof query.search === "string" ? query.search.normalize("NFKC").trim().slice(0, 120) : "";
+    if (search) where.OR = [{ name: { contains: search, mode: "insensitive" } }, { email: { contains: search, mode: "insensitive" } }, { phone: { contains: search, mode: "insensitive" } }];
     return this.prisma.customer.findMany({
       where,
       select: {
@@ -3016,6 +3024,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             });
             if (claimed.count !== 1) return false;
             await this.releaseOrderReservation(tx, candidate, changedProductIds, "RESERVATION_EXPIRED");
+            await this.loyalty.releaseReservation(tx, candidate.id);
             await this.queueProductStockSync(tx, changedProductIds);
             await tx.auditLog.create({ data: {
               action: "ORDER_RESERVATION_EXPIRED",
@@ -3089,6 +3098,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           await this.releaseOrderReservation(tx, current, changedProductIds);
           inventoryReleasedAt = releasedAt;
         }
+        if (status === "CANCELLED") await this.loyalty.releaseReservation(tx, id);
         // Stock is reduced when the order reserves it. At carrier handoff the
         // reservation stops being on-hand stock; never decrement stock twice.
         if ((status === "SHIPPING" || status === "DELIVERED") && current.inventoryReservedAt && !current.inventoryReleasedAt && !current.inventoryCommittedAt) {
@@ -3118,6 +3128,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         });
         const updatedOrder = await tx.order.findUnique({ where: { id }, select: selectAdminOrder });
         if (!updatedOrder) throw new NotFoundException("Không tìm thấy đơn hàng sau khi cập nhật.");
+        if (status === "DELIVERED") await this.loyalty.awardIfDeliveredAndPaid(tx, updatedOrder);
         await tx.auditLog.create({ data: {
           adminId: actor?.id || null,
           correlationId: actor?.correlationId,
@@ -3356,6 +3367,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           },
           include: { items: true, payments: { include: { refunds: true }, orderBy: { createdAt: "asc" } }, customer: true },
         });
+        if (current.status !== "CANCELLED" && totalCapturedAfter >= Number(current.totalAmount)) {
+          await this.loyalty.settleReservation(tx, id);
+          await this.loyalty.awardIfDeliveredAndPaid(tx, result);
+        }
         await tx.auditLog.create({ data: {
           adminId: actor.id || null,
           correlationId: actor.correlationId,
@@ -3392,7 +3407,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return loadActiveStorePromotions(client, now);
   }
 
-  async quoteOrder(input: Input) {
+  async quoteOrder(input: Input, authenticatedCustomerId?: string) {
     const items = Array.isArray(input.items) ? input.items : [];
     if (!items.length) throw new BadRequestException("Đơn hàng cần ít nhất một sản phẩm.");
     const visibility = await this.storefrontProductVisibilityWhere();
@@ -3447,7 +3462,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         });
       }
       const shippingFee = Math.max(0, Number(input.shippingFee) || 0);
-      return { subtotal, discountAmount, shippingFee, totalAmount: subtotal - discountAmount + shippingFee, items: quotedItems };
+      const loyalty = await this.loyalty.preview(tx, authenticatedCustomerId, subtotal - discountAmount, input.loyaltyPointsToRedeem);
+      return { subtotal, discountAmount, loyaltyPointsRedeemed: loyalty.pointsToRedeem, loyaltyDiscountAmount: loyalty.discountAmount, loyalty, shippingFee, totalAmount: subtotal - discountAmount - loyalty.discountAmount + shippingFee, items: quotedItems };
     });
   }
 
@@ -3526,6 +3542,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       qrPayment,
       salesChannel: input.salesChannel || input.channel || null,
       paid: input.paid === true,
+      loyaltyPointsToRedeem: input.loyaltyPointsToRedeem ?? 0,
       discountAmount: input.discountAmount ?? null,
       shippingFee: input.shippingFee ?? null,
       shippingMethod: input.shippingMethod ?? null,
@@ -3552,6 +3569,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       if (existing) return existing;
       const customer = customerId ? await tx.customer.findUnique({ where: { id: customerId } }) : null;
       if (customerId && !customer) throw new BadRequestException("Không tìm thấy hồ sơ khách hàng đã chọn.");
+      const loyaltyPointsToRedeem = storeSale ? 0 : Number(input.loyaltyPointsToRedeem) || 0;
+      if (loyaltyPointsToRedeem > 0) {
+        if (!customer) throw new BadRequestException("Đăng nhập GEME để sử dụng điểm thưởng.");
+        await tx.$queryRaw`SELECT "id" FROM "customers" WHERE "id" = ${customer.id}::uuid FOR UPDATE`;
+      }
       const promotions = storeSale ? [] : await this.activeStorePromotions(tx);
       const orderVisibility = storeSale ? null : await this.storefrontProductVisibilityWhere();
       const placedItems: Array<{ productId: string; variantId: string | null; productName: string; productSku: string; shape: string | null; quality: string | null; beadSize: string | null; carat: number | null; gemstoneQuality: string | null; quantity: number; unitPrice: number; lineTotal: number }> = [];
@@ -3641,8 +3663,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       const subtotal = placedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
       const promotionDiscount = placedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity - item.lineTotal, 0);
       const discountAmount = Math.min(subtotal, Math.max(0, storeSale ? Number(input.discountAmount) || 0 : promotionDiscount));
+      const loyalty = await this.loyalty.preview(tx, customer?.id, subtotal - discountAmount, loyaltyPointsToRedeem);
+      const loyaltyDiscountAmount = loyalty.discountAmount;
       const shippingFee = Math.max(0, Number(input.shippingFee) || 0);
-      const totalAmount = subtotal - discountAmount + shippingFee;
+      const totalAmount = subtotal - discountAmount - loyaltyDiscountAmount + shippingFee;
       if (input.expectedTotalAmount != null && Number(input.expectedTotalAmount) !== totalAmount) {
         throw new ConflictException("Giá sản phẩm hoặc khuyến mãi vừa thay đổi. Hãy kiểm tra lại giỏ hàng trước khi đặt.");
       }
@@ -3678,7 +3702,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         customerName, customerEmail, customerPhone,
         shippingAddress: String(input.shippingAddress || input.address || "").trim(),
         shippingMethod: storeSale ? "Bán trực tiếp tại cửa hàng" : input.shippingMethod || null,
-        note: input.note || null, subtotal, discountAmount, shippingFee, totalAmount,
+        note: input.note || null, subtotal, discountAmount, loyaltyPointsRedeemed: loyalty.pointsToRedeem, loyaltyDiscountAmount, shippingFee, totalAmount,
         status: paid ? "DELIVERED" as any : method !== "COD" ? "PENDING_PAYMENT" as any : "PENDING_CONFIRMATION" as any,
         ...(!paid ? { inventoryReservedAt: orderStartedAt } : {}),
         ...(!paid && inventoryReservationExpiresAt ? { inventoryReservationExpiresAt } : {}),
@@ -3689,6 +3713,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         items: { create: placedItems },
         payments: { create: { method: method as any, amount: totalAmount, status: paid ? "PAID" as any : "PENDING" as any, ...(paid ? { paidAt: new Date() } : {}) } },
       }, include: { items: true, payments: true, customer: true } });
+      await this.loyalty.reserve(tx, orderCustomer?.id || customer?.id || null, savedOrder.id, loyalty.pointsToRedeem, loyaltyDiscountAmount);
       if (!storeSale) {
         await tx.adminNotification.create({ data: {
           type: "ORDER_CREATED",
@@ -3753,6 +3778,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       customerPhone: order.customerPhone,
       subtotal: Number(order.subtotal),
       discountAmount: Number(order.discountAmount),
+      loyaltyPointsRedeemed: Number(order.loyaltyPointsRedeemed || 0),
+      loyaltyDiscountAmount: Number(order.loyaltyDiscountAmount || 0),
       shippingFee: Number(order.shippingFee),
       totalAmount: Number(order.totalAmount),
       note: order.note,
@@ -3963,9 +3990,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
 
   posts(query: Record<string, string>) {
     const where: Input = {};
+    const search = typeof query.search === "string" ? query.search.normalize("NFKC").trim().slice(0, 120) : "";
     if (query.all !== "true") where.status = "PUBLISHED";
     if (query.status) where.status = query.status;
-    if (query.search) where.OR = [{ title: { contains: query.search, mode: "insensitive" } }, { summary: { contains: query.search, mode: "insensitive" } }, { content: { contains: query.search, mode: "insensitive" } }];
+    if (search) where.OR = [{ title: { contains: search, mode: "insensitive" } }, { summary: { contains: search, mode: "insensitive" } }, { content: { contains: search, mode: "insensitive" } }];
     if (query.category) where.category = query.category;
     const take = Math.min(Math.max(Number(query.limit) || 500, 1), 500);
     const skip = Math.min(Math.max(Math.floor(Number(query.offset) || 0), 0), 1_000_000);

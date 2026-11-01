@@ -96,7 +96,7 @@ export class ViettelPostService {
       const selectedService = services.find((service) => service.code.toUpperCase() === serviceCode);
       if (!selectedService) throw new BadRequestException("Dịch vụ đã chọn không còn phù hợp. Hãy tải lại danh sách dịch vụ.");
 
-      const goodsAmount = Math.max(0, Math.round(Number(order.subtotal) - Number(order.discountAmount)));
+      const goodsAmount = Math.max(0, Math.round(Number(order.subtotal) - Number(order.discountAmount) - Number(order.loyaltyDiscountAmount || 0)));
       const orderAmountDue = Math.max(0, Math.round(Number(order.totalAmount)));
       const payment = order.payments[0];
       const isCod = payment?.method === "COD" && payment.status !== "PAID";
@@ -301,7 +301,7 @@ export class ViettelPostService {
   private async quote(config: VtpConfig, order: Input, parcel: ParcelInput, freightPayment: "SENDER" | "RECEIVER"): Promise<VtpServiceQuote[]> {
     const payment = order.payments[0];
     const isCod = payment?.method === "COD" && payment.status !== "PAID";
-    const goodsAmount = Math.max(0, Math.round(Number(order.subtotal) - Number(order.discountAmount)));
+    const goodsAmount = Math.max(0, Math.round(Number(order.subtotal) - Number(order.discountAmount) - Number(order.loyaltyDiscountAmount || 0)));
     const orderAmountDue = Math.max(0, Math.round(Number(order.totalAmount)));
     const codAmount = isCod ? (freightPayment === "SENDER" ? orderAmountDue : goodsAmount) : 0;
     const result = await this.vtpRequest(config, "/v2/order/getPriceAllNlp", {

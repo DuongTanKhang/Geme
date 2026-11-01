@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service.js";
+import { LoyaltyService } from "../loyalty/loyalty.service.js";
 import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
 
 type Row = Record<string, any>;
@@ -14,7 +15,7 @@ const shortCode = (prefix: string) => `${prefix}-${Date.now().toString(36).toUpp
 
 @Injectable()
 export class OperationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly loyalty: LoyaltyService) {}
 
   async dashboard() {
     const soon = new Date(Date.now() + 15 * 60_000);
@@ -304,6 +305,7 @@ export class OperationsService {
           const status = allocation.after >= allocation.total ? "REFUNDED" : "PARTIALLY_REFUNDED";
           await tx.payment.update({ where: { id: allocation.paymentId }, data: { status: status as any } });
         }
+        await this.loyalty.recordRefund(tx, returnCase.order, idempotencyKey, amount);
         const totalCaseRefunded = alreadyReturnedOnCase + amount;
         const returnRefundStatus = totalCaseRefunded >= thisReturnValue ? "REFUNDED" : "PARTIALLY_REFUNDED";
         await tx.orderReturn.update({ where: { id }, data: { refundStatus: returnRefundStatus } });
@@ -362,6 +364,7 @@ export class OperationsService {
         const refundedAfter = refundedBefore + amount;
         const status = refundedAfter >= Number(payment.amount) ? "REFUNDED" : "PARTIALLY_REFUNDED";
         await tx.payment.update({ where: { id: payment.id }, data: { status: status as any } });
+        await this.loyalty.recordRefund(tx, order, idempotencyKey, amount);
         await tx.auditLog.create({ data: {
           adminId: actor.id,
           correlationId: actor.correlationId,
@@ -490,6 +493,12 @@ export class OperationsService {
         where: { orderId: { in: collectedOrderIds }, method: "COD", status: "PENDING" },
         data: { status: "PAID", paidAt: new Date() },
       });
+      for (const orderId of collectedOrderIds) {
+        const order = await tx.order.findUnique({ where: { id: orderId }, include: { payments: { select: { status: true, amount: true } } } });
+        if (!order) continue;
+        await this.loyalty.settleReservation(tx, orderId);
+        await this.loyalty.awardIfDeliveredAndPaid(tx, order);
+      }
       const saved = await tx.codReconciliationBatch.findUniqueOrThrow({ where: { id }, include: { items: true } });
       await tx.auditLog.create({ data: { adminId: actor.id, correlationId: actor.correlationId, action: "COD_RECONCILIATION_CLOSED", entityType: "COD_RECONCILIATION", entityId: id, before: { status: "OPEN" }, after: { status: saved.status, decisionNote: note || null } } });
       return saved;
