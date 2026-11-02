@@ -35,7 +35,7 @@ export function isAdminEventStreamRequest(request) {
 
 /** @param {string[]} segments */
 export function adminProxyTimeoutMs(segments) {
-  return segments.join("/") === "ai-studio/product-agent/direct-upload" ? 120_000 : 30_000;
+  return 30_000;
 }
 
 /** @param {{ headers: Headers; nextUrl: URL }} request */

@@ -123,3 +123,14 @@ Theo yêu cầu chủ dự án: luôn sao lưu bản cũ trước khi cập nh�
 - Giới hạn kiểm tra: chưa gửi OTP tới hộp thư thật và chưa đổi/reset mật khẩu trên tài khoản người dùng; cần chủ dự án kiểm tra một tài khoản của mình trên `test.geme.vn`. Build, API test và smoke test không thay cho thao tác E2E với email/phiên thật.
 - Local: code và build đã cập nhật; Docker Desktop đang tắt nên migration điểm thưởng chưa áp dụng vào DB/container local. Khi mở Docker, chạy `pnpm db:deploy` trong `outputs/geme-api` (hoặc `docker compose run --rm api pnpm db:deploy`) rồi khởi động lại stack local.
 - Kiểm tra local trước khi triển khai: 117/117 API test đạt; API TypeScript, Admin/Storefront production build và AEGIS build đạt. Không có dữ liệu local bị reset.
+
+## Bộ lọc đơn đã hủy — staging — 01/11/2026
+
+- Hoàn tất lúc 2026-11-01 15:22:26 +07:00. Phạm vi: Admin local và Admin staging https://testadmin.geme.vn; không thay đổi API, Storefront hoặc dữ liệu/DB.
+- Shipping workspace có bộ lọc riêng Đơn đã hủy, đếm theo trạng thái đơn GEME CANCELLED/Đã hủy; trạng thái vận đơn bị hãng hủy vẫn nằm trong nhóm Giao lỗi / hoàn.
+- Local: production build Admin thành công; Docker Compose cập nhật và khởi động Admin tại http://localhost:3001 cùng các dịch vụ phụ thuộc. HTTP 200. Image cũ giữ ở tag geme-local-admin:rollback-before-cancelled-filter-20261101.
+- Staging backup trước cập nhật: /opt/geme-staging/backups/shipping-cancelled-20261101-151822/; source Admin + compose + .env nằm trong source-config.tar.gz (file quyền 600, thư mục quyền 700). Image cũ: geme-staging-admin:rollback-shipping-cancelled-20261101-151822 (sha256:10c1cf38f23f05dca3c0b587e2ab7470e0a05004b9178ecbbab18b04df434d1f).
+- Rollback: bash /opt/geme-staging/releases/shipping-cancelled-20261101-151822/rollback.sh. Không có migration nên không cần backup DB riêng cho release này. Giữ backup/tag rollback trong lúc chủ dự án kiểm tra.
+- Image Admin mới: sha256:fddaed8fdaf189fe3a4a1ae0733a81ffbfd6f2b49c890dff2d5b39e3aee95c74.
+- Xác minh sau deploy: Admin healthy, restart count 0; Storefront https://test.geme.vn/, Admin https://testadmin.geme.vn/login, API readiness đều trả HTTP 200; các container staging đều healthy. Bundle có shipping workspace mới.
+- Chưa commit hoặc push; chờ chủ dự án kiểm tra.

@@ -6,13 +6,12 @@ import { getCollectionState, mergeSocialPage, socialPostStatusSummary, socialPro
 type Platform = "FACEBOOK_PAGE" | "INSTAGRAM";
 type Account = { id: string; platform: Platform; remoteAccountId: string; displayName: string; username?: string | null; selected: boolean; connectionId: string; connectionName: string; connectionStatus: string; scopes?: string[]; missingScopes?: string[] };
 type Product = { id: string; sku: string; name: string; slug: string; productUrl: string; price: number; currentSalePrice: number; hasVariants: boolean; variants: Array<{ id: string; sku: string | null; label: string; price: number; currentSalePrice: number; stock: number }>; category: string | null; gemstone: string | null; material: string | null; images: Array<{ id: string; filename: string; alt?: string | null; mimeType: string; size: number; url: string }> };
-type MarketingDraft = { id: string; status: string; channel: string; objective: string; title: string; caption: string; body: string; callToAction: string; hashtags: string[]; sourceProductIds: string[]; factWarnings: string[] };
 type DraftTarget = { accountId: string; platform: Platform; caption: string; linkUrl: string; linkSource: "NONE" | "PRODUCT" | "MANUAL"; mediaAssetId: string };
 type PostTarget = DraftTarget & { id?: string; status?: string; scheduledAt?: string | null; publishedAt?: string | null; previewUrl?: string | null; permalink?: string | null; remoteContainerId?: string | null; remoteMediaId?: string | null; lastErrorCode?: string | null; account?: { displayName?: string; active?: boolean } | null; attempts?: Array<{ id?: string; status: string; errorCode?: string | null; startedAt: string; finishedAt?: string | null; remoteContainerId?: string | null; remoteMediaId?: string | null }>; reconciliations?: Array<{ decision: string; source: string; resultCode?: string | null; notes?: string | null; evidenceReference?: string | null; publishedAtReported?: string | null; createdAt: string; admin?: { displayName: string; email: string } }> };
-type SocialPost = { id: string; title: string; status: string; revision: number; approvedRevision?: number | null; approvedAt?: string | null; updatedAt: string; lastErrorCode?: string | null; createdAt: string; sourceProductId?: string | null; sourceProductVariantId?: string | null; sourceMarketingDraftId?: string | null; sourceProduct?: { id: string; sku: string; name: string; slug: string } | null; approvedCommerceSnapshot?: { productSku: string; variantSku: string | null; currency: string; listedUnitPrice: number; saleUnitPrice: number; promotionValue: number } | null; commerceCurrent?: { productSku: string; variantSku: string | null; currency: string; listedUnitPrice: number; saleUnitPrice: number; promotionValue: number } | null; commerceChanged?: boolean; targets: PostTarget[] };
+type SocialPost = { id: string; title: string; status: string; revision: number; approvedRevision?: number | null; approvedAt?: string | null; updatedAt: string; lastErrorCode?: string | null; createdAt: string; sourceProductId?: string | null; sourceProductVariantId?: string | null; sourceProduct?: { id: string; sku: string; name: string; slug: string } | null; approvedCommerceSnapshot?: { productSku: string; variantSku: string | null; currency: string; listedUnitPrice: number; saleUnitPrice: number; promotionValue: number } | null; commerceCurrent?: { productSku: string; variantSku: string | null; currency: string; listedUnitPrice: number; saleUnitPrice: number; promotionValue: number } | null; commerceChanged?: boolean; targets: PostTarget[] };
 type PostPage = { items: SocialPost[]; nextCursor: string | null; hasMore: boolean };
 type Status = { configured: boolean; metaConfigured: boolean; encryptionConfigured: boolean; permissionsRequired: string[]; accounts: Account[]; metrics: Partial<Record<"drafts" | "scheduled" | "published" | "partial" | "failed" | "unknown", number>> };
-type Composer = { id?: string; title: string; sourceProductId: string; sourceProductVariantId: string; sourceMarketingDraftId: string; targets: DraftTarget[]; scheduleLocal: string; commerceReviewed: boolean };
+type Composer = { id?: string; title: string; sourceProductId: string; sourceProductVariantId: string; targets: DraftTarget[]; scheduleLocal: string; commerceReviewed: boolean };
 type ResourceState = "loading" | "ready" | "error";
 
 const API = "/api/admin/social";
@@ -53,7 +52,7 @@ function blankComposer(accounts: Account[]): Composer {
   const selected = accounts.filter((account) => account.selected);
   const targets = selected.slice(0, 2).map((account) => ({ accountId: account.id, platform: account.platform, caption: "", linkUrl: "", linkSource: "NONE" as const, mediaAssetId: "" }));
   if (!targets.length) targets.push({ accountId: "", platform: "FACEBOOK_PAGE", caption: "", linkUrl: "", linkSource: "NONE", mediaAssetId: "" });
-  return { title: "", sourceProductId: "", sourceProductVariantId: "", sourceMarketingDraftId: "", targets, scheduleLocal: "", commerceReviewed: false };
+  return { title: "", sourceProductId: "", sourceProductVariantId: "", targets, scheduleLocal: "", commerceReviewed: false };
 }
 
 export default function SocialWorkspace() {
@@ -62,7 +61,6 @@ export default function SocialWorkspace() {
   const [posts, setPosts] = useState<SocialPost[]>([]);
   const [recentPosts, setRecentPosts] = useState<SocialPost[]>([]);
   const [calendarPosts, setCalendarPosts] = useState<SocialPost[]>([]);
-  const [marketingDrafts, setMarketingDrafts] = useState<MarketingDraft[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [composer, setComposer] = useState<Composer | null>(null);
   const [search, setSearch] = useState("");
@@ -79,8 +77,8 @@ export default function SocialWorkspace() {
   const [manualNotes, setManualNotes] = useState("");
   const [manualEvidence, setManualEvidence] = useState("");
   const [productSearch, setProductSearch] = useState("");
-  const [loadState, setLoadState] = useState<{ status: ResourceState; posts: ResourceState; drafts: ResourceState }>({ status: "loading", posts: "loading", drafts: "loading" });
-  const [loadErrors, setLoadErrors] = useState<{ status: string; posts: string; drafts: string }>({ status: "", posts: "", drafts: "" });
+  const [loadState, setLoadState] = useState<{ status: ResourceState; posts: ResourceState }>({ status: "loading", posts: "loading" });
+  const [loadErrors, setLoadErrors] = useState<{ status: string; posts: string }>({ status: "", posts: "" });
   const [refreshing, setRefreshing] = useState(false);
   const refreshSequence = useRef(0);
   const contentSequence = useRef(0);
@@ -132,10 +130,9 @@ export default function SocialWorkspace() {
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current;
     setRefreshing(true);
-    const [statusResult, postsResult, draftsResult] = await Promise.allSettled([
+    const [statusResult, postsResult] = await Promise.allSettled([
       request<Status>("/status"),
       request<PostPage>("/posts?limit=5"),
-      request<MarketingDraft[]>("/marketing-drafts"),
     ]);
     if (sequence !== refreshSequence.current) return;
     const messageOf = (result: PromiseRejectedResult) => result.reason instanceof Error ? result.reason.message : "Không tải được dữ liệu. Vui lòng thử lại.";
@@ -155,14 +152,6 @@ export default function SocialWorkspace() {
     } else {
       setLoadState((current) => ({ ...current, posts: "error" }));
       setLoadErrors((current) => ({ ...current, posts: messageOf(postsResult) }));
-    }
-    if (draftsResult.status === "fulfilled") {
-      setMarketingDrafts(draftsResult.value);
-      setLoadState((current) => ({ ...current, drafts: "ready" }));
-      setLoadErrors((current) => ({ ...current, drafts: "" }));
-    } else {
-      setLoadState((current) => ({ ...current, drafts: "error" }));
-      setLoadErrors((current) => ({ ...current, drafts: messageOf(draftsResult) }));
     }
     setRefreshing(false);
   }, []);
@@ -221,7 +210,7 @@ export default function SocialWorkspace() {
 
   function editPost(post: SocialPost) {
     if (!["DRAFT", "FAILED"].includes(post.status)) return;
-    setComposer({ id: post.id, title: post.title, sourceProductId: post.sourceProductId || "", sourceProductVariantId: post.sourceProductVariantId || "", sourceMarketingDraftId: post.sourceMarketingDraftId || "", scheduleLocal: "", commerceReviewed: false, targets: post.targets.map((target) => ({ accountId: target.accountId || "", platform: target.platform, caption: target.caption, linkUrl: target.linkUrl || "", linkSource: target.linkSource || (target.linkUrl ? "MANUAL" : "NONE"), mediaAssetId: target.mediaAssetId || "" })) });
+    setComposer({ id: post.id, title: post.title, sourceProductId: post.sourceProductId || "", sourceProductVariantId: post.sourceProductVariantId || "", scheduleLocal: "", commerceReviewed: false, targets: post.targets.map((target) => ({ accountId: target.accountId || "", platform: target.platform, caption: target.caption, linkUrl: target.linkUrl || "", linkSource: target.linkSource || (target.linkUrl ? "MANUAL" : "NONE"), mediaAssetId: target.mediaAssetId || "" })) });
     setProductSearch(post.sourceProduct?.sku || "");
     void loadProducts(post.sourceProduct?.sku || "");
     setTab("content");
@@ -240,24 +229,12 @@ export default function SocialWorkspace() {
     setComposer((current) => current ? { ...current, sourceProductId: productId, sourceProductVariantId: "", commerceReviewed: false, targets: current.targets.map((target) => { const compatible = product?.images.filter((image) => imageAllowed(target.platform, image)) || []; const currentImage = compatible.find((image) => image.id === target.mediaAssetId); return { ...updateSocialProductLink(target, productId, product?.productUrl), mediaAssetId: currentImage?.id || compatible[0]?.id || "" }; }) } : current);
   }
 
-  function useMarketingDraft(id: string) {
-    const draft = marketingDrafts.find((row) => row.id === id);
-    if (!draft) return;
-    const text = [draft.caption || draft.body, draft.callToAction, draft.hashtags.map((tag) => `#${tag}`).join(" ")].filter(Boolean).join("\n\n");
-    setComposer((current) => {
-      if (!current) return current;
-      const productId = current.sourceProductId || draft.sourceProductIds[0] || "";
-      const product = products.find((row) => row.id === productId);
-      return { ...current, sourceMarketingDraftId: id, title: draft.title || current.title, sourceProductId: productId, sourceProductVariantId: current.sourceProductId === productId ? current.sourceProductVariantId : "", commerceReviewed: false, targets: current.targets.map((target) => ({ ...updateSocialProductLink(target, productId, product?.productUrl), caption: text.slice(0, 2200) })) };
-    });
-  }
-
   async function saveDraft(): Promise<SocialPost | null> {
     if (!composer) return null;
     if (!composer.targets.length) { setError("Thêm ít nhất một kênh nội dung."); return null; }
     setBusy(true); setError("");
     try {
-      const payload = { title: composer.title, sourceProductId: composer.sourceProductId || null, sourceProductVariantId: composer.sourceProductVariantId || null, sourceMarketingDraftId: composer.sourceMarketingDraftId || null, targets: composer.targets.map((target) => ({ ...target, accountId: target.accountId || null, linkUrl: target.linkUrl || null, mediaAssetId: target.mediaAssetId || null })) };
+      const payload = { title: composer.title, sourceProductId: composer.sourceProductId || null, sourceProductVariantId: composer.sourceProductVariantId || null, targets: composer.targets.map((target) => ({ ...target, accountId: target.accountId || null, linkUrl: target.linkUrl || null, mediaAssetId: target.mediaAssetId || null })) };
       const post = await request<SocialPost>(composer.id ? `/posts/${composer.id}` : "/posts", composer.id ? "PATCH" : "POST", payload);
       setComposer((current) => current ? { ...current, id: post.id } : current);
       await refresh();
@@ -346,8 +323,8 @@ export default function SocialWorkspace() {
     catch (caught) { setError(caught instanceof Error ? caught.message : "Không cho phép thử lại kênh."); }
     finally { setBusy(false); }
   }
-  const loadErrorMessages = [loadErrors.status, loadErrors.posts, loadErrors.drafts].filter(Boolean);
-  const hasStaleData = Boolean((status && loadErrors.status) || (posts.length && loadErrors.posts) || (marketingDrafts.length && loadErrors.drafts));
+  const loadErrorMessages = [loadErrors.status, loadErrors.posts].filter(Boolean);
+  const hasStaleData = Boolean((status && loadErrors.status) || (posts.length && loadErrors.posts));
   const statusMetaText = !status?.metaConfigured ? "Meta App chưa được cấu hình" : !status.encryptionConfigured ? "Thiếu khóa mã hóa token trên máy chủ" : "Sẵn sàng kết nối";
   const reviewCount = status && status.metrics.failed !== undefined && status.metrics.unknown !== undefined && status.metrics.partial !== undefined ? status.metrics.failed + status.metrics.unknown + status.metrics.partial : undefined;
   const metricValue = (value?: number) => value === undefined ? "—" : value.toLocaleString("vi-VN");
@@ -410,7 +387,6 @@ export default function SocialWorkspace() {
           <label className="social-field"><span>Sản phẩm GEME</span><input value={productSearch} onChange={(event) => setProductSearch(event.target.value)} placeholder="Tìm theo tên hoặc SKU"/><select value={composer.sourceProductId} onChange={(event) => chooseProduct(event.target.value)}><option value="">Không gắn sản phẩm</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku}</option>)}</select></label>
           {productForComposer()?.hasVariants && <label className="social-field"><span>Biến thể được quảng bá</span><select value={composer.sourceProductVariantId} onChange={(event) => setComposer({ ...composer, sourceProductVariantId: event.target.value, commerceReviewed: false })}><option value="">Chọn biến thể cụ thể</option>{productForComposer()?.variants.map((variant) => <option key={variant.id} value={variant.id} disabled={variant.stock <= 0}>{variant.label || variant.sku || variant.id} · {variant.currentSalePrice.toLocaleString("vi-VN")} ₫ · tồn {variant.stock}</option>)}</select><small>Không tự lấy biến thể đầu tiên hoặc giá thấp nhất. Chỉ biến thể còn hàng mới có thể duyệt.</small></label>}
           {productForComposer() && <div className="social-commerce-review social-wide"><strong>Giá hiện tại để đối chiếu nội dung</strong><span>{productSalePrice() == null ? "Chọn biến thể trước khi duyệt" : `${productSalePrice()!.toLocaleString("vi-VN")} ₫ · VND`}</span><small>Giá được lưu cùng revision khi duyệt. Nếu giá hoặc khuyến mãi đổi trước lúc đăng, hệ thống sẽ chặn target và yêu cầu duyệt lại. Hãy kiểm tra caption có nêu giá hay không.</small><label><input type="checkbox" checked={composer.commerceReviewed} onChange={(event) => setComposer({ ...composer, commerceReviewed: event.target.checked })}/> Tôi đã rà soát giá bán/khuyến mãi và caption với đúng sản phẩm, biến thể.</label></div>}
-          <label className="social-field"><span>Bản nháp Marketing Agent (tùy chọn)</span><select value={composer.sourceMarketingDraftId} onChange={(event) => useMarketingDraft(event.target.value)} disabled={loadState.drafts !== "ready"}><option value="">{loadState.drafts === "loading" ? "Đang tải bản nháp…" : loadState.drafts === "error" ? "Bản nháp AI chưa tải được" : "Không dùng bản nháp AI"}</option>{marketingDrafts.map((draft) => <option key={draft.id} value={draft.id}>{draft.title || draft.objective} · {draft.channel}</option>)}</select><small>{loadErrors.drafts ? "Lỗi tải bản nháp AI không ảnh hưởng đến bản soạn hiện tại." : "AI chỉ hỗ trợ nội dung; bài vẫn cần kiểm tra và duyệt riêng tại đây."}</small>{loadErrors.drafts && <button type="button" className="social-inline-retry" onClick={() => void refresh()} disabled={refreshing}>Thử tải bản nháp lại</button>}</label>
           <div className="social-wide social-channel-heading"><span>Nội dung theo kênh</span><div><button type="button" onClick={() => addChannel("FACEBOOK_PAGE")} disabled={busy || composer.targets.length >= 2 || composer.targets.some((target) => target.platform === "FACEBOOK_PAGE")}>+ Facebook</button><button type="button" onClick={() => addChannel("INSTAGRAM")} disabled={busy || composer.targets.length >= 2 || composer.targets.some((target) => target.platform === "INSTAGRAM")}>+ Instagram</button></div></div>
           {composer.targets.map((target, index) => <article className="social-channel-editor social-wide" key={`${target.platform}-${index}`}>
             <div className="social-channel-editor-heading"><span className={`social-platform-mark ${target.platform === "INSTAGRAM" ? "instagram" : "facebook"}`}>{target.platform === "INSTAGRAM" ? "IG" : "f"}</span><strong>{platformName(target.platform)}</strong>{composer.targets.length > 1 && <button type="button" className="social-text-button" onClick={() => setComposer({ ...composer, targets: composer.targets.filter((_, itemIndex) => itemIndex !== index) })}>Gỡ kênh</button>}</div>
@@ -420,7 +396,6 @@ export default function SocialWorkspace() {
             <label className="social-field"><span>Ảnh sản phẩm đã duyệt {target.platform === "INSTAGRAM" ? "· bắt buộc" : "· không bắt buộc"}</span><select value={target.mediaAssetId} onChange={(event) => patchTarget(index, { mediaAssetId: event.target.value })}><option value="">Không đính kèm ảnh</option>{productForComposer()?.images.filter((image) => imageAllowed(target.platform, image)).map((image) => <option key={image.id} value={image.id}>{image.alt || image.filename}</option>)}</select><small>{target.platform === "INSTAGRAM" ? "Instagram cần JPEG công khai, tối đa 8 MB; chỉ ảnh đã duyệt/QC đạt." : "Ảnh đã duyệt, QC đạt và có CDN R2 công khai mới được gửi cho Meta."}</small></label>
             {target.mediaAssetId && productForComposer()?.images.find((image) => image.id === target.mediaAssetId)?.url && <img className="social-image-preview" src={productForComposer()?.images.find((image) => image.id === target.mediaAssetId)?.url} alt="Ảnh sản phẩm đã chọn"/>}
           </article>)}
-          {composer.sourceMarketingDraftId && marketingDrafts.find((draft) => draft.id === composer.sourceMarketingDraftId)?.factWarnings?.length ? <div className="social-warning social-wide"><strong>Thông tin cần rà soát từ Marketing Agent</strong><p>{marketingDrafts.find((draft) => draft.id === composer.sourceMarketingDraftId)?.factWarnings?.join(" · ")}</p></div> : null}
         </div>
         <div className="social-composer-actions"><button type="button" className="social-button social-button-light" onClick={() => void saveDraft()} disabled={busy}>{busy ? "Đang lưu…" : "Lưu bản nháp"}</button><button type="button" className="social-button social-button-light" onClick={() => void approve(false)} disabled={busy || !composer.targets.some((target) => target.accountId) || Boolean(composer.sourceProductId && !composer.commerceReviewed) || Boolean(productForComposer()?.hasVariants && !composer.sourceProductVariantId)}>Duyệt nội dung</button><label className="social-schedule-field"><span>Lên lịch giờ Việt Nam</span><input type="datetime-local" value={composer.scheduleLocal} onChange={(event) => setComposer({ ...composer, scheduleLocal: event.target.value })}/></label><button type="button" className="social-button social-button-primary" onClick={() => void approve(true)} disabled={busy || !composer.targets.some((target) => target.accountId) || Boolean(composer.sourceProductId && !composer.commerceReviewed) || Boolean(productForComposer()?.hasVariants && !composer.sourceProductVariantId)}>Duyệt & lên lịch</button></div>
         <p className="social-footnote">Đăng ngay chỉ bật sau khi nội dung đã được duyệt. Mọi chỉnh sửa sau duyệt sẽ tạo revision mới và cần duyệt lại.</p>

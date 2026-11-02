@@ -130,10 +130,6 @@ export class SocialService {
     return products.map((product) => ({ id: product.id, sku: product.sku, name: product.name, slug: product.slug, productUrl: this.productUrl(product.slug), price: Number(product.price), stock: product.stock, hasVariants: product.variants.length > 0, variants: product.variants.map((variant) => ({ id: variant.id, sku: variant.sku, label: [variant.optionKey, variant.quality, variant.beadSize, variant.carat ? `${variant.carat} ct` : null, variant.gemstoneQuality].filter(Boolean).join(" · "), price: Number(variant.price), currentSalePrice: socialCommerceSnapshot(product, variant, promotions).saleUnitPrice, stock: variant.stock })), currentSalePrice: socialCommerceSnapshot(product, null, promotions).saleUnitPrice, category: product.category?.status === "ACTIVE" ? product.category.name : null, gemstone: product.gemstoneType?.status === "ACTIVE" ? product.gemstoneType.name : null, material: product.materialOption?.active ? product.materialOption.name : null, images: product.mediaAssets.map((link) => ({ id: link.mediaAssetId, filename: link.mediaAsset.filename, alt: link.mediaAsset.alt, mimeType: link.mediaAsset.mimeType, size: link.mediaAsset.size, url: this.media.publicDeliveryUrl({ ...link.mediaAsset, data: null, createdAt: new Date(), updatedAt: new Date() } as never) })).filter((image) => Boolean(image.url)) }));
   }
 
-  async marketingDrafts() {
-    return this.prisma.aiMarketingDraft.findMany({ where: { status: { in: ["DRAFT", "APPROVED"] } }, select: { id: true, status: true, channel: true, objective: true, title: true, caption: true, body: true, callToAction: true, hashtags: true, sourceProductIds: true, sourceFacts: true, factWarnings: true, updatedAt: true }, orderBy: { updatedAt: "desc" }, take: 50 });
-  }
-
   async listPosts(statusInput?: string, searchInput?: string, limitInput?: string, cursorInput?: string) {
     const allowed = ["DRAFT", "APPROVED", "SCHEDULED", "PUBLISHING", "PUBLISHED", "PARTIAL", "FAILED", "UNKNOWN", "CANCELLED"];
     if (statusInput && !allowed.includes(statusInput)) throw new BadRequestException("Bộ lọc trạng thái không hợp lệ.");
@@ -190,15 +186,10 @@ export class SocialService {
       const product = productId ? await this.validateSourceProduct(tx, productId, variantId) : null;
       if (variantId && !productId) throw new BadRequestException("Chọn sản phẩm trước khi chọn biến thể.");
       const context = await this.validateTargets(tx, this.resolveProductLinks(input.targets, product));
-      const marketingDraftId = this.optionalUuid(input.sourceMarketingDraftId, "Bản nháp Marketing");
-      if (marketingDraftId) {
-        const draft = await tx.aiMarketingDraft.findUnique({ where: { id: marketingDraftId }, select: { id: true, status: true } });
-        if (!draft || !["DRAFT", "APPROVED"].includes(draft.status)) throw new ConflictException("Bản nháp Marketing chưa sẵn sàng để dùng.");
-      }
-      const post = await tx.socialPost.create({ data: { title: input.title, createdByAdminId: actor.id, updatedByAdminId: actor.id, sourceProductId: productId, sourceProductVariantId: variantId, sourceMarketingDraftId: marketingDraftId, targets: { create: context.map((target) => ({ ...target })) } }, include: { sourceProduct: { select: { id: true, sku: true, name: true, slug: true } }, targets: { include: { account: { select: { id: true, platform: true, displayName: true, username: true, active: true } }, mediaAsset: { select: { id: true, filename: true, alt: true, isPrivate: true, storageProvider: true, objectKey: true, sourceKey: true } }, attempts: true } } } });
+      const post = await tx.socialPost.create({ data: { title: input.title, createdByAdminId: actor.id, updatedByAdminId: actor.id, sourceProductId: productId, sourceProductVariantId: variantId, targets: { create: context.map((target) => ({ ...target })) } }, include: { sourceProduct: { select: { id: true, sku: true, name: true, slug: true } }, targets: { include: { account: { select: { id: true, platform: true, displayName: true, username: true, active: true } }, mediaAsset: { select: { id: true, filename: true, alt: true, isPrivate: true, storageProvider: true, objectKey: true, sourceKey: true } }, attempts: true } } } });
       return post;
     });
-    this.log("post.created", actor.id, created.id, { targets: created.targets.length, hasProduct: Boolean(created.sourceProductId), hasMarketingDraft: Boolean(created.sourceMarketingDraftId) });
+    this.log("post.created", actor.id, created.id, { targets: created.targets.length, hasProduct: Boolean(created.sourceProductId) });
     return this.safePost(created);
   }
 
@@ -213,12 +204,7 @@ export class SocialService {
       const product = productId ? await this.validateSourceProduct(tx, productId, variantId) : null;
       if (variantId && !productId) throw new BadRequestException("Chọn sản phẩm trước khi chọn biến thể.");
       const context = await this.validateTargets(tx, this.resolveProductLinks(input.targets, product));
-      const marketingDraftId = this.optionalUuid(input.sourceMarketingDraftId, "Bản nháp Marketing");
-      if (marketingDraftId) {
-        const draft = await tx.aiMarketingDraft.findUnique({ where: { id: marketingDraftId }, select: { id: true, status: true } });
-        if (!draft || !["DRAFT", "APPROVED"].includes(draft.status)) throw new ConflictException("Bản nháp Marketing chưa sẵn sàng để dùng.");
-      }
-      const claimed = await tx.socialPost.updateMany({ where: { id, revision: post.revision, status: post.status }, data: { title: input.title, sourceProductId: productId, sourceProductVariantId: variantId, sourceMarketingDraftId: marketingDraftId, revision: { increment: 1 }, approvedRevision: null, approvedSnapshotHash: null, approvedCommerceSnapshot: Prisma.DbNull, approvedCommerceSnapshotHash: null, approvedAt: null, approvedByAdminId: null, approvedSnapshot: Prisma.DbNull, status: "DRAFT", lastErrorCode: null, updatedByAdminId: actor.id } });
+      const claimed = await tx.socialPost.updateMany({ where: { id, revision: post.revision, status: post.status }, data: { title: input.title, sourceProductId: productId, sourceProductVariantId: variantId, revision: { increment: 1 }, approvedRevision: null, approvedSnapshotHash: null, approvedCommerceSnapshot: Prisma.DbNull, approvedCommerceSnapshotHash: null, approvedAt: null, approvedByAdminId: null, approvedSnapshot: Prisma.DbNull, status: "DRAFT", lastErrorCode: null, updatedByAdminId: actor.id } });
       if (claimed.count !== 1) throw new ConflictException("Bản nháp vừa được cập nhật. Tải lại trước khi sửa tiếp.");
       const existing = await tx.socialPostTarget.findMany({ where: { postId: id }, include: { attempts: { select: { id: true } }, reconciliations: { select: { id: true } } } });
       const matched = new Set<string>();
@@ -425,7 +411,7 @@ export class SocialService {
     const row = body as Record<string, unknown>;
     const title = typeof row.title === "string" ? row.title.trim().slice(0, 180) : "";
     if (!title) throw new BadRequestException("Cần nhập tiêu đề nội bộ.");
-    return { title, targets: normalizeSocialTargets(row.targets), sourceProductId: row.sourceProductId, sourceProductVariantId: row.sourceProductVariantId, sourceMarketingDraftId: row.sourceMarketingDraftId };
+    return { title, targets: normalizeSocialTargets(row.targets), sourceProductId: row.sourceProductId, sourceProductVariantId: row.sourceProductVariantId };
   }
 
   private encodePostCursor(updatedAt: Date, id: string) {
@@ -498,9 +484,8 @@ export class SocialService {
     if (asset.mimeType && !["image/jpeg", "image/png"].includes(asset.mimeType)) throw new BadRequestException("Meta chỉ nhận ảnh JPEG hoặc PNG cho luồng đăng này.");
     if (platform === "INSTAGRAM" && asset.mimeType !== "image/jpeg") throw new BadRequestException("Instagram yêu cầu ảnh JPEG đã duyệt.");
     if (platform === "INSTAGRAM" && typeof asset.size === "number" && asset.size > 8 * 1024 * 1024) throw new BadRequestException("Ảnh Instagram phải nhỏ hơn hoặc bằng 8 MB.");
-    const approvedOutput = await this.prisma.aiImageItem.findFirst({ where: { status: "APPROVED", qcStatus: "PASS", publishedAssetId: asset.id }, select: { id: true } });
     const approvedProductImage = await this.prisma.productMediaAsset.findFirst({ where: { mediaAssetId: asset.id, tag: "PRODUCT_IMAGE", approvedAt: { not: null } }, select: { id: true } });
-    if (!approvedOutput && !approvedProductImage) throw new BadRequestException("Chỉ được đăng ảnh sản phẩm đã được duyệt và QC.");
+    if (!approvedProductImage) throw new BadRequestException("Chỉ được đăng ảnh sản phẩm đã được duyệt và QC.");
   }
 
   private async validateSourceProduct(tx: any, productId: string, variantId: string | null = null) {

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { OrderReceiptData } from "./order-receipt-modal";
 
 type ShippingOrder = OrderReceiptData & { product?: string; sku?: string; quantity?: number };
-type ShipmentFilter = "READY" | "PICKUP" | "TRANSIT" | "DELIVERED" | "ISSUES" | "ALL";
+type ShipmentFilter = "READY" | "PICKUP" | "TRANSIT" | "ISSUES" | "DELIVERED" | "CANCELLED" | "ALL";
 type Props = { orders: ShippingOrder[]; onOpenOrder: (id: string) => void };
 
 const money = (value: number) => `${new Intl.NumberFormat("vi-VN").format(Number(value) || 0)} ₫`;
@@ -13,6 +13,7 @@ const isStoreSale = (order: ShippingOrder) => order.shipping === "Bán trực ti
 function shipmentStage(order: ShippingOrder): Exclude<ShipmentFilter, "ALL"> | "OTHER" {
   const carrierStatus = String(order.carrierShipmentStatus || "").toUpperCase();
   const carrierName = String(order.carrierStatusName || "").toLocaleLowerCase("vi");
+  if (order.status === "Đã hủy") return "CANCELLED";
   if (order.status === "Đã giao" || carrierStatus === "DELIVERED") return "DELIVERED";
   if (["FAILED", "EXCEPTION", "RETURNING", "CANCELLED"].includes(carrierStatus) || /thất bại|không giao được|hoàn hàng|trả hàng|hủy vận đơn|huỷ vận đơn/.test(carrierName)) return "ISSUES";
   if (order.status === "Đang giao") return "TRANSIT";
@@ -28,6 +29,7 @@ const filters: Array<{ id: ShipmentFilter; label: string }> = [
   { id: "TRANSIT", label: "Đang giao" },
   { id: "ISSUES", label: "Giao lỗi / hoàn" },
   { id: "DELIVERED", label: "Đã giao" },
+  { id: "CANCELLED", label: "Đơn đã hủy" },
 ];
 
 export default function ShippingWorkspace({ orders, onOpenOrder }: Props) {
@@ -42,6 +44,7 @@ export default function ShippingWorkspace({ orders, onOpenOrder }: Props) {
       TRANSIT: values.filter((value) => value === "TRANSIT").length,
       ISSUES: values.filter((value) => value === "ISSUES").length,
       DELIVERED: values.filter((value) => value === "DELIVERED").length,
+      CANCELLED: values.filter((value) => value === "CANCELLED").length,
       ALL: shippableOrders.length,
     };
   }, [shippableOrders]);
@@ -64,7 +67,7 @@ export default function ShippingWorkspace({ orders, onOpenOrder }: Props) {
       <div className="shipping-table-wrap"><table className="shipping-table"><thead><tr><th>Đơn hàng</th><th>Người nhận</th><th>Thu hộ / thanh toán</th><th>Đơn vị và hành trình</th><th>Ngày đặt</th><th></th></tr></thead><tbody>
         {rows.length ? rows.map((order) => {
           const stage = shipmentStage(order);
-          const stageName: Record<string, string> = { READY: "Chờ đóng gói / tạo vận đơn", PICKUP: "Chờ Viettel Post lấy hàng", TRANSIT: "Đang vận chuyển", DELIVERED: "Giao thành công", ISSUES: "Cần xử lý với hãng", OTHER: order.status === "Đang xử lý" && !order.payment.includes("COD") && order.paymentStatus !== "PAID" ? "Chờ thanh toán" : order.status };
+          const stageName: Record<string, string> = { READY: "Chờ đóng gói / tạo vận đơn", PICKUP: "Chờ Viettel Post lấy hàng", TRANSIT: "Đang vận chuyển", DELIVERED: "Giao thành công", CANCELLED: "Đơn hàng đã hủy", ISSUES: "Cần xử lý với hãng", OTHER: order.status === "Đang xử lý" && !order.payment.includes("COD") && order.paymentStatus !== "PAID" ? "Chờ thanh toán" : order.status };
           const codAmount = order.payment.includes("COD") && order.paymentStatus !== "PAID" ? order.carrierCodAmount ?? order.total : 0;
           const codLabel = order.carrierFreightPayment === "RECEIVER" ? "COD tiền hàng · cước thu riêng" : order.carrierFreightPayment === "SENDER" ? "COD theo tổng đơn" : "COD dự kiến theo đơn";
           return <tr key={order.apiId || order.id}>

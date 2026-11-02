@@ -19,7 +19,6 @@ export const ADMIN_PERMISSION_CATALOG = [
   "settings.manage", "integrations.manage",
   "integrations.read", "shipping.read", "shipping.manage",
   "social.read", "social.draft", "social.approve", "social.publish", "social.connect", "social.manage",
-  "ai-studio.read", "ai-studio.draft", "ai-studio.approve", "ai-studio.manage",
   "contacts.read", "contacts.manage",
 ] as const;
 export type AdminPermission = typeof ADMIN_PERMISSION_CATALOG[number];
@@ -29,7 +28,7 @@ const allForAdmin = ADMIN_PERMISSION_CATALOG;
 export const ADMIN_PERMISSION_DEFAULTS: Record<string, readonly string[]> = {
   SUPER_ADMIN: ADMIN_PERMISSION_CATALOG,
   ADMIN: allForAdmin,
-  CONTENT_EDITOR: ["dashboard.read", "catalog.read", "catalog.content.write", "content.read", "content.write", "social.read", "social.draft", "ai-studio.read", "ai-studio.draft"],
+  CONTENT_EDITOR: ["dashboard.read", "catalog.read", "catalog.content.write", "content.read", "content.write", "social.read", "social.draft"],
   STAFF: [],
 };
 
@@ -80,7 +79,6 @@ export class AdminPermissionService {
       }
     }
     if (effective.has("social.manage")) for (const permission of ["social.draft", "social.approve", "social.publish", "social.connect"]) if (!denied.has(permission)) effective.add(permission);
-    if (effective.has("ai-studio.manage")) for (const permission of ["ai-studio.draft", "ai-studio.approve"]) if (!denied.has(permission)) effective.add(permission);
     return effective;
   }
 

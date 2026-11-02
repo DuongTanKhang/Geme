@@ -1,13 +1,13 @@
 # Mạng xã hội GEME
 
-Module `src/social` kết nối Facebook Page và Instagram Professional đã liên kết với Page qua Facebook Login. Bản nháp thủ công hoạt động độc lập với AI. Marketing Agent hiện có được dùng làm nguồn nội dung; bản nháp Marketing không thay thế bước duyệt riêng trước khi xuất bản. Phạm vi chỉ đăng bài/ảnh và theo dõi kết quả, không xử lý inbox, bình luận, quảng cáo, đơn hàng hay tồn kho.
+Module `src/social` kết nối Facebook Page và Instagram Professional đã liên kết với Page qua Facebook Login. Nội dung được soạn và duyệt thủ công trong Admin trước khi xuất bản. Phạm vi chỉ đăng bài/ảnh và theo dõi kết quả, không xử lý inbox, bình luận, quảng cáo, đơn hàng hay tồn kho.
 
 ## Meta App và quyền
 
 1. Trong Meta for Developers, tạo/chọn App của GEME, bật Facebook Login và thêm đúng Redirect URI công khai của API: `https://<API-domain>/api/v1/social/meta/callback`. URL phải khớp chính xác với `SOCIAL_META_REDIRECT_URI`.
 2. Người kết nối cần quyền truy cập Facebook Page và một Instagram Professional account đã liên kết với Page. Hộp thoại GEME yêu cầu: `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `instagram_basic`, `instagram_content_publish`.
 3. Đặt `SOCIAL_META_GRAPH_API_VERSION` theo phiên bản Meta hiện đang hỗ trợ cho App, cập nhật khi Meta ngừng hỗ trợ phiên bản đó. Code không tự giả định phiên bản mới nhất.
-4. Điền `SOCIAL_META_APP_ID`, `SOCIAL_META_APP_SECRET`, `SOCIAL_META_GRAPH_API_VERSION`, `SOCIAL_META_REDIRECT_URI`, `SOCIAL_META_ADMIN_RETURN_URL` và `SOCIAL_META_ADMIN_ORIGINS` trong `.env.docker`. Tạo khóa riêng bằng `openssl rand -base64 32`, rồi đặt vào `SOCIAL_META_ENCRYPTION_KEY`. Không dùng chung với JWT, AEGIS hoặc AI Core; thay khóa cần có kế hoạch mã hóa lại token.
+4. Điền `SOCIAL_META_APP_ID`, `SOCIAL_META_APP_SECRET`, `SOCIAL_META_GRAPH_API_VERSION`, `SOCIAL_META_REDIRECT_URI`, `SOCIAL_META_ADMIN_RETURN_URL` và `SOCIAL_META_ADMIN_ORIGINS` trong `.env.docker`. Tạo khóa riêng bằng `openssl rand -base64 32`, rồi đặt vào `SOCIAL_META_ENCRYPTION_KEY`. Không dùng chung với JWT hoặc AEGIS; thay khóa cần có kế hoạch mã hóa lại token.
 5. Cùng các biến server-side phải được cấu hình trên API và `social-worker`. Worker chỉ chạy trong mạng nội bộ Compose và không có port công khai. Thiếu Meta config không chặn API khởi động; bản nháp thủ công vẫn lưu được.
 6. Sau khi migration được triển khai và API/worker khởi động, vào Admin → **Mạng xã hội** → **Tài khoản** → **Kết nối Meta**. Chọn rõ tài khoản đích, rồi lưu lựa chọn; GEME không tự chọn Page đầu tiên.
 

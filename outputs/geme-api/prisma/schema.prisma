@@ -16,54 +16,6 @@ enum AdminRole {
   @@map("admin_role")
 }
 
-enum AiTaskType {
-  CONTENT_DRAFT
-  IMAGE_GENERATION
-  IMAGE_STUDIO_PROCESSING
-  PRODUCT_DRAFT_GENERATION
-  PRODUCT_PUBLICATION_PROPOSAL
-  SALES_ANSWER
-  MARKETING_DRAFT_GENERATION
-
-  @@map("ai_task_type")
-}
-
-enum AiTaskStatus {
-  QUEUED
-  RUNNING
-  AWAITING_APPROVAL
-  SUCCEEDED
-  FAILED
-  CANCELLED
-  APPROVED
-  REJECTED
-
-  @@map("ai_task_status")
-}
-
-enum AiApprovalStatus {
-  PENDING
-  APPROVED
-  REJECTED
-
-  @@map("ai_approval_status")
-}
-
-enum AiImagePreset {
-  STONE_GREY
-  WARM_IVORY
-  SOFT_SAGE
-
-  @@map("ai_image_preset")
-}
-
-enum AiImagePurpose {
-  PRODUCT_PHOTO
-  TECHNICAL_DRAWING
-
-  @@map("ai_image_purpose")
-}
-
 enum ProductMediaTag {
   PRODUCT_IMAGE
   TECHNICAL_DRAWING
@@ -72,84 +24,6 @@ enum ProductMediaTag {
   OTHER
 
   @@map("product_media_tag")
-}
-
-enum AiImageBatchStatus {
-  UPLOADING
-  PROCESSING
-  REVIEW
-  COMPLETE
-  PARTIAL
-  FAILED
-  CANCELLED
-
-  @@map("ai_image_batch_status")
-}
-
-enum AiImageItemStatus {
-  PENDING_UPLOAD
-  QUEUED
-  RUNNING
-  AWAITING_APPROVAL
-  APPROVED
-  REJECTED
-  FAILED
-  CANCELLED
-
-  @@map("ai_image_item_status")
-}
-
-enum AiImageQcStatus {
-  PENDING
-  PASS
-  REVIEW
-  FAIL
-
-  @@map("ai_image_qc_status")
-}
-
-enum AiProductDraftBatchStatus {
-  PROCESSING
-  REVIEW
-  COMPLETE
-  PARTIAL
-  FAILED
-  CANCELLED
-
-  @@map("ai_product_draft_batch_status")
-}
-
-enum AiProductDraftStatus {
-  QUEUED
-  RUNNING
-  NEEDS_REVIEW
-  READY_FOR_REVIEW
-  APPROVED
-  REJECTED
-  FAILED
-  CANCELLED
-
-  @@map("ai_product_draft_status")
-}
-
-enum AiSalesKnowledgeStatus {
-  DRAFT
-  ACTIVE
-  ARCHIVED
-
-  @@map("ai_sales_knowledge_status")
-}
-
-enum AiMarketingDraftStatus {
-  QUEUED
-  GENERATING
-  DRAFT
-  APPROVED
-  REJECTED
-  FAILED
-  CANCELLED
-
-  @@map("ai_marketing_draft_status")
 }
 
 enum SocialPlatform {
@@ -367,15 +241,6 @@ model AdminUser {
   blogPosts    BlogPost[]
   auditLogs    AuditLog[]
   notificationReads AdminNotificationRead[]
-  aiTasks      AiTask[]     @relation("AiTaskRequester")
-  aiApprovals  AiApproval[] @relation("AiApprovalReviewer")
-  aiImageBatches AiImageBatch[] @relation("AiImageBatchCreator")
-  aiProductDraftBatches AiProductDraftBatch[] @relation("AiProductDraftBatchCreator")
-  aiProductDraftReviews AiProductDraft[] @relation("AiProductDraftReviewer")
-  aiSalesKnowledgeCreated AiSalesKnowledgeSource[] @relation("AiSalesKnowledgeCreator")
-  aiSalesKnowledgeReviewed AiSalesKnowledgeSource[] @relation("AiSalesKnowledgeReviewer")
-  aiMarketingDraftsCreated AiMarketingDraft[] @relation("AiMarketingDraftCreator")
-  aiMarketingDraftsReviewed AiMarketingDraft[] @relation("AiMarketingDraftReviewer")
   socialOAuthStates SocialOAuthState[]
   socialConnectionsCreated SocialConnection[] @relation("SocialConnectionCreator")
   socialPostsCreated SocialPost[] @relation("SocialPostCreator")
@@ -586,7 +451,6 @@ model Product {
   jewelryStoneGroup            JewelryStoneGroup?        @relation(fields: [jewelryStoneGroupId], references: [id], onDelete: SetNull)
   images                ProductImage[]
   pos365ImageLinks       Pos365ProductImageSync[]
-  aiImageItems          AiImageItem[]
   variants              ProductPriceVariant[]
   reviews               ProductReview[]
   favorites             CustomerFavorite[]
@@ -597,7 +461,6 @@ model Product {
   inventoryIssueItems   InventoryIssueItem[]
   inventoryReservations InventoryReservation[]
   returnItems            OrderReturnItem[]
-  aiTechnicalImageBatches AiImageBatch[]      @relation("AiTechnicalImageTarget")
   mediaAssets           ProductMediaAsset[]
   socialPostSources     SocialPost[]
   shopeeMappings        ShopeeItemMapping[] @relation("ShopeeMappingProduct")
@@ -654,7 +517,6 @@ model ProductMediaAsset {
   productId             String          @map("product_id") @db.Uuid
   mediaAssetId          String          @map("media_asset_id") @db.Uuid
   tag                   ProductMediaTag
-  sourceAiImageItemId   String?         @map("source_ai_image_item_id") @db.Uuid
   approvedByAdminId     String?         @map("approved_by_admin_id") @db.Uuid
   approvedAt            DateTime?       @map("approved_at") @db.Timestamptz(3)
   metadata              Json?
@@ -664,7 +526,6 @@ model ProductMediaAsset {
 
   @@unique([mediaAssetId, tag])
   @@index([productId, tag, createdAt(sort: Desc)])
-  @@index([sourceAiImageItemId])
   @@map("product_media_assets")
 }
 
@@ -1307,9 +1168,6 @@ model MediaAsset {
   data            Bytes?   @db.ByteA
   size            Int
   alt             String?  @db.VarChar(240)
-  aiImageOriginals AiImageItem[] @relation("AiImageOriginal")
-  aiImageOutputs   AiImageItem[] @relation("AiImageOutput")
-  aiImagePublishedOutputs AiImageItem[] @relation("AiImagePublishedOutput")
   productLinks    ProductMediaAsset[]
   socialPostTargets SocialPostTarget[]
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -1383,241 +1241,6 @@ model AdminNotificationRead {
   @@id([notificationId, adminId])
   @@index([adminId, readAt])
   @@map("admin_notification_reads")
-}
-
-model AiTask {
-  id                  String      @id @default(uuid()) @db.Uuid
-  idempotencyKey      String      @unique @map("idempotency_key") @db.VarChar(128)
-  requestedByAdminId  String      @map("requested_by_admin_id") @db.Uuid
-  type                AiTaskType
-  status              AiTaskStatus @default(QUEUED)
-  title               String      @db.VarChar(120)
-  input               Json
-  result              Json?
-  errorCode           String?     @map("error_code") @db.VarChar(80)
-  errorMessage        String?     @map("error_message") @db.VarChar(500)
-  attemptCount        Int         @default(0) @map("attempt_count")
-  createdAt           DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt           DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
-  startedAt           DateTime?   @map("started_at") @db.Timestamptz(3)
-  completedAt         DateTime?   @map("completed_at") @db.Timestamptz(3)
-  cancelledAt         DateTime?   @map("cancelled_at") @db.Timestamptz(3)
-  requestedBy         AdminUser   @relation("AiTaskRequester", fields: [requestedByAdminId], references: [id], onDelete: Restrict)
-  approval            AiApproval?
-  imageItem           AiImageItem?
-  productDraft        AiProductDraft?
-  marketingDraft      AiMarketingDraft?
-  salesMetric         AiSalesMetric?
-
-  @@index([status, createdAt(sort: Desc)])
-  @@index([requestedByAdminId, createdAt(sort: Desc)])
-  @@map("ai_tasks")
-}
-
-model AiApproval {
-  id                String           @id @default(uuid()) @db.Uuid
-  taskId            String           @unique @map("task_id") @db.Uuid
-  reviewedByAdminId String?          @map("reviewed_by_admin_id") @db.Uuid
-  status            AiApprovalStatus @default(PENDING)
-  decisionNote      String?          @map("decision_note") @db.VarChar(1000)
-  requestedAt       DateTime         @default(now()) @map("requested_at") @db.Timestamptz(3)
-  reviewedAt        DateTime?        @map("reviewed_at") @db.Timestamptz(3)
-  task              AiTask           @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  reviewedBy        AdminUser?       @relation("AiApprovalReviewer", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
-
-  @@index([status, requestedAt(sort: Desc)])
-  @@index([reviewedByAdminId, reviewedAt(sort: Desc)])
-  @@map("ai_approvals")
-}
-
-model AiImageBatch {
-  id                 String              @id @default(uuid()) @db.Uuid
-  idempotencyKey     String              @unique @map("idempotency_key") @db.VarChar(128)
-  manifestHash       String              @map("manifest_hash") @db.Char(64)
-  createdByAdminId   String              @map("created_by_admin_id") @db.Uuid
-  name               String              @db.VarChar(120)
-  preset             AiImagePreset
-  purpose            AiImagePurpose      @default(PRODUCT_PHOTO)
-  isProductAgentDirectUpload Boolean      @default(false) @map("is_product_agent_direct_upload")
-  visualPrompt       String              @default("") @map("visual_prompt") @db.VarChar(1200)
-  targetProductId    String?             @map("target_product_id") @db.Uuid
-  status             AiImageBatchStatus  @default(UPLOADING)
-  totalBytes         BigInt              @map("total_bytes")
-  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy          AdminUser           @relation("AiImageBatchCreator", fields: [createdByAdminId], references: [id], onDelete: Restrict)
-  targetProduct      Product?            @relation("AiTechnicalImageTarget", fields: [targetProductId], references: [id], onDelete: Restrict)
-  items              AiImageItem[]
-
-  @@index([createdByAdminId, createdAt(sort: Desc)])
-  @@index([status, updatedAt(sort: Desc)])
-  @@map("ai_image_batches")
-}
-
-model AiImageItem {
-  id                    String             @id @default(uuid()) @db.Uuid
-  batchId               String             @map("batch_id") @db.Uuid
-  taskId                String?            @unique @map("task_id") @db.Uuid
-  originalAssetId       String?            @unique @map("original_asset_id") @db.Uuid
-  outputAssetId         String?            @unique @map("output_asset_id") @db.Uuid
-  publishedAssetId      String?            @unique @map("published_asset_id") @db.Uuid
-  attachedProductId     String?            @map("attached_product_id") @db.Uuid
-  originalFilename      String             @map("original_filename") @db.VarChar(240)
-  relativePath          String             @default("") @map("relative_path") @db.VarChar(500)
-  mimeType              String             @map("mime_type") @db.VarChar(100)
-  expectedSize          Int                @map("expected_size")
-  sourceSha256          String?            @map("source_sha256") @db.Char(64)
-  classificationHint    String?            @map("classification_hint") @db.VarChar(120)
-  classification        Json?
-  status                AiImageItemStatus  @default(PENDING_UPLOAD)
-  qcStatus              AiImageQcStatus    @default(PENDING) @map("qc_status")
-  qcFlags               String[]           @default([]) @map("qc_flags")
-  qcReport              Json?              @map("qc_report")
-  attemptCount          Int                @default(0) @map("attempt_count")
-  errorCode             String?            @map("error_code") @db.VarChar(80)
-  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt             DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
-  batch                 AiImageBatch       @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  task                  AiTask?            @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  originalAsset         MediaAsset?        @relation("AiImageOriginal", fields: [originalAssetId], references: [id], onDelete: Restrict)
-  outputAsset           MediaAsset?        @relation("AiImageOutput", fields: [outputAssetId], references: [id], onDelete: Restrict)
-  publishedAsset        MediaAsset?        @relation("AiImagePublishedOutput", fields: [publishedAssetId], references: [id], onDelete: Restrict)
-  attachedProduct       Product?           @relation(fields: [attachedProductId], references: [id], onDelete: SetNull)
-  productDrafts         AiProductDraft[]
-
-  @@index([batchId, status, createdAt])
-  @@index([status, updatedAt])
-  @@index([attachedProductId])
-  @@map("ai_image_items")
-}
-
-model AiProductDraftBatch {
-  id               String                    @id @default(uuid()) @db.Uuid
-  idempotencyKey   String                    @unique @map("idempotency_key") @db.VarChar(128)
-  manifestHash     String                    @map("manifest_hash") @db.Char(64)
-  createdByAdminId String                    @map("created_by_admin_id") @db.Uuid
-  status           AiProductDraftBatchStatus @default(PROCESSING)
-  createdAt        DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy        AdminUser                 @relation("AiProductDraftBatchCreator", fields: [createdByAdminId], references: [id], onDelete: Restrict)
-  drafts           AiProductDraft[]
-
-  @@index([createdByAdminId, createdAt(sort: Desc)])
-  @@index([status, updatedAt(sort: Desc)])
-  @@map("ai_product_draft_batches")
-}
-
-model AiProductDraft {
-  id                       String              @id @default(uuid()) @db.Uuid
-  batchId                  String              @map("batch_id") @db.Uuid
-  taskId                   String              @unique @map("task_id") @db.Uuid
-  sourceImageItemId        String              @map("source_image_item_id") @db.Uuid
-  reviewedByAdminId        String?             @map("reviewed_by_admin_id") @db.Uuid
-  status                   AiProductDraftStatus @default(QUEUED)
-  productName              String              @default("") @map("product_name") @db.VarChar(180)
-  shortDescription         String              @default("") @map("short_description") @db.VarChar(500)
-  detailedDescription      String              @default("") @map("detailed_description") @db.Text
-  categorySuggestion       String?             @map("category_suggestion") @db.VarChar(160)
-  materialSuggestion       String?             @map("material_suggestion") @db.VarChar(160)
-  gemstoneSuggestion       String?             @map("gemstone_suggestion") @db.VarChar(160)
-  seoTitle                 String              @default("") @map("seo_title") @db.VarChar(180)
-  seoMetaDescription       String              @default("") @map("seo_meta_description") @db.VarChar(320)
-  altText                  String              @default("") @map("alt_text") @db.VarChar(500)
-  confidenceScore          Int                 @default(0) @map("confidence_score")
-  categoryConfidence       Int?                @map("category_confidence")
-  materialConfidence       Int?                @map("material_confidence")
-  gemstoneConfidence       Int?                @map("gemstone_confidence")
-  needsReview              Boolean             @default(true) @map("needs_review")
-  reviewReasons            String[]            @default([]) @map("review_reasons")
-  evidence                 Json?
-  reviewedAt               DateTime?           @map("reviewed_at") @db.Timestamptz(3)
-  createdAt                DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt                DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
-  batch                    AiProductDraftBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  task                     AiTask              @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  sourceImageItem          AiImageItem         @relation(fields: [sourceImageItemId], references: [id], onDelete: Restrict)
-  reviewedBy               AdminUser?          @relation("AiProductDraftReviewer", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
-
-  @@index([batchId, status, createdAt])
-  @@index([status, updatedAt(sort: Desc)])
-  @@index([sourceImageItemId, createdAt(sort: Desc)])
-  @@map("ai_product_drafts")
-}
-
-model AiSalesKnowledgeSource {
-  id                String                 @id @default(uuid()) @db.Uuid
-  documentKey       String                 @map("document_key") @db.VarChar(100)
-  version           Int                    @default(1)
-  title             String                 @db.VarChar(180)
-  topic             String                 @db.VarChar(80)
-  sourceLabel       String                 @map("source_label") @db.VarChar(200)
-  content           String                 @db.Text
-  status            AiSalesKnowledgeStatus @default(DRAFT)
-  effectiveFrom     DateTime?              @map("effective_from") @db.Timestamptz(3)
-  expiresAt         DateTime?              @map("expires_at") @db.Timestamptz(3)
-  createdByAdminId  String                 @map("created_by_admin_id") @db.Uuid
-  reviewedByAdminId String?                @map("reviewed_by_admin_id") @db.Uuid
-  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
-  createdBy         AdminUser              @relation("AiSalesKnowledgeCreator", fields: [createdByAdminId], references: [id], onDelete: Restrict)
-  reviewedBy        AdminUser?             @relation("AiSalesKnowledgeReviewer", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
-
-  @@unique([documentKey, version])
-  @@index([status, effectiveFrom, expiresAt])
-  @@index([documentKey, status, version(sort: Desc)])
-  @@map("ai_sales_knowledge_sources")
-}
-
-model AiMarketingDraft {
-  id                String                 @id @default(uuid()) @db.Uuid
-  revision          Int                    @default(1)
-  taskId            String                 @unique @map("task_id") @db.Uuid
-  createdByAdminId  String                 @map("created_by_admin_id") @db.Uuid
-  reviewedByAdminId String?                @map("reviewed_by_admin_id") @db.Uuid
-  status            AiMarketingDraftStatus @default(QUEUED)
-  channel           String                 @db.VarChar(24)
-  objective         String                 @db.VarChar(800)
-  title             String                 @default("") @db.VarChar(180)
-  caption           String                 @default("") @db.VarChar(1200)
-  body              String                 @default("") @db.Text
-  callToAction      String                 @default("") @map("call_to_action") @db.VarChar(240)
-  seoTitle          String                 @default("") @map("seo_title") @db.VarChar(180)
-  seoDescription    String                 @default("") @map("seo_description") @db.VarChar(320)
-  altText           String                 @default("") @map("alt_text") @db.VarChar(500)
-  hashtags          String[]               @default([])
-  sourceProductIds  String[]               @default([]) @map("source_product_ids")
-  sourceFacts       Json?                  @map("source_facts")
-  factWarnings      String[]               @default([]) @map("fact_warnings")
-  decisionNote      String?                @map("decision_note") @db.VarChar(1000)
-  errorCode         String?                @map("error_code") @db.VarChar(80)
-  generatedAt       DateTime?              @map("generated_at") @db.Timestamptz(3)
-  reviewedAt        DateTime?              @map("reviewed_at") @db.Timestamptz(3)
-  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
-  task              AiTask                 @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  createdBy         AdminUser              @relation("AiMarketingDraftCreator", fields: [createdByAdminId], references: [id], onDelete: Restrict)
-  reviewedBy        AdminUser?             @relation("AiMarketingDraftReviewer", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
-  socialPosts       SocialPost[]
-
-  @@index([status, updatedAt(sort: Desc)])
-  @@index([createdByAdminId, createdAt(sort: Desc)])
-  @@index([channel, createdAt(sort: Desc)])
-  @@map("ai_marketing_drafts")
-}
-
-model AiSalesMetric {
-  id                       String   @id @default(uuid()) @db.Uuid
-  taskId                   String   @unique @map("task_id") @db.Uuid
-  needsHandoff             Boolean  @default(false) @map("needs_handoff")
-  unresolved               Boolean  @default(false)
-  recommendedProductCount  Int      @default(0) @map("recommended_product_count")
-  clickCount               Int      @default(0) @map("click_count")
-  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  task                     AiTask   @relation(fields: [taskId], references: [id], onDelete: Cascade)
-
-  @@index([createdAt(sort: Desc)])
-  @@index([needsHandoff, createdAt(sort: Desc)])
-  @@map("ai_sales_metrics")
 }
 
 model SocialOAuthState {
@@ -1850,7 +1473,6 @@ model SocialPost {
   updatedByAdminId      String?         @map("updated_by_admin_id") @db.Uuid
   sourceProductId       String?         @map("source_product_id") @db.Uuid
   sourceProductVariantId String?        @map("source_product_variant_id") @db.Uuid
-  sourceMarketingDraftId String?        @map("source_marketing_draft_id") @db.Uuid
   approvedSnapshot      Json?           @map("approved_snapshot")
   approvedCommerceSnapshot Json?        @map("approved_commerce_snapshot")
   approvedCommerceSnapshotHash String?  @map("approved_commerce_snapshot_hash") @db.Char(64)
@@ -1862,7 +1484,6 @@ model SocialPost {
   updatedBy             AdminUser?      @relation("SocialPostUpdater", fields: [updatedByAdminId], references: [id], onDelete: SetNull)
   sourceProduct         Product?        @relation(fields: [sourceProductId], references: [id], onDelete: SetNull)
   sourceProductVariant  ProductPriceVariant? @relation(fields: [sourceProductVariantId], references: [id], onDelete: SetNull)
-  sourceMarketingDraft  AiMarketingDraft? @relation(fields: [sourceMarketingDraftId], references: [id], onDelete: SetNull)
   targets               SocialPostTarget[]
 
   @@index([status, updatedAt(sort: Desc)])

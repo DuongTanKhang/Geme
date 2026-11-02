@@ -16,6 +16,18 @@ const shapeLabels = { R: "ROUND", O: "OVAL", SQ: "SQUARE" };
 const shapeOrder = { OVAL: 0, ROUND: 1, SQUARE: 2 };
 const apply = process.argv.includes("--apply");
 
+async function countLegacyProductReferences(table, column, productIds) {
+  const allowedColumns = { ai_image_items: "attached_product_id", ai_image_batches: "target_product_id" };
+  if (allowedColumns[table] !== column) throw new Error("Tên bảng/cột tham chiếu cũ không hợp lệ.");
+  const exists = await prisma.$queryRaw`SELECT to_regclass(${`public.${table}`}) IS NOT NULL AS present`;
+  if (!exists[0]?.present || productIds.length === 0) return 0;
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::text AS count FROM "${table}" WHERE "${column}" = ANY(string_to_array($1, ',')::uuid[])`,
+    productIds.join(","),
+  );
+  return Number(rows[0]?.count || 0);
+}
+
 function parseBangleSku(sku) {
   const match = String(sku).match(/^(NSB(?:LA|MO|RB))(SQ|O|R)(\d{2})S(\d{1,2})$/);
   if (!match) throw new Error(`SKU kiềng không đúng cấu trúc: ${sku}`);
@@ -92,8 +104,8 @@ try {
       prisma.productReview.count({ where: { productId: { in: sourceIds } } }),
       prisma.promotionTarget.count({ where: { productId: { in: sourceIds } } }),
       prisma.productMediaAsset.count({ where: { productId: { in: sourceIds } } }),
-      prisma.aiImageItem.count({ where: { attachedProductId: { in: sourceIds } } }),
-      prisma.aiImageBatch.count({ where: { targetProductId: { in: sourceIds } } }),
+      countLegacyProductReferences("ai_image_items", "attached_product_id", sourceIds),
+      countLegacyProductReferences("ai_image_batches", "target_product_id", sourceIds),
       prisma.socialPost.count({ where: { sourceProductId: { in: sourceIds } } }),
     ]),
   ]);
@@ -101,7 +113,7 @@ try {
     throw new Error(`Mã cha/slug/SKU biến thể đã tồn tại: ${JSON.stringify({ skuCollisions, slugCollisions, variantCollisions })}`);
   }
   if (referenceCounts.some((count) => count > 0)) {
-    throw new Error(`Có đơn hàng, yêu thích, đánh giá, khuyến mãi, AI hoặc bài mạng xã hội đang gắn với SKU cũ; dừng để xử lý tham chiếu an toàn. ${JSON.stringify(referenceCounts)}`);
+    throw new Error(`Có đơn hàng, yêu thích, đánh giá, khuyến mãi, lịch sử ảnh hoặc bài mạng xã hội đang gắn với SKU cũ; dừng để xử lý tham chiếu an toàn. ${JSON.stringify(referenceCounts)}`);
   }
 
   const plans = [...groups.entries()].map(([baseSku, group]) => {

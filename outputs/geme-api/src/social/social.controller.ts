@@ -20,7 +20,6 @@ export class SocialController {
   @Patch("accounts/selection") @RequireAdminPermissions("social.connect") selectAccounts(@Req() request: AdminRequest, @Body() body: Record<string, unknown>) { return this.social.selectAccounts(request.adminIdentity, body?.accountIds); }
   @Post("connections/:id/disconnect") @RequireAdminPermissions("social.connect") disconnect(@Req() request: AdminRequest, @Param("id", new ParseUUIDPipe()) id: string) { return this.social.disconnect(request.adminIdentity, id); }
   @Get("products") products(@Query("search") search?: string) { return this.social.products(search); }
-  @Get("marketing-drafts") marketingDrafts() { return this.social.marketingDrafts(); }
   @Get("posts") posts(@Query("status") status?: string, @Query("q") search?: string, @Query("limit") limit?: string, @Query("cursor") cursor?: string) { return this.social.listPosts(status, search, limit, cursor); }
   @Get("posts/calendar") calendar(@Query("from") from?: string, @Query("to") to?: string, @Query("status") status?: string) { return this.social.calendar(from, to, status); }
   @Get("posts/:id") getPost(@Param("id", new ParseUUIDPipe()) id: string) { return this.social.getPost(id); }

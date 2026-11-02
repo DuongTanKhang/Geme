@@ -63,7 +63,6 @@ test("ordinary Admin API calls retain the bounded upstream timeout", async () =>
 });
 
 test("long direct uploads keep their 120 second timeout while ordinary API calls stay bounded", () => {
-  assert.equal(adminProxyTimeoutMs(["ai-studio", "product-agent", "direct-upload"]), 120_000);
   assert.equal(adminProxyTimeoutMs(["categories", "category-id"]), 30_000);
 });
 

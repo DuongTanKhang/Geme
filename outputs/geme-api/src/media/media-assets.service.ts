@@ -258,8 +258,8 @@ export class MediaAssetsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async hasReferences(tx: any, asset: MediaReferenceShape, urls: string[]) {
-    const [ai, productMedia, social, gallery, productFields, variants, pos] = await Promise.all([
-      tx.aiImageItem.findFirst({ where: { OR: [{ originalAssetId: asset.id }, { outputAssetId: asset.id }, { publishedAssetId: asset.id }] }, select: { id: true } }),
+    const [legacyAiReference, productMedia, social, gallery, productFields, variants, pos] = await Promise.all([
+      this.hasLegacyAiImageReference(tx, asset.id),
       tx.productMediaAsset.findFirst({ where: { mediaAssetId: asset.id }, select: { id: true } }),
       tx.socialPostTarget.findFirst({ where: { mediaAssetId: asset.id }, select: { id: true } }),
       tx.productImage.findFirst({ where: { url: { in: urls } }, select: { id: true } }),
@@ -267,7 +267,14 @@ export class MediaAssetsService implements OnModuleInit, OnModuleDestroy {
       tx.productPriceVariant.findFirst({ where: { OR: [{ videoUrl: { in: urls } }, ...(urls.length ? [{ imageUrls: { hasSome: urls } }] : [])] }, select: { id: true } }),
       tx.pos365ProductImageSync.findFirst({ where: { imageUrl: { in: urls } }, select: { id: true } }),
     ]);
-    return Boolean(ai || productMedia || social || gallery || productFields || variants || pos);
+    return Boolean(legacyAiReference || productMedia || social || gallery || productFields || variants || pos);
+  }
+
+  private async hasLegacyAiImageReference(tx: any, assetId: string) {
+    const tables = await tx.$queryRaw`SELECT to_regclass('public.ai_image_items') IS NOT NULL AS present`;
+    if (!tables[0]?.present) return false;
+    const rows = await tx.$queryRaw`SELECT 1 FROM ai_image_items WHERE original_asset_id = ${assetId}::uuid OR output_asset_id = ${assetId}::uuid OR published_asset_id = ${assetId}::uuid LIMIT 1`;
+    return rows.length > 0;
   }
 
   private async hasLegacyReferences(tx: any, urls: string[]) {

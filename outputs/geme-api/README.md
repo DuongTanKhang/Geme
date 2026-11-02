@@ -64,10 +64,6 @@ Migration `20261017000000_media_object_storage` giữ nguyên dữ liệu cũ v�
 
 Admin dùng `NEXT_PUBLIC_API_BASE_URL=http://localhost:4000/api/v1` để đọc và ghi các danh sách nghiệp vụ. Riêng chất liệu/loại đá hỗ trợ tạo, sửa, ẩn và xóa qua `/api/v1/materials`; danh sách cũng được phát qua `/api/v1/materials/events` để cập nhật giao diện đang mở. Secret và thông tin Kiot Việt chỉ được lưu ở backend.
 
-## AI Studio (đã gỡ khỏi ứng dụng)
-
-Toàn bộ API AI Studio Phase 1–4 đã được tháo khỏi `AppModule`; Compose cũng không còn khởi chạy AI Worker hoặc AI Core. Các route `/api/v1/admin/ai-studio/*` hiện không được đăng ký. Bảng database, migration, ảnh và bản nháp cũ được giữ nguyên; không có migration xóa dữ liệu. Social và Shopee tiếp tục dùng Redis qua tiện ích kết nối chung.
-
 ## Mạng xã hội
 
 Thiết lập Meta OAuth, quyền App Review, CDN ảnh và luồng duyệt/xuất bản nằm trong [SOCIAL_SETUP.md](./SOCIAL_SETUP.md).

@@ -84,11 +84,8 @@ async function publish(job: Job<SocialPublishPayload>) {
     if (target.mediaAsset) {
       if (target.mediaAsset.isPrivate || target.mediaAsset.storageProvider !== "r2" || !target.mediaAsset.objectKey || !["image/jpeg", "image/png"].includes(target.mediaAsset.mimeType)) return rejectTarget("SOCIAL_MEDIA_NOT_PUBLIC");
       if (target.platform === "INSTAGRAM" && (target.mediaAsset.mimeType !== "image/jpeg" || target.mediaAsset.size > 8 * 1024 * 1024)) return rejectTarget("SOCIAL_INSTAGRAM_IMAGE_UNSUPPORTED");
-      const [approvedOutput, approvedProductImage] = await Promise.all([
-        tx.aiImageItem.findFirst({ where: { status: "APPROVED", qcStatus: "PASS", publishedAssetId: target.mediaAsset.id }, select: { id: true } }),
-        tx.productMediaAsset.findFirst({ where: { mediaAssetId: target.mediaAsset.id, tag: "PRODUCT_IMAGE", approvedAt: { not: null } }, select: { id: true } }),
-      ]);
-      if (!approvedOutput && !approvedProductImage) return rejectTarget("SOCIAL_MEDIA_APPROVAL_REVOKED");
+      const approvedProductImage = await tx.productMediaAsset.findFirst({ where: { mediaAssetId: target.mediaAsset.id, tag: "PRODUCT_IMAGE", approvedAt: { not: null } }, select: { id: true } });
+      if (!approvedProductImage) return rejectTarget("SOCIAL_MEDIA_APPROVAL_REVOKED");
     }
     const attemptNumber = target.attemptCount + 1;
     await tx.socialPostTarget.update({ where: { id: targetId }, data: { status: "PUBLISHING", attemptCount: attemptNumber, remoteContainerId: null, remoteMediaId: null, permalink: null, publishedAt: null } });

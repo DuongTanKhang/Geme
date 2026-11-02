@@ -39,8 +39,6 @@ test("admins have all permissions while content editors cannot change price or p
   assert.ok(!ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("social.approve"));
   assert.ok(!ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("social.publish"));
   assert.ok(!ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("social.connect"));
-  assert.ok(ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("ai-studio.draft"));
-  assert.ok(!ADMIN_PERMISSION_DEFAULTS.CONTENT_EDITOR.includes("ai-studio.approve"));
   assert.deepEqual(ADMIN_PERMISSION_DEFAULTS.SUPER_ADMIN, ADMIN_PERMISSION_CATALOG);
 });
 
@@ -49,7 +47,7 @@ test("legacy manage grants imply granular actions but an explicit deny wins", as
     { id: "legacy", email: "legacy@geme.test", displayName: "Legacy", role: "CONTENT_EDITOR" },
     { id: "restricted", email: "restricted@geme.test", displayName: "Restricted", role: "CONTENT_EDITOR" },
   ], {
-    legacy: [{ permission: "social.manage", effect: "ALLOW" }, { permission: "ai-studio.manage", effect: "ALLOW" }],
+    legacy: [{ permission: "social.manage", effect: "ALLOW" }],
     restricted: [{ permission: "social.manage", effect: "ALLOW" }, { permission: "social.publish", effect: "DENY" }],
   });
   const service = new AdminPermissionService(store.prisma as any);
@@ -58,8 +56,6 @@ test("legacy manage grants imply granular actions but an explicit deny wins", as
   assert.ok(legacy.has("social.approve"));
   assert.ok(legacy.has("social.publish"));
   assert.ok(legacy.has("social.connect"));
-  assert.ok(legacy.has("ai-studio.draft"));
-  assert.ok(legacy.has("ai-studio.approve"));
   const restricted = new Set(await service.getEffectivePermissions(identity("restricted", "CONTENT_EDITOR")));
   assert.ok(restricted.has("social.approve"));
   assert.ok(!restricted.has("social.publish"));
