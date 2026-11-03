@@ -8,10 +8,12 @@ import { onlineOrderInput, onlineOrderQuoteInput } from "./online-order-input.js
 import { MediaAssetsService } from "../media/media-assets.service.js";
 import { SePayBankAccountService } from "../sepay/sepay-bank-account.service.js";
 import { LoyaltyService } from "../loyalty/loyalty.service.js";
+import { OptionalAegisCustomerGuard, type AegisCustomerIdentity } from "../auth/aegis-customer.guard.js";
 
 type MediaResponse = { setHeader(name: string, value: string): void; end(data?: Uint8Array): void; redirect(status: number, url: string): unknown };
 type AuthorizationRequest = { headers: { authorization?: string } };
 type AdminRequest = { adminIdentity: AdminIdentity };
+type StorefrontOrderRequest = { customerIdentity?: AegisCustomerIdentity };
 
 const admin = (...permissions: AdminPermission[]) => permissions.length
   ? applyDecorators(UseGuards(AdminAuthGuard), RequireAdminPermissions(...permissions))
@@ -165,8 +167,8 @@ export class CommerceController {
   @Post("orders/quote") quoteStoreOrder(@Body() body: Record<string, any>) {
     return this.commerce.quoteOrder(onlineOrderQuoteInput(body));
   }
-  @Post("orders") createStoreOrder(@Body() body: Record<string, any>, @Headers("idempotency-key") idempotencyKey?: string) {
-    return this.commerce.createOrder(onlineOrderInput(body), undefined, false, idempotencyKey);
+  @Post("orders") @UseGuards(OptionalAegisCustomerGuard) createStoreOrder(@Req() request: StorefrontOrderRequest, @Body() body: Record<string, any>, @Headers("idempotency-key") idempotencyKey?: string) {
+    return this.commerce.createOrder(onlineOrderInput(body), undefined, false, idempotencyKey, request.customerIdentity);
   }
   @Post("admin/orders") @admin("orders.write") createAdminOrder(@Body() body: Record<string, any>, @Headers("idempotency-key") idempotencyKey?: string) { return this.commerce.createOrder(body, undefined, true, idempotencyKey); }
   @Patch("orders/:id/status") @admin("orders.write") orderStatus(@Param("id") id: string, @Req() request: AdminRequest, @Body() body: Record<string, any>) { return this.commerce.updateOrderStatus(id, body.status, request.adminIdentity, body.reason); }
@@ -267,5 +269,6 @@ export class CommerceController {
   @Patch("settings") @admin("settings.manage") saveSettings(@Body() body: Record<string, unknown>) { return this.commerce.saveSettings(body); }
   @Get("reports/storefront") storefrontReport() { return this.commerce.storefrontSalesOverview(); }
   @Get("reports/overview") @admin("dashboard.read") report(@Query() query: Record<string, string>) { return this.commerce.report(query); }
+  @Get("reports/customer-detail") @admin("finance.read", "customers.read") customerDetailReport(@Query() query: Record<string, string>) { return this.commerce.customerDetailReport(query); }
   @Get("reports/gross-profit") @admin("finance.read") grossProfitReport(@Query() query: Record<string, string>) { return this.commerce.grossProfitReport(query); }
 }

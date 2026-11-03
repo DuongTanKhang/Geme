@@ -136,3 +136,17 @@ export class AegisCustomerGuard implements CanActivate {
     return verifiedIdentity;
   }
 }
+
+/**
+ * Guest checkout stays public, but a supplied bearer token must be verified.
+ * This lets checkout snapshot a registered member without trusting customer
+ * identifiers posted by the browser.
+ */
+@Injectable()
+export class OptionalAegisCustomerGuard extends AegisCustomerGuard {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest<CustomerRequest>();
+    if (!request.headers.authorization) return true;
+    return super.canActivate(context);
+  }
+}

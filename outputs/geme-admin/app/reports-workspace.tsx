@@ -20,6 +20,10 @@ type Profit = { profit: number; cost: number; missingCostLines: number; missingC
 type Marketing = { totals: { sessions: number; visitors: number; pageViews: number; signups: number; spend: number; visitorSegments?: { firstTime: number; returning: number }; settledSessions?: number; bouncedSessions?: number; bounceRate?: number | null; cartSessions?: number; cartConvertedSessions?: number; cartAbandonmentRate?: number | null; paidOrders: number; paidRevenue: number; paidVisitors?: number; visitorToPaid?: number }; channels: Array<{ source: string; sessions: number; signups: number; paidOrders: number; paidRevenue: number; spend: number; cpa: number | null; conversionRate: number }>; campaigns: Array<{ source: string; campaign: string; sessions: number; signups: number; paidOrders: number; paidRevenue: number; spend: number; cpa: number | null; conversionRate: number }> };
 type Props = { request: (path: string, method?: string, body?: unknown) => Promise<unknown> };
 type TrendPoint = { key: string; label: string; revenue: number; profit: number; orders: number; units: number };
+type CustomerSegment = { channel: string; cohort: "NEW" | "RETURNING"; detailType: string; customers: number; orders: number; captured: number; refunded: number; netSpend: number; inferredCustomers: number; averageSpend: number };
+type AnonymousSegment = { channel: string; orders: number; captured: number; refunded: number; netSpend: number };
+type CustomerRow = { name: string | null; contact: string; channels: string; hasWebAccount: boolean; firstPurchaseAt: string; cohort: "NEW" | "RETURNING"; orders: number; captured: number; refunded: number; netSpend: number; lifetimeSpend: number };
+type CustomerDetail = { from: string; to: string; page: number; pageSize: number; customerTotal: number; segments: CustomerSegment[]; anonymous: AnonymousSegment[]; customers: CustomerRow[] };
 
 const emptyProfit: Profit = { profit: 0, cost: 0, missingCostLines: 0, missingCostRevenue: 0, timeline: [] };
 const emptyMarketing: Marketing = { totals: { sessions: 0, visitors: 0, pageViews: 0, signups: 0, spend: 0, visitorSegments: { firstTime: 0, returning: 0 }, settledSessions: 0, bouncedSessions: 0, bounceRate: null, cartSessions: 0, cartConvertedSessions: 0, cartAbandonmentRate: null, paidOrders: 0, paidRevenue: 0, paidVisitors: 0, visitorToPaid: 0 }, channels: [], campaigns: [] };
@@ -53,6 +57,12 @@ export default function ReportsWorkspace({ request }: Props) {
   const [report, setReport] = useState<Report | null>(null);
   const [profit, setProfit] = useState<Profit | null>(null);
   const [marketing, setMarketing] = useState<Marketing | null>(null);
+  const [customerDetail, setCustomerDetail] = useState<CustomerDetail | null>(null);
+  const [customerLoading, setCustomerLoading] = useState(false);
+  const [customerError, setCustomerError] = useState("");
+  const [customerPage, setCustomerPage] = useState(1);
+  const [customerSearchDraft, setCustomerSearchDraft] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showAllProducts, setShowAllProducts] = useState(false);
@@ -84,6 +94,19 @@ export default function ReportsWorkspace({ request }: Props) {
     finally { setLoading(false); }
   }, [request, rangeStart, rangeNext]);
   useEffect(() => { void load(); }, [load]);
+
+  const loadCustomerDetail = useCallback(async () => {
+    setCustomerLoading(true); setCustomerError("");
+    const from = vnMidnight(rangeStart).toISOString();
+    const endExclusive = vnMidnight(rangeNext).toISOString();
+    const to = new Date(new Date(endExclusive).getTime() - 1).toISOString();
+    try {
+      const params = new URLSearchParams({ from, to, page: String(customerPage), pageSize: "25", search: customerSearch });
+      setCustomerDetail(await request(`reports/customer-detail?${params}`) as CustomerDetail);
+    } catch (caught) { setCustomerError(caught instanceof Error ? caught.message : "Không tải được báo cáo khách hàng."); }
+    finally { setCustomerLoading(false); }
+  }, [request, rangeStart, rangeNext, customerPage, customerSearch]);
+  useEffect(() => { void loadCustomerDetail(); }, [loadCustomerDetail]);
 
   const chartGrain: Grain = grain === "quarter" || grain === "year" ? grain : "day";
   const trend = useMemo(() => {
@@ -131,6 +154,52 @@ export default function ReportsWorkspace({ request }: Props) {
   const statusTotal = statuses.reduce((sum, row) => sum + row.count, 0);
   const topProducts = report?.products.slice(0, showAllProducts ? 20 : 8) || [];
   const ranges: Array<[Grain, string]> = [["day", "Ngày"], ["week", "Tuần"], ["month", "Tháng"], ["quarter", "Quý"], ["year", "Năm"]];
+  const segments = customerDetail?.segments || [];
+  const anonymousSegments = customerDetail?.anonymous || [];
+  const segmentTotal = (channel: string, cohort: "NEW" | "RETURNING", detailType?: string) => segments
+    .filter((row) => row.channel === channel && row.cohort === cohort && (detailType == null || row.detailType === detailType))
+    .reduce((total, row) => ({ customers: total.customers + row.customers, orders: total.orders + row.orders, captured: total.captured + row.captured, refunded: total.refunded + row.refunded, netSpend: total.netSpend + row.netSpend, inferredCustomers: total.inferredCustomers + row.inferredCustomers }), { customers: 0, orders: 0, captured: 0, refunded: 0, netSpend: 0, inferredCustomers: 0 });
+  const channelName = (channel: string) => ({ DIRECT: "Bán trực tiếp", STORE: "Bán trực tiếp", WEBSITE: "Website", SHOPEE: "Shopee", FACEBOOK: "Facebook", INSTAGRAM: "Instagram", TIKTOK: "TikTok" }[channel] || channel.replaceAll("_", " "));
+  const channelPieColors = ["#4f8066", "#c49a57", "#6e91a5", "#9b7ba8", "#c97868", "#79a5a0"];
+  const channelPieData = (report?.salesChannels || []).map((row, index) => ({ ...row, revenue: Number(row.revenue) || 0, color: channelPieColors[index % channelPieColors.length] }));
+  const channelPieTotal = channelPieData.reduce((total, row) => total + Math.max(0, row.revenue), 0);
+  const channelPieOrders = channelPieData.reduce((total, row) => total + (Number(row.orders) || 0), 0);
+  const channelPieCircumference = 2 * Math.PI * 84;
+  let channelPieOffset = 0;
+  const channelPieSegments = channelPieData.map((row) => {
+    const share = channelPieTotal > 0 ? Math.max(0, row.revenue) / channelPieTotal : 0;
+    const length = channelPieCircumference * share;
+    const offset = channelPieOffset;
+    channelPieOffset += length;
+    return { ...row, share, length, offset };
+  });
+  const totalRecognized = segments.reduce((total, row) => ({ customers: total.customers, orders: total.orders + row.orders, captured: total.captured + row.captured, refunded: total.refunded + row.refunded, netSpend: total.netSpend + row.netSpend }), { customers: 0, orders: 0, captured: 0, refunded: 0, netSpend: 0 });
+  const totalAnonymous = anonymousSegments.reduce((total, row) => ({ orders: total.orders + row.orders, captured: total.captured + row.captured, refunded: total.refunded + row.refunded, netSpend: total.netSpend + row.netSpend }), { orders: 0, captured: 0, refunded: 0, netSpend: 0 });
+  const customerPageCount = Math.max(1, Math.ceil((customerDetail?.customerTotal || 0) / (customerDetail?.pageSize || 25)));
+  const channelNames = [...new Set(segments.map((row) => row.channel))].sort((a, b) => (a === "DIRECT" ? -1 : b === "DIRECT" ? 1 : a === "WEBSITE" ? -1 : b === "WEBSITE" ? 1 : a.localeCompare(b)));
+  const customerChannelStats = channelNames.map((channel) => ({ channel, first: segmentTotal(channel, "NEW"), repeat: segmentTotal(channel, "RETURNING") }));
+  const customerChartWidth = Math.max(600, customerChannelStats.length * 150 + 120);
+  const customerChartHeight = 300;
+  const customerChartBounds = { left: 72, right: customerChartWidth - 24, top: 22, bottom: 238 };
+  const customerChartMax = Math.max(1, ...customerChannelStats.flatMap((row) => [row.first.customers, row.repeat.customers]));
+  const customerChartTickCount = Math.min(4, customerChartMax);
+  const customerChartX = (index: number) => customerChannelStats.length <= 1
+    ? (customerChartBounds.left + customerChartBounds.right) / 2
+    : customerChartBounds.left + index * (customerChartBounds.right - customerChartBounds.left) / (customerChannelStats.length - 1);
+  const customerChartY = (value: number) => customerChartBounds.bottom - value / customerChartMax * (customerChartBounds.bottom - customerChartBounds.top);
+  const customerChartPath = (cohort: "first" | "repeat") => customerChannelStats.map((row, index) => `${customerChartX(index)},${customerChartY(row[cohort].customers)}`).join(" ");
+  const customerSegmentRows = customerChannelStats.flatMap(({ channel }) => {
+    const row = (cohort: "NEW" | "RETURNING", label: string, detailType?: string, depth = 0) => ({ key: `${channel}-${cohort}-${detailType || "ALL"}`, channel, cohort, label, depth, ...segmentTotal(channel, cohort, detailType) });
+    if (channel === "DIRECT") {
+      const returning = ["MEMBER", "GUEST", "UNKNOWN"].map((type) => row("RETURNING", type === "MEMBER" ? "Đã có tài khoản web" : type === "GUEST" ? "Chưa có tài khoản web" : "Chưa xác định tài khoản", type, 1)).filter((item) => item.customers || item.orders);
+      return [row("NEW", "Khách mới"), row("RETURNING", "Khách quay lại", undefined), ...returning];
+    }
+    if (channel === "WEBSITE") {
+      const newBreakdown = ["MEMBER", "GUEST", "UNKNOWN"].map((type) => row("NEW", type === "MEMBER" ? "Có tài khoản đăng nhập" : type === "GUEST" ? "Đặt hàng không đăng nhập" : "Không xác định", type, 1)).filter((item) => item.customers || item.orders);
+      return [row("NEW", "Khách mua lần đầu trên toàn hệ thống"), ...newBreakdown, row("RETURNING", "Khách quay lại")];
+    }
+    return [row("NEW", "Khách mới"), row("RETURNING", "Khách quay lại")];
+  }).filter((item) => item.customers || item.orders);
 
   return <div className="reports-workspace ecommerce-analytics-workspace">
     <div className="reports-heading ecommerce-analytics-heading">
@@ -179,7 +248,40 @@ export default function ReportsWorkspace({ request }: Props) {
       <section className="report-panel ecommerce-analytics-panel"><div className="report-panel-heading"><div><h2>Phương thức thanh toán</h2><p>Tiền thu đã trừ khoản hoàn trong kỳ.</p></div></div>{loading ? <div className="report-empty-state">Đang tải…</div> : report?.payments.length ? <div className="ecommerce-ranking ecommerce-payment-list">{report.payments.map((row) => <div key={row.method}><span>{methodLabel[row.method] || row.method}</span><strong>{money(row.amount)}</strong></div>)}</div> : <div className="report-empty-state">Chưa có khoản thanh toán.</div>}</section>
     </div>
 
-    <section className="report-panel ecommerce-analytics-panel"><div className="report-panel-heading"><div><h2>Kênh bán hàng</h2><p>Doanh thu đã thu theo cửa hàng trực tiếp và website; không nhầm với nguồn Marketing.</p></div></div>{loading ? <div className="report-empty-state">Đang tải…</div> : report?.salesChannels?.length ? <div className="ecommerce-channel-cards">{report.salesChannels.map((row) => <article key={row.channel}><span>{row.channel}</span><strong>{money(row.revenue)}</strong><small>{number(row.orders)} đơn</small><i><b style={{ width: `${Math.max(2, row.revenue / Math.max(1, ...report.salesChannels!.map((item) => item.revenue)) * 100)}%` }}/></i></article>)}</div> : <div className="report-empty-state">Chưa có khoản thanh toán theo kênh.</div>}</section>
+    <section className="report-panel ecommerce-analytics-panel customer-detail-panel" aria-labelledby="customer-detail-title">
+      <div className="report-panel-heading"><div><h2 id="customer-detail-title">Khách mua hàng & chi tiêu theo kênh</h2><p>Khách mới là lần đầu có khoản thanh toán thành công đến hết kỳ; khách quay lại đã có lần mua thành công trước kỳ. Đơn website được ghi nhận là thành viên/khách vãng lai ngay lúc đặt.</p></div><button type="button" onClick={() => void loadCustomerDetail()} disabled={customerLoading}>{customerLoading ? "Đang tải…" : "Làm mới"}</button></div>
+      {customerError && <div className="ecommerce-analytics-error customer-detail-error" role="alert">Không tải được báo cáo khách mua: {customerError}</div>}
+      <div className="customer-report-kpis">
+        <article><small>Khách có định danh</small><strong>{customerLoading ? "…" : number(customerDetail?.customerTotal || 0)}</strong><span>Khách duy nhất trong kỳ sau khi gộp theo số điện thoại/email</span></article>
+        <article><small>Đơn có định danh</small><strong>{customerLoading ? "…" : number(totalRecognized.orders)}</strong><span>Đơn thuộc các kênh có thể xác định khách</span></article>
+        <article><small>Chi tiêu ròng có định danh</small><strong>{customerLoading ? "…" : money(totalRecognized.netSpend)}</strong><span>Tiền đã thu trừ tiền hoàn trong kỳ</span></article>
+        <article><small>Giao dịch chưa định danh</small><strong>{customerLoading ? "…" : number(totalAnonymous.orders)}</strong><span>{money(totalAnonymous.netSpend)} ròng; không quy thành số khách giả</span></article>
+      </div>
+      <div className="customer-report-chart-area">
+        <div className="customer-report-chart-heading"><div><h3>Khách mới và quay lại theo kênh bán</h3><p>Một khách mua ở nhiều kênh được tính trong từng kênh; tổng khách duy nhất ở trên không bị cộng lặp.</p></div><div className="customer-report-legend"><span><i className="is-new"/>Mới</span><span><i className="is-returning"/>Quay lại</span></div></div>
+        {customerLoading && !customerDetail ? <div className="report-empty-state">Đang tải báo cáo khách…</div> : customerChannelStats.length ? <div className="customer-channel-chart-scroll" role="region" aria-label="Biểu đồ khách mới và khách quay lại theo kênh bán" tabIndex={0}><svg className="customer-channel-chart" width={customerChartWidth} height={customerChartHeight} viewBox={`0 0 ${customerChartWidth} ${customerChartHeight}`} role="img" aria-label="Số khách mới và khách quay lại theo kênh bán">
+          <title>Khách mới và quay lại theo từng kênh bán</title>
+          {Array.from({ length: customerChartTickCount + 1 }, (_, step) => { const value = Math.round(customerChartMax * (customerChartTickCount - step) / customerChartTickCount); const y = customerChartY(value); return <g className="customer-channel-chart-grid" key={step}><line x1={customerChartBounds.left} y1={y} x2={customerChartBounds.right} y2={y}/><text x={customerChartBounds.left - 10} y={y + 4} textAnchor="end">{number(value)}</text></g>; })}
+          {customerChannelStats.length > 1 && <><polyline className="customer-channel-line is-new" points={customerChartPath("first")}/><polyline className="customer-channel-line is-returning" points={customerChartPath("repeat")}/></>}
+          {customerChannelStats.map(({ channel, first, repeat }, index) => { const x = customerChartX(index); return <g key={channel}><line className="customer-channel-chart-tick" x1={x} y1={customerChartBounds.top} x2={x} y2={customerChartBounds.bottom}/><circle className="customer-channel-point is-new" cx={x} cy={customerChartY(first.customers)} r="5"><title>{channelName(channel)}: {number(first.customers)} khách mới</title></circle><circle className="customer-channel-point is-returning" cx={x} cy={customerChartY(repeat.customers)} r="5"><title>{channelName(channel)}: {number(repeat.customers)} khách quay lại</title></circle><text className="customer-channel-chart-label" x={x} y={customerChartBounds.bottom + 25} textAnchor="middle">{channelName(channel)}</text><text className="customer-channel-chart-value" x={x} y={customerChartBounds.bottom + 44} textAnchor="middle">{number(first.customers)} mới · {number(repeat.customers)} quay lại</text></g>; })}
+        </svg></div> : <div className="report-empty-state">Chưa có đơn đã thanh toán có thể thống kê trong kỳ.</div>}
+      </div>
+      <div className="customer-report-segment-heading"><div><h3>Phân nhóm khách và dòng tiền</h3><p>Số tiền trung bình = chi tiêu ròng ÷ số khách trong nhóm.</p></div></div>
+      <div className="customer-report-table-wrap"><table><thead><tr><th>Kênh / nhóm khách</th><th>Khách</th><th>Đơn</th><th>Đã thu</th><th>Đã hoàn</th><th>Chi tiêu ròng</th><th>TB / khách</th></tr></thead><tbody>
+        {customerSegmentRows.map((row) => <tr key={row.key} className={row.depth ? "is-subgroup" : ""}><td><span>{row.depth ? "↳ " : ""}{channelName(row.channel)} · {row.label}</span>{row.inferredCustomers > 0 && <small>{number(row.inferredCustomers)} khách suy luận từ dữ liệu đơn cũ</small>}</td><td>{number(row.customers)}</td><td>{number(row.orders)}</td><td>{money(row.captured)}</td><td>{money(row.refunded)}</td><td><strong>{money(row.netSpend)}</strong></td><td>{row.customers ? money(row.netSpend / row.customers) : "—"}</td></tr>)}
+        {!customerLoading && !customerSegmentRows.length && <tr><td colSpan={7} className="customer-report-empty">Chưa có khoản thanh toán trong kỳ này.</td></tr>}
+      </tbody></table></div>
+      {anonymousSegments.length > 0 && <div className="customer-anonymous-block"><strong>Giao dịch không đủ thông tin để nhận diện khách</strong><p>Các đơn này có tiền thu nhưng không có số điện thoại, email, hồ sơ khách hàng hoặc mã khách từ nền tảng. Chúng được giữ trong tổng dòng tiền nhưng không được tính thành khách mới/quay lại.</p><div className="customer-anonymous-list">{anonymousSegments.map((row) => <article key={row.channel}><b>{channelName(row.channel)}</b><span>{number(row.orders)} đơn</span><span>Thu {money(row.captured)}</span><span>Hoàn {money(row.refunded)}</span><strong>Ròng {money(row.netSpend)}</strong></article>)}</div></div>}
+      <div className="customer-directory-heading"><div><h3>Chi tiêu từng khách</h3><p>Danh sách khách nhận diện được trong kỳ; thông tin liên hệ đã che bớt.</p></div><form onSubmit={(event) => { event.preventDefault(); setCustomerPage(1); setCustomerSearch(customerSearchDraft.trim()); }}><input value={customerSearchDraft} onChange={(event) => setCustomerSearchDraft(event.target.value)} placeholder="Tìm tên, số điện thoại, kênh…" aria-label="Tìm khách hàng"/><button type="submit">Tìm</button></form></div>
+      <div className="customer-report-table-wrap customer-directory-table"><table><thead><tr><th>Khách hàng</th><th>Nhóm</th><th>Kênh đã mua</th><th>Tài khoản web</th><th>Đơn trong kỳ</th><th>Chi tiêu ròng kỳ</th><th>Chi tiêu ròng tích lũy</th></tr></thead><tbody>
+        {customerDetail?.customers.map((row, index) => <tr key={`${row.contact}-${row.firstPurchaseAt}-${index}`}><td><strong>{row.name || "Khách hàng"}</strong><small>{row.contact}</small></td><td><span className={`customer-cohort-pill ${row.cohort === "NEW" ? "is-new" : "is-returning"}`}>{row.cohort === "NEW" ? "Mới" : "Quay lại"}</span><small>Lần mua đầu: {row.firstPurchaseAt ? new Intl.DateTimeFormat("vi-VN", { timeZone: "Asia/Ho_Chi_Minh", dateStyle: "short" }).format(new Date(row.firstPurchaseAt)) : "—"}</small></td><td>{row.channels.split(", ").map(channelName).join(", ")}</td><td>{row.hasWebAccount ? "Có tài khoản" : "Khách vãng lai"}</td><td>{number(row.orders)}</td><td><strong>{money(row.netSpend)}</strong><small>Thu {money(row.captured)} · Hoàn {money(row.refunded)}</small></td><td>{money(row.lifetimeSpend)}</td></tr>)}
+        {!customerLoading && !customerDetail?.customers.length && <tr><td colSpan={7} className="customer-report-empty">{customerSearch ? "Không tìm thấy khách phù hợp." : "Chưa có khách mua hàng được nhận diện trong kỳ."}</td></tr>}
+      </tbody></table></div>
+      <footer className="customer-directory-footer"><span>{customerLoading ? "Đang tải khách hàng…" : `Hiển thị ${customerDetail?.customers.length || 0} / ${number(customerDetail?.customerTotal || 0)} khách`}</span><div><button type="button" onClick={() => setCustomerPage((page) => Math.max(1, page - 1))} disabled={customerPage <= 1 || customerLoading}>‹ Trước</button><span>Trang {customerPage} / {customerPageCount}</span><button type="button" onClick={() => setCustomerPage((page) => Math.min(customerPageCount, page + 1))} disabled={customerPage >= customerPageCount || customerLoading}>Sau ›</button></div></footer>
+      <p className="customer-report-note">Quy tắc: website dùng trạng thái thành viên/khách vãng lai đã chụp tại thời điểm đặt hàng; bán trực tiếp đối chiếu số điện thoại/email với tài khoản web hiện có. Đơn của nền tảng khác cần có mã khách hàng do nền tảng cung cấp hoặc số điện thoại/email để gộp khách. Đơn cũ chưa có nhãn nguồn được suy luận theo dữ liệu còn lưu; số khách và tiền chỉ dựa trên thanh toán đã ghi nhận, không tính đơn chưa trả tiền.</p>
+    </section>
+
+    <section className="report-panel ecommerce-analytics-panel"><div className="report-panel-heading"><div><h2>Kênh bán hàng</h2><p>Tỷ trọng doanh thu đã thu theo cửa hàng trực tiếp, website và các nền tảng đã gắn nhãn.</p></div></div>{loading ? <div className="report-empty-state">Đang tải…</div> : channelPieSegments.length ? <div className="sales-channel-pie-layout"><div className="sales-channel-pie-chart"><svg viewBox="0 0 240 240" role="img" aria-label={`Biểu đồ tròn doanh thu theo ${channelPieSegments.length} kênh bán hàng`}><title>Doanh thu theo kênh bán hàng</title><circle cx="120" cy="120" r="84" className="sales-channel-pie-track"/>{channelPieTotal > 0 && channelPieSegments.filter((row) => row.revenue > 0).map((row) => <circle key={row.channel} cx="120" cy="120" r="84" fill="none" stroke={row.color} strokeWidth="28" strokeDasharray={channelPieSegments.filter((item) => item.revenue > 0).length === 1 ? undefined : `${row.length} ${channelPieCircumference - row.length}`} strokeDashoffset={-row.offset} transform="rotate(-90 120 120)"><title>{channelName(row.channel)}: {money(row.revenue)} ({(row.share * 100).toFixed(1)}%)</title></circle>)}<text x="120" y="112" textAnchor="middle" className="sales-channel-pie-total-label">Tổng doanh thu</text><text x="120" y="137" textAnchor="middle" className="sales-channel-pie-total-value">{money(channelPieTotal)}</text></svg></div><div className="sales-channel-pie-legend">{channelPieSegments.map((row) => <article key={row.channel} className="sales-channel-pie-legend-row"><span className="sales-channel-pie-swatch" style={{ backgroundColor: row.color }}/><div><strong>{channelName(row.channel)}</strong><small>{number(row.orders)} đơn · {channelPieTotal > 0 && row.revenue > 0 ? `${(row.share * 100).toFixed(1)}% doanh thu` : "chưa có doanh thu dương"}</small></div><b>{money(row.revenue)}</b></article>)}<p>{number(channelPieOrders)} đơn trong kỳ. Tỷ trọng chỉ tính trên doanh thu dương; kênh có doanh thu bằng 0 hoặc âm vẫn được liệt kê.</p></div></div> : <div className="report-empty-state">Chưa có khoản thanh toán theo kênh.</div>}</section>
 
     <section className="report-panel ecommerce-analytics-panel ecommerce-products-panel"><div className="report-panel-heading"><div><h2>Sản phẩm bán chạy</h2><p>Xếp theo doanh thu hàng bán trong kỳ.</p></div><button type="button" onClick={() => setShowAllProducts((value) => !value)}>{showAllProducts ? "Thu gọn" : "Xem tối đa 20"}</button></div>{loading ? <div className="report-empty-state">Đang tải…</div> : topProducts.length ? <div className="ecommerce-product-table-wrap"><table><thead><tr><th>#</th><th>Sản phẩm / SKU</th><th>Danh mục</th><th>Số lượng</th><th>Doanh thu hàng bán</th></tr></thead><tbody>{topProducts.map((row, index) => <tr key={`${row.sku}-${index}`}><td>{index + 1}</td><td><strong>{row.product}</strong><small>{row.sku}</small></td><td>{row.category}</td><td>{number(row.sold)}</td><td>{money(row.revenue)}</td></tr>)}</tbody></table></div> : <div className="report-empty-state">Chưa có sản phẩm bán ra trong kỳ.</div>}</section>
 

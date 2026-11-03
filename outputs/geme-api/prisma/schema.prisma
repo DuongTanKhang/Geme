@@ -651,6 +651,9 @@ model Order {
   idempotencyRequestHash String?  @map("idempotency_request_hash") @db.VarChar(64)
   customerId      String?         @map("customer_id") @db.Uuid
   marketingSessionId String?      @map("marketing_session_id") @db.Uuid
+  salesChannel    String          @default("WEBSITE") @map("sales_channel") @db.VarChar(40)
+  salesChannelBuyerRef String?    @map("sales_channel_buyer_ref") @db.VarChar(160)
+  buyerTypeAtCheckout String?     @map("buyer_type_at_checkout") @db.VarChar(20)
   status          OrderStatus     @default(PENDING_CONFIRMATION)
   customerName    String          @map("customer_name") @db.VarChar(160)
   customerEmail   String?         @map("customer_email") @db.VarChar(320)
@@ -709,6 +712,7 @@ model Order {
   @@index([status, placedAt(sort: Desc)])
   @@index([customerId, placedAt(sort: Desc)])
   @@index([marketingSessionId, placedAt(sort: Desc)])
+  @@index([salesChannel, placedAt(sort: Desc)])
   @@index([customerId, customerEmail])
   @@index([placedAt(sort: Desc)])
   @@index([placedAt(sort: Desc), status])

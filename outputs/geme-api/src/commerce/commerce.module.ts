@@ -9,7 +9,8 @@ import { NewArrivalsController } from "./new-arrivals.controller.js";
 import { NewArrivalsService } from "./new-arrivals.service.js";
 import { SePayBankAccountService } from "../sepay/sepay-bank-account.service.js";
 import { LoyaltyService } from "../loyalty/loyalty.service.js";
+import { OptionalAegisCustomerGuard } from "../auth/aegis-customer.guard.js";
 
-@Module({ imports: [Pos365Module, MediaModule], controllers: [CommerceController, NewArrivalsController, OperationsController], providers: [CommerceService, NewArrivalsService, OperationsService, SePayBankAccountService, LoyaltyService], exports: [CommerceService, NewArrivalsService, SePayBankAccountService, LoyaltyService] })
+@Module({ imports: [Pos365Module, MediaModule], controllers: [CommerceController, NewArrivalsController, OperationsController], providers: [CommerceService, NewArrivalsService, OperationsService, SePayBankAccountService, LoyaltyService, OptionalAegisCustomerGuard], exports: [CommerceService, NewArrivalsService, SePayBankAccountService, LoyaltyService] })
 export class CommerceModule {}
 

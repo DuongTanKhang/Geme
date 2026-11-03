@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { randomUUID } from "node:crypto";
 import { BadRequestException, ForbiddenException } from "@nestjs/common";
+import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../prisma/prisma.service.js";
 import { AdminPermissionService } from "../admin-auth/admin-permissions.js";
 import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
@@ -82,6 +83,13 @@ async function createOrder(options: {
   status?: "PENDING_PAYMENT" | "PENDING_CONFIRMATION" | "PROCESSING" | "SHIPPING" | "DELIVERED" | "CANCELLED";
   total?: number;
   placedAt?: Date;
+  salesChannel?: string;
+  salesChannelBuyerRef?: string;
+  buyerTypeAtCheckout?: "MEMBER" | "GUEST" | "UNKNOWN";
+  customerId?: string;
+  customerName?: string;
+  customerEmail?: string;
+  customerPhone?: string | null;
   payment?: { method: "COD" | "BANK_TRANSFER"; amount: number; status: "PENDING" | "PAID" | "PARTIALLY_REFUNDED"; paidAt?: Date }[];
   items?: { quantity: number; unitPrice: number; lineTotal: number; productId?: string; productSku?: string; variantId?: string }[];
   carrierShipmentStatus?: string;
@@ -90,7 +98,13 @@ async function createOrder(options: {
   const now = new Date();
   const order = await prisma!.order.create({ data: {
     id, code: `CI-${id.replaceAll("-", "").slice(0, 30)}`,
-    customerName: "Integration Customer", customerPhone: `09${String(Date.now()).slice(-8)}`,
+    customerId: options.customerId,
+    salesChannel: options.salesChannel || "WEBSITE",
+    salesChannelBuyerRef: options.salesChannelBuyerRef,
+    buyerTypeAtCheckout: options.buyerTypeAtCheckout,
+    customerName: options.customerName || "Integration Customer",
+    customerEmail: options.customerEmail,
+    customerPhone: options.customerPhone === undefined ? `09${String(Date.now()).slice(-8)}` : options.customerPhone,
     shippingAddress: "PostgreSQL integration fixture", subtotal: options.total ?? 10_000,
     totalAmount: options.total ?? 10_000, status: options.status || "DELIVERED",
     carrierShipmentStatus: options.carrierShipmentStatus,
@@ -548,6 +562,79 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     assert.equal(report.returnedGoodsValue - before.returnedGoodsValue, 2_000);
     assert.equal(report.codUnreconciled - before.codUnreconciled, 5_000);
     assert.equal(report.orderCount - before.orderCount, 4);
+  });
+
+  await t.test("customer detail report classifies real paid buyers by channel, account and phone identity", { skip: !shouldRunIntegrationCase("customer-detail-report") }, async () => {
+    const reportAt = new Date(Date.UTC(2250, 6, 15, 12));
+    const day = reportAt.toISOString().slice(0, 10);
+    const beforePeriod = new Date(Date.UTC(2250, 6, 1, 12));
+    const reporting = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any);
+
+    // Registered member who previously bought in person. Different phone formats must resolve to one buyer.
+    const memberId = randomUUID();
+    const memberPhone = `09${String(Date.now()).slice(-8)}`;
+    customerPhones.push(memberPhone);
+    const member = await prisma!.customer.create({ data: {
+      id: memberId, authSubjectId: randomUUID(), name: "CI member", email: `${memberId}@example.invalid`, phone: memberPhone,
+    } });
+    await createOrder({ salesChannel: "DIRECT", customerId: member.id, customerName: member.name, customerPhone: memberPhone, total: 2_000,
+      placedAt: beforePeriod, payment: [{ method: "COD", amount: 2_000, status: "PAID", paidAt: beforePeriod }] });
+    await createOrder({ salesChannel: "DIRECT", customerName: member.name, customerPhone: `+84${memberPhone.slice(1)}`, total: 3_000,
+      placedAt: reportAt, payment: [{ method: "COD", amount: 3_000, status: "PAID", paidAt: reportAt }] });
+
+    // Guest website buyer is identified by email, while a new member is linked to a registered account.
+    const guestEmail = `guest-${randomUUID()}@example.invalid`;
+    await createOrder({ salesChannel: "WEBSITE", buyerTypeAtCheckout: "GUEST", customerName: "CI guest", customerEmail: guestEmail,
+      total: 4_000, placedAt: reportAt, payment: [{ method: "BANK_TRANSFER", amount: 4_000, status: "PAID", paidAt: reportAt }] });
+    const webMemberId = randomUUID();
+    const webMemberPhone = `08${String(Date.now() + 1).slice(-8)}`;
+    customerPhones.push(webMemberPhone);
+    const webMember = await prisma!.customer.create({ data: {
+      id: webMemberId, authSubjectId: randomUUID(), name: "CI web member", email: `${webMemberId}@example.invalid`, phone: webMemberPhone,
+    } });
+    await createOrder({ salesChannel: "WEBSITE", buyerTypeAtCheckout: "MEMBER", customerId: webMember.id, customerName: webMember.name,
+      customerPhone: webMemberPhone, total: 5_000, placedAt: reportAt,
+      payment: [{ method: "BANK_TRANSFER", amount: 5_000, status: "PAID", paidAt: reportAt }] });
+
+    // Other platforms group by their platform buyer reference. A paid order with no usable identifier remains anonymous.
+    await createOrder({ salesChannel: "SHOPEE", salesChannelBuyerRef: `buyer-${randomUUID()}`, buyerTypeAtCheckout: "GUEST",
+      customerName: "CI marketplace", total: 6_000, placedAt: reportAt,
+      payment: [{ method: "BANK_TRANSFER", amount: 6_000, status: "PAID", paidAt: reportAt }] });
+    await createOrder({ salesChannel: "WEBSITE", buyerTypeAtCheckout: "UNKNOWN", customerName: "CI anonymous", customerPhone: "", total: 7_000,
+      placedAt: reportAt, payment: [{ method: "BANK_TRANSFER", amount: 7_000, status: "PAID", paidAt: reportAt }] });
+    await createOrder({ salesChannel: "WEBSITE", buyerTypeAtCheckout: "GUEST", customerName: "CI unpaid", customerEmail: `unpaid-${randomUUID()}@example.invalid`,
+      total: 8_000, placedAt: reportAt, payment: [{ method: "BANK_TRANSFER", amount: 8_000, status: "PENDING" }] });
+
+    const result = await reporting.customerDetailReport({ from: day, to: day, page: "1", pageSize: "100" });
+    const findSegment = (channel: string, cohort: string, detailType: string) => result.segments.find((row: any) =>
+      row.channel === channel && row.cohort === cohort && row.detailType === detailType);
+    const directReturningMember = findSegment("DIRECT", "RETURNING", "MEMBER");
+    assert.deepEqual({ customers: directReturningMember.customers, orders: directReturningMember.orders, captured: directReturningMember.captured,
+      netSpend: directReturningMember.netSpend }, { customers: 1, orders: 1, captured: 3_000, netSpend: 3_000 });
+    assert.deepEqual({ customers: findSegment("WEBSITE", "NEW", "GUEST").customers, captured: findSegment("WEBSITE", "NEW", "GUEST").captured },
+      { customers: 1, captured: 4_000 });
+    assert.deepEqual({ customers: findSegment("WEBSITE", "NEW", "MEMBER").customers, captured: findSegment("WEBSITE", "NEW", "MEMBER").captured },
+      { customers: 1, captured: 5_000 });
+    assert.deepEqual({ customers: findSegment("SHOPEE", "NEW", "ALL").customers, captured: findSegment("SHOPEE", "NEW", "ALL").captured },
+      { customers: 1, captured: 6_000 });
+    assert.deepEqual(result.anonymous.find((row: any) => row.channel === "WEBSITE"),
+      { channel: "WEBSITE", orders: 1, captured: 7_000, refunded: 0, netSpend: 7_000 });
+    assert.equal(result.customerTotal, 4);
+    assert.equal(result.customers.some((row: any) => row.name === "CI unpaid"), false);
+    assert.equal(result.customers.some((row: any) => row.phone || row.email), false, "PII fields should be masked before leaving the service");
+
+    // Reconcile report totals with a direct, read-only aggregate over the exact fixture order ids.
+    const fixtureIds = orderIds.slice(-7);
+    const source = await prisma!.$queryRaw<Array<{ orders: number; captured: bigint }>>`
+      SELECT COUNT(DISTINCT o.id)::int AS orders, COALESCE(SUM(p.amount), 0)::bigint AS captured
+      FROM orders o JOIN payments p ON p.order_id = o.id
+      WHERE o.id IN (${Prisma.join(fixtureIds)}) AND p.paid_at >= ${result.from} AND p.paid_at <= ${result.to}
+        AND p.status::text IN ('PAID', 'PARTIALLY_REFUNDED', 'REFUNDED')
+    `;
+    const reportCaptured = result.segments.reduce((sum: number, row: any) => sum + row.captured, 0)
+      + result.anonymous.reduce((sum: number, row: any) => sum + row.captured, 0);
+    assert.equal(reportCaptured, Number(source[0].captured));
+    assert.equal(source[0].orders, 5, "unpaid order is excluded from the paid-capture source total");
   });
 
   await t.test("contact submission persists once, replays the same payload and conflicts on altered replay", { skip: !shouldRunIntegrationCase("contact") }, async () => {

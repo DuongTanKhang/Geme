@@ -24,6 +24,8 @@ export type OrderReceiptData = {
   customer: string;
   phone: string;
   email: string;
+  salesChannel?: string;
+  buyerTypeAtCheckout?: string | null;
   status: string;
   payment: string;
   paymentStatus: string;

@@ -13,6 +13,7 @@ import { getInventoryReservationExpiry, getQrPaymentWindow } from "./reservation
 import { assertBangleQualityImages, normalizeBangleQuality, synchronizeBangleVariantMedia } from "./bangle-variant-media.js";
 import { isNewLabelActive } from "./new-arrivals.rules.js";
 import { LoyaltyService } from "../loyalty/loyalty.service.js";
+import type { AegisCustomerIdentity } from "../auth/aegis-customer.guard.js";
 
 type Input = Record<string, any>;
 const inventoryReceiptDuplicateWindowMs = 5 * 60 * 1000;
@@ -237,6 +238,7 @@ const mapStorefrontProducts = (products: any[]) => {
 };
 const selectAdminOrder = {
   id: true, code: true, status: true, customerId: true, customerName: true, customerEmail: true, customerPhone: true,
+  salesChannel: true, salesChannelBuyerRef: true, buyerTypeAtCheckout: true,
   shippingAddress: true, shippingMethod: true, trackingCode: true, shippingProvider: true,
   shippingServiceCode: true, carrierShipmentStatus: true, carrierShipmentError: true,
   carrierFreightPayment: true, carrierCodAmount: true, carrierStatusCode: true,
@@ -2937,6 +2939,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (query.view === "admin-summary") return this.prisma.order.findMany({
       select: {
         id: true, code: true, customerName: true, customerPhone: true, customerEmail: true,
+        salesChannel: true, salesChannelBuyerRef: true, buyerTypeAtCheckout: true,
         shippingMethod: true, status: true, totalAmount: true, placedAt: true,
         customer: { select: { name: true, phone: true, email: true } },
         items: {
@@ -3516,10 +3519,81 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     }, { isolationLevel: "Serializable", maxWait: 10_000, timeout: 30_000 });
   }
 
-  async createOrder(input: Input, authenticatedCustomerId?: string, trustedStoreSale = false, idempotencyKeyInput?: string) {
+  private async ensureOrderCustomerForIdentity(tx: any, identity: AegisCustomerIdentity) {
+    const email = identity.email.trim().toLowerCase();
+    const linked = await tx.customer.findUnique({ where: { authSubjectId: identity.id } });
+    if (linked) return linked;
+    const byEmail = email ? await tx.customer.findUnique({ where: { email } }) : null;
+    if (byEmail) {
+      if (byEmail.authSubjectId && byEmail.authSubjectId !== identity.id) {
+        throw new ConflictException("Email tài khoản đã được liên kết với hồ sơ khách hàng khác.");
+      }
+      const updated = await tx.customer.updateMany({
+        where: { id: byEmail.id, authSubjectId: null },
+        data: { authSubjectId: identity.id, name: identity.name },
+      });
+      if (updated.count !== 1) {
+        const current = await tx.customer.findUnique({ where: { id: byEmail.id } });
+        if (current?.authSubjectId === identity.id) return current;
+        throw new ConflictException("Email tài khoản đã được liên kết với hồ sơ khách hàng khác.");
+      }
+      const customer = await tx.customer.findUniqueOrThrow({ where: { id: byEmail.id } });
+      await tx.adminNotification.create({ data: {
+        type: "CUSTOMER_REGISTERED", title: "Khách hàng mới đăng ký",
+        message: `${customer.name} (${customer.email || email}) vừa liên kết tài khoản GEME.`,
+        entityType: "CUSTOMER", entityId: customer.id,
+      } });
+      return customer;
+    }
+    const customer = await tx.customer.create({ data: {
+      authSubjectId: identity.id, name: identity.name, email: email || null, status: "ACTIVE",
+    } });
+    await tx.adminNotification.create({ data: {
+      type: "CUSTOMER_REGISTERED", title: "Khách hàng mới đăng ký",
+      message: `${customer.name} (${customer.email || "tài khoản GEME"}) vừa tạo hồ sơ.`,
+      entityType: "CUSTOMER", entityId: customer.id,
+    } });
+    return customer;
+  }
+
+  private async hasRegisteredCustomerContact(tx: any, phone: string | null, email: string | null) {
+    const digits = String(phone || "").replace(/\D/g, "");
+    const normalizedPhone = digits.startsWith("0084") && digits.length === 13
+      ? `0${digits.slice(4)}`
+      : digits.startsWith("84") && digits.length === 11
+        ? `0${digits.slice(2)}`
+        : digits || null;
+    const normalizedEmail = String(email || "").trim().toLowerCase() || null;
+    if (!normalizedPhone && !normalizedEmail) return false;
+    const rows = await tx.$queryRaw<Array<{ matched: boolean }>>`
+      SELECT EXISTS (
+        SELECT 1
+        FROM customers c
+        WHERE c.auth_subject_id IS NOT NULL
+          AND (
+            (${normalizedPhone}::text IS NOT NULL AND
+              CASE
+                WHEN REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', '', 'g') ~ '^0084[0-9]{9}$' THEN '0' || SUBSTRING(REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', '', 'g') FROM 5)
+                WHEN REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', '', 'g') ~ '^84[0-9]{9}$' THEN '0' || SUBSTRING(REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', '', 'g') FROM 3)
+                ELSE REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', '', 'g')
+              END = ${normalizedPhone})
+            OR (${normalizedEmail}::text IS NOT NULL AND LOWER(BTRIM(COALESCE(c.email, ''))) = ${normalizedEmail})
+          )
+      ) AS matched
+    `;
+    return rows[0]?.matched === true;
+  }
+
+  async createOrder(input: Input, authenticatedCustomerId?: string, trustedStoreSale = false, idempotencyKeyInput?: string, authenticatedIdentity?: AegisCustomerIdentity) {
     const items = Array.isArray(input.items) ? input.items : [];
     if (!items.length) throw new BadRequestException("Đơn hàng cần ít nhất một sản phẩm.");
-    const storeSale = trustedStoreSale && (input.salesChannel === "STORE" || input.channel === "STORE");
+    const requestedChannel = String(input.salesChannel || input.channel || "").trim().toUpperCase();
+    const salesChannel = !trustedStoreSale
+      ? "WEBSITE"
+      : requestedChannel === "STORE" || requestedChannel === "DIRECT" || !requestedChannel
+        ? "DIRECT"
+        : /^[A-Z0-9_-]{2,40}$/.test(requestedChannel) ? requestedChannel : "DIRECT";
+    const storeSale = salesChannel === "DIRECT";
     const method = enumValue(input.paymentMethod, ["COD", "BANK_TRANSFER", "MOMO", "CREDIT_CARD", "OTHER"], "COD");
     const qrPayment = !storeSale && input.qrPayment === true && method === "BANK_TRANSFER";
     const paid = storeSale && (input.paid === true || method === "COD");
@@ -3532,7 +3606,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     if (!idempotencyKey) throw new BadRequestException("Thiếu mã chống tạo đơn trùng. Hãy tải lại màn hình rồi thử lại.");
     if (idempotencyKey && !/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) throw new BadRequestException("Mã chống tạo đơn trùng không hợp lệ.");
     const idempotencyRequestHash = idempotencyKey ? createHash("sha256").update(JSON.stringify({
-      customerId,
+      customerId: authenticatedIdentity?.id || customerId,
       customerName: input.customerName,
       phone: input.phone,
       email: input.email,
@@ -3540,7 +3614,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       note: input.note,
       paymentMethod: method,
       qrPayment,
-      salesChannel: input.salesChannel || input.channel || null,
+      salesChannel,
       paid: input.paid === true,
       loyaltyPointsToRedeem: input.loyaltyPointsToRedeem ?? 0,
       discountAmount: input.discountAmount ?? null,
@@ -3567,7 +3641,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     order = await this.prisma.$transaction(async (tx) => {
       const existing = verifyIdempotentOrder(await findIdempotentOrder(tx));
       if (existing) return existing;
-      const customer = customerId ? await tx.customer.findUnique({ where: { id: customerId } }) : null;
+      const customer = customerId
+        ? await tx.customer.findUnique({ where: { id: customerId } })
+        : authenticatedIdentity
+          ? await this.ensureOrderCustomerForIdentity(tx, authenticatedIdentity)
+          : null;
       if (customerId && !customer) throw new BadRequestException("Không tìm thấy hồ sơ khách hàng đã chọn.");
       const marketingSession = !storeSale && typeof input.marketingSessionId === "string"
         ? await tx.marketingSession.findUnique({ where: { id: input.marketingSessionId }, select: { id: true } })
@@ -3677,6 +3755,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       if (!customerName && !storeSale) throw new BadRequestException("Nhập tên khách hàng hoặc chọn hồ sơ khách hàng.");
       const customerPhone = String(input.phone || "").trim() || customer?.phone || null;
       const customerEmail = (input.email ? String(input.email).trim().toLowerCase() : "") || customer?.email || null;
+      const hasRegisteredAccount = Boolean(customer?.authSubjectId)
+        || await this.hasRegisteredCustomerContact(tx, customerPhone, customerEmail);
+      const buyerTypeAtCheckout = authenticatedIdentity || hasRegisteredAccount
+        ? "MEMBER"
+        : customerPhone || customerEmail || input.salesChannelBuyerRef ? "GUEST" : "UNKNOWN";
       const orderCustomer = paid ? await ensureCustomerForPaidOrder(tx, {
         customerId: customer?.id || null,
         customerName,
@@ -3703,6 +3786,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         code,
         ...(idempotencyKey ? { idempotencyKey, idempotencyRequestHash } : {}),
         customerName, customerEmail, customerPhone,
+        salesChannel,
+        ...(trustedStoreSale && typeof input.salesChannelBuyerRef === "string" && input.salesChannelBuyerRef.trim()
+          ? { salesChannelBuyerRef: input.salesChannelBuyerRef.trim().slice(0, 160) }
+          : {}),
+        buyerTypeAtCheckout,
         ...(marketingSession ? { marketingSession: { connect: { id: marketingSession.id } } } : {}),
         shippingAddress: String(input.shippingAddress || input.address || "").trim(),
         shippingMethod: storeSale ? "Bán trực tiếp tại cửa hàng" : input.shippingMethod || null,
@@ -4325,7 +4413,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const [orderStats, customerCount, newCustomers, productCount, productsSold, cashStats, refundStats, returnedGoodsStats, codUnreconciledStats, codRemittanceStats, timeline, categories, products, payments, salesChannels, promotionPerformance, topOrders, buyerGroups, orderStatusGroups, lifetimeValue] = await Promise.all([
       this.prisma.order.aggregate({ where: orderWhere, _sum: { totalAmount: true }, _count: { _all: true } }),
       this.prisma.customer.count({ where: { createdAt: { lte: to } } }),
-      this.prisma.customer.count({ where: { createdAt: { gte: from, lte: to } } }),
+      this.prisma.customer.count({ where: { authSubjectId: { not: null }, createdAt: { gte: from, lte: to } } }),
       this.prisma.product.count({ where: { status: { not: "ARCHIVED" } } }),
       this.prisma.$queryRaw<Array<{ count: number }>>`
         SELECT COALESCE(SUM(i.quantity), 0)::int AS count
@@ -4459,18 +4547,18 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       `,
       this.prisma.$queryRaw<Array<{ channel: string; revenue: number; orders: number }>>`
         WITH captured AS (
-          SELECT CASE WHEN o.shipping_method = 'Bán trực tiếp tại cửa hàng' THEN 'Cửa hàng' ELSE 'Website' END AS channel,
+          SELECT o.sales_channel AS channel,
                  SUM(p.amount) AS amount
           FROM payments p JOIN orders o ON o.id = p.order_id
           WHERE p.paid_at >= ${from} AND p.paid_at <= ${to} AND p.status::text IN ('PAID','PARTIALLY_REFUNDED','REFUNDED')
           GROUP BY 1
         ), refunded AS (
-          SELECT CASE WHEN o.shipping_method = 'Bán trực tiếp tại cửa hàng' THEN 'Cửa hàng' ELSE 'Website' END AS channel,
+          SELECT o.sales_channel AS channel,
                  SUM(r.amount) AS amount
           FROM payment_refunds r JOIN payments p ON p.id = r.payment_id JOIN orders o ON o.id = p.order_id
           WHERE r.created_at >= ${from} AND r.created_at <= ${to} GROUP BY 1
         ), counts AS (
-          SELECT CASE WHEN o.shipping_method = 'Bán trực tiếp tại cửa hàng' THEN 'Cửa hàng' ELSE 'Website' END AS channel,
+          SELECT o.sales_channel AS channel,
                  COUNT(*)::int AS orders
           FROM orders o WHERE o.placed_at >= ${from} AND o.placed_at <= ${to} AND o.status::text <> 'CANCELLED'
           GROUP BY 1
@@ -4566,6 +4654,238 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       promotionPerformance: toAdminMoney(promotionPerformance as any[], ["discount"]),
       topOrders: toAdminMoney(topOrders as any[], ["total"]),
     };
+  }
+
+  async customerDetailReport(query: Record<string, string>) {
+    const from = parseReportDate(query.from, new Date(Date.now() - 30 * 86400000), "start");
+    const to = parseReportDate(query.to, new Date(), "end");
+    const page = Math.max(1, Math.min(100_000, Math.floor(Number(query.page) || 1)));
+    const pageSize = Math.max(10, Math.min(100, Math.floor(Number(query.pageSize) || 25)));
+    const search = String(query.search || "").trim().slice(0, 100).replace(/[\\%_]/g, "\\$&");
+    const offset = (page - 1) * pageSize;
+    const [result] = await this.prisma.$queryRaw<Array<{ segments: unknown; anonymous: unknown; customers: unknown; customerTotal: number }>>`
+      WITH registered_phone_keys AS (
+        SELECT DISTINCT CASE
+                 WHEN REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', '', 'g') ~ '^0084[0-9]{9}$' THEN '0' || SUBSTRING(REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', '', 'g') FROM 5)
+                 WHEN REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', '', 'g') ~ '^84[0-9]{9}$' THEN '0' || SUBSTRING(REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', '', 'g') FROM 3)
+                 ELSE NULLIF(REGEXP_REPLACE(COALESCE(c.phone, ''), '[^0-9]', '', 'g'), '')
+               END AS phone_key
+        FROM customers c
+        WHERE c.auth_subject_id IS NOT NULL
+      ), registered_email_keys AS (
+        SELECT DISTINCT NULLIF(LOWER(BTRIM(COALESCE(c.email, ''))), '') AS email_key
+        FROM customers c
+        WHERE c.auth_subject_id IS NOT NULL AND NULLIF(LOWER(BTRIM(COALESCE(c.email, ''))), '') IS NOT NULL
+      ), normalized_orders AS (
+        SELECT o.id, o.code, o.customer_id, o.customer_name, o.customer_email, o.customer_phone,
+               o.sales_channel_buyer_ref, o.buyer_type_at_checkout,
+               CASE WHEN o.sales_channel IN ('STORE', 'DIRECT') THEN 'DIRECT'
+                    WHEN o.sales_channel IN ('ONLINE', 'WEB') THEN 'WEBSITE'
+                    ELSE COALESCE(NULLIF(UPPER(BTRIM(o.sales_channel)), ''), 'WEBSITE') END AS sales_channel,
+               COALESCE(NULLIF(o.customer_phone, ''), c.phone, '') AS contact_phone,
+               COALESCE(NULLIF(LOWER(BTRIM(o.customer_email)), ''), NULLIF(LOWER(BTRIM(c.email)), '')) AS contact_email,
+               CASE
+                 WHEN REGEXP_REPLACE(COALESCE(NULLIF(o.customer_phone, ''), c.phone, ''), '[^0-9]', '', 'g') ~ '^0084[0-9]{9}$' THEN '0' || SUBSTRING(REGEXP_REPLACE(COALESCE(NULLIF(o.customer_phone, ''), c.phone, ''), '[^0-9]', '', 'g') FROM 5)
+                 WHEN REGEXP_REPLACE(COALESCE(NULLIF(o.customer_phone, ''), c.phone, ''), '[^0-9]', '', 'g') ~ '^84[0-9]{9}$' THEN '0' || SUBSTRING(REGEXP_REPLACE(COALESCE(NULLIF(o.customer_phone, ''), c.phone, ''), '[^0-9]', '', 'g') FROM 3)
+                 ELSE NULLIF(REGEXP_REPLACE(COALESCE(NULLIF(o.customer_phone, ''), c.phone, ''), '[^0-9]', '', 'g'), '')
+               END AS phone_key,
+               NULLIF(LOWER(BTRIM(COALESCE(NULLIF(o.customer_email, ''), c.email, ''))), '') AS email_key,
+               (c.auth_subject_id IS NOT NULL OR phone_account.phone_key IS NOT NULL OR email_account.email_key IS NOT NULL) AS has_web_account,
+               CASE
+                 WHEN o.buyer_type_at_checkout IN ('MEMBER', 'GUEST', 'UNKNOWN') THEN o.buyer_type_at_checkout
+                 WHEN c.auth_subject_id IS NOT NULL OR phone_account.phone_key IS NOT NULL OR email_account.email_key IS NOT NULL THEN 'MEMBER'
+                 WHEN NULLIF(COALESCE(NULLIF(o.customer_phone, ''), c.phone, ''), '') IS NOT NULL
+                   OR NULLIF(LOWER(BTRIM(COALESCE(NULLIF(o.customer_email, ''), c.email, ''))), '') IS NOT NULL
+                   OR NULLIF(o.sales_channel_buyer_ref, '') IS NOT NULL THEN 'GUEST'
+                 ELSE 'UNKNOWN'
+               END AS buyer_type,
+               (o.buyer_type_at_checkout IS NULL) AS inferred_buyer_type
+        FROM orders o
+        LEFT JOIN customers c ON c.id = o.customer_id
+        LEFT JOIN LATERAL (
+          SELECT REGEXP_REPLACE(COALESCE(NULLIF(o.customer_phone, ''), c.phone, ''), '[^0-9]', '', 'g') AS digits
+        ) phone ON TRUE
+        LEFT JOIN registered_phone_keys phone_account ON phone_account.phone_key = CASE
+          WHEN phone.digits ~ '^0084[0-9]{9}$' THEN '0' || SUBSTRING(phone.digits FROM 5)
+          WHEN phone.digits ~ '^84[0-9]{9}$' THEN '0' || SUBSTRING(phone.digits FROM 3)
+          ELSE NULLIF(phone.digits, '')
+        END
+        LEFT JOIN registered_email_keys email_account ON email_account.email_key = NULLIF(LOWER(BTRIM(COALESCE(NULLIF(o.customer_email, ''), c.email, ''))), '')
+      ), payment_by_order AS (
+        SELECT p.order_id,
+               MIN(p.paid_at) AS first_paid_at,
+               COALESCE(SUM(p.amount) FILTER (WHERE p.paid_at >= ${from} AND p.paid_at <= ${to}), 0)::numeric AS captured_period,
+               COALESCE(SUM(p.amount), 0)::numeric AS captured_lifetime
+        FROM payments p
+        WHERE p.paid_at IS NOT NULL AND p.paid_at <= ${to}
+          AND p.status::text IN ('PAID', 'PARTIALLY_REFUNDED', 'REFUNDED')
+        GROUP BY p.order_id
+      ), refund_by_order AS (
+        SELECT p.order_id,
+               COALESCE(SUM(r.amount) FILTER (WHERE r.created_at >= ${from} AND r.created_at <= ${to}), 0)::numeric AS refunded_period,
+               COALESCE(SUM(r.amount), 0)::numeric AS refunded_lifetime
+        FROM payment_refunds r
+        JOIN payments p ON p.id = r.payment_id
+        WHERE r.created_at <= ${to} AND p.status::text IN ('PAID', 'PARTIALLY_REFUNDED', 'REFUNDED')
+        GROUP BY p.order_id
+      ), paid_orders AS (
+        SELECT n.id AS order_id, n.sales_channel, n.customer_name, n.contact_phone, n.contact_email,
+               n.phone_key, n.email_key, n.customer_id, n.sales_channel_buyer_ref,
+               n.has_web_account, n.buyer_type, n.inferred_buyer_type,
+               p.first_paid_at, p.captured_period, p.captured_lifetime,
+               COALESCE(r.refunded_period, 0)::numeric AS refunded_period,
+               COALESCE(r.refunded_lifetime, 0)::numeric AS refunded_lifetime,
+               COALESCE(n.phone_key, n.email_key,
+                 CASE WHEN n.customer_id IS NOT NULL THEN 'CUSTOMER:' || n.customer_id::text END,
+                 CASE WHEN n.sales_channel_buyer_ref IS NOT NULL AND BTRIM(n.sales_channel_buyer_ref) <> ''
+                   THEN 'PLATFORM:' || n.sales_channel || ':' || BTRIM(n.sales_channel_buyer_ref) END) AS buyer_key
+        FROM normalized_orders n
+        JOIN payment_by_order p ON p.order_id = n.id
+        LEFT JOIN refund_by_order r ON r.order_id = n.id
+      ), buyer_first_purchase AS (
+        SELECT buyer_key, MIN(first_paid_at) AS first_purchase_at
+        FROM paid_orders WHERE buyer_key IS NOT NULL GROUP BY buyer_key
+      ), buyer_channel_first AS (
+        SELECT buyer_key, sales_channel,
+               (ARRAY_AGG(buyer_type ORDER BY first_paid_at))[1] AS first_channel_buyer_type,
+               BOOL_OR(has_web_account) AS has_web_account,
+               BOOL_OR(inferred_buyer_type) AS inferred_buyer_type
+        FROM paid_orders WHERE buyer_key IS NOT NULL
+        GROUP BY buyer_key, sales_channel
+      ), buyer_channel_activity AS (
+        SELECT buyer_key, sales_channel,
+               COUNT(*) FILTER (WHERE captured_period > 0)::int AS order_count,
+               COALESCE(SUM(captured_period), 0)::double precision AS captured,
+               COALESCE(SUM(refunded_period), 0)::double precision AS refunded,
+               COALESCE(SUM(captured_period - refunded_period), 0)::double precision AS net_spend
+        FROM paid_orders WHERE buyer_key IS NOT NULL
+        GROUP BY buyer_key, sales_channel
+        HAVING SUM(captured_period) > 0 OR SUM(refunded_period) > 0
+      ), buyer_channel AS (
+        SELECT a.*, f.first_channel_buyer_type, f.has_web_account, f.inferred_buyer_type,
+               b.first_purchase_at,
+               CASE WHEN b.first_purchase_at >= ${from} THEN 'NEW' ELSE 'RETURNING' END AS cohort,
+               CASE
+                 WHEN a.sales_channel = 'WEBSITE' AND b.first_purchase_at >= ${from} THEN COALESCE(f.first_channel_buyer_type, 'UNKNOWN')
+                 WHEN a.sales_channel = 'DIRECT' AND b.first_purchase_at < ${from} THEN CASE WHEN f.has_web_account THEN 'MEMBER' ELSE 'GUEST' END
+                 ELSE 'ALL'
+               END AS detail_type
+        FROM buyer_channel_activity a
+        JOIN buyer_channel_first f USING (buyer_key, sales_channel)
+        JOIN buyer_first_purchase b USING (buyer_key)
+      ), segment_rows AS (
+        SELECT sales_channel AS channel, cohort, detail_type AS "detailType",
+               COUNT(*)::int AS customers,
+               SUM(order_count)::int AS orders,
+               SUM(captured)::double precision AS captured,
+               SUM(refunded)::double precision AS refunded,
+               SUM(net_spend)::double precision AS net_spend,
+               COUNT(*) FILTER (WHERE inferred_buyer_type)::int AS inferred_customers
+        FROM buyer_channel
+        GROUP BY sales_channel, cohort, detail_type
+      ), anonymous_rows AS (
+        SELECT sales_channel AS channel,
+               COUNT(*) FILTER (WHERE captured_period > 0)::int AS orders,
+               COALESCE(SUM(captured_period), 0)::double precision AS captured,
+               COALESCE(SUM(refunded_period), 0)::double precision AS refunded,
+               COALESCE(SUM(captured_period - refunded_period), 0)::double precision AS net_spend
+        FROM paid_orders WHERE buyer_key IS NULL
+        GROUP BY sales_channel
+        HAVING SUM(captured_period) > 0 OR SUM(refunded_period) > 0
+      ), customer_lifetime AS (
+        SELECT buyer_key, COALESCE(SUM(captured_lifetime - refunded_lifetime), 0)::double precision AS lifetime_spend
+        FROM paid_orders WHERE buyer_key IS NOT NULL GROUP BY buyer_key
+      ), buyer_identity AS (
+        SELECT buyer_key,
+               (ARRAY_AGG(NULLIF(BTRIM(customer_name), '') ORDER BY first_paid_at))[1] AS name,
+               (ARRAY_AGG(NULLIF(BTRIM(contact_phone), '') ORDER BY first_paid_at))[1] AS phone,
+               (ARRAY_AGG(NULLIF(BTRIM(contact_email), '') ORDER BY first_paid_at))[1] AS email
+        FROM paid_orders WHERE buyer_key IS NOT NULL GROUP BY buyer_key
+      ), customer_totals AS (
+        SELECT b.buyer_key, i.name, i.phone, i.email,
+               STRING_AGG(DISTINCT b.sales_channel, ', ' ORDER BY b.sales_channel) AS channels,
+               BOOL_OR(b.has_web_account) AS has_web_account,
+               MIN(b.first_purchase_at) AS first_purchase_at,
+               CASE WHEN MIN(b.first_purchase_at) >= ${from} THEN 'NEW' ELSE 'RETURNING' END AS cohort,
+               SUM(b.order_count)::int AS orders,
+               SUM(b.captured)::double precision AS captured,
+               SUM(b.refunded)::double precision AS refunded,
+               SUM(b.net_spend)::double precision AS net_spend,
+               MAX(l.lifetime_spend)::double precision AS lifetime_spend
+        FROM buyer_channel b
+        JOIN buyer_identity i USING (buyer_key)
+        JOIN customer_lifetime l USING (buyer_key)
+        GROUP BY b.buyer_key, i.name, i.phone, i.email
+      ), filtered_customers AS (
+        SELECT * FROM customer_totals
+        WHERE ${search} = '' OR name ILIKE '%' || ${search} || '%' OR phone ILIKE '%' || ${search} || '%'
+          OR email ILIKE '%' || ${search} || '%' OR channels ILIKE '%' || ${search} || '%'
+      ), customer_page AS (
+        SELECT * FROM filtered_customers
+        ORDER BY net_spend DESC, name ASC NULLS LAST
+        LIMIT ${pageSize} OFFSET ${offset}
+      )
+      SELECT
+        COALESCE((SELECT JSONB_AGG(JSONB_BUILD_OBJECT(
+          'channel', channel, 'cohort', cohort, 'detailType', "detailType",
+          'customers', customers, 'orders', orders, 'captured', captured, 'refunded', refunded,
+          'netSpend', net_spend, 'inferredCustomers', inferred_customers
+        ) ORDER BY channel, cohort, "detailType") FROM segment_rows), '[]'::jsonb) AS segments,
+        COALESCE((SELECT JSONB_AGG(JSONB_BUILD_OBJECT(
+          'channel', channel, 'orders', orders, 'captured', captured, 'refunded', refunded, 'netSpend', net_spend
+        ) ORDER BY channel) FROM anonymous_rows), '[]'::jsonb) AS anonymous,
+        COALESCE((SELECT JSONB_AGG(JSONB_BUILD_OBJECT(
+          'name', name, 'phone', phone, 'email', email, 'channels', channels,
+          'hasWebAccount', has_web_account, 'firstPurchaseAt', first_purchase_at, 'cohort', cohort,
+          'orders', orders, 'captured', captured, 'refunded', refunded, 'netSpend', net_spend,
+          'lifetimeSpend', lifetime_spend
+        ) ORDER BY net_spend DESC, name ASC NULLS LAST) FROM customer_page), '[]'::jsonb) AS customers,
+        (SELECT COUNT(*)::int FROM filtered_customers) AS "customerTotal"
+    `;
+    const asArray = (value: unknown): Array<Record<string, any>> => {
+      if (Array.isArray(value)) return value as Array<Record<string, any>>;
+      if (typeof value === "string") {
+        try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+      }
+      return [];
+    };
+    const customers = asArray(result?.customers).map((row) => {
+      const phone = typeof row.phone === "string" ? row.phone : "";
+      const email = typeof row.email === "string" ? row.email : "";
+      const digits = phone.replace(/\D/g, "");
+      const maskedPhone = digits.length >= 6 ? `${digits.slice(0, 3)}••••${digits.slice(-2)}` : phone;
+      const at = email.lastIndexOf("@");
+      const maskedEmail = at > 1 ? `${email[0]}•••${email.slice(at)}` : email;
+      return {
+        ...row,
+        contact: maskedPhone || maskedEmail || "Không có thông tin liên hệ",
+        phone: undefined,
+        email: undefined,
+        orders: Number(row.orders) || 0,
+        captured: Number(row.captured) || 0,
+        refunded: Number(row.refunded) || 0,
+        netSpend: Number(row.netSpend) || 0,
+        lifetimeSpend: Number(row.lifetimeSpend) || 0,
+      };
+    });
+    const segments = asArray(result?.segments).map((row) => ({
+      ...row,
+      customers: Number(row.customers) || 0,
+      orders: Number(row.orders) || 0,
+      captured: Number(row.captured) || 0,
+      refunded: Number(row.refunded) || 0,
+      netSpend: Number(row.netSpend) || 0,
+      inferredCustomers: Number(row.inferredCustomers) || 0,
+      averageSpend: Number(row.customers) ? Math.round(Number(row.netSpend) / Number(row.customers)) : 0,
+    }));
+    const anonymous = asArray(result?.anonymous).map((row) => ({
+      ...row,
+      orders: Number(row.orders) || 0,
+      captured: Number(row.captured) || 0,
+      refunded: Number(row.refunded) || 0,
+      netSpend: Number(row.netSpend) || 0,
+    }));
+    return { from, to, page, pageSize, customerTotal: Number(result?.customerTotal) || 0, segments, anonymous, customers };
   }
 }
 

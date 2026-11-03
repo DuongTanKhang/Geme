@@ -41,6 +41,7 @@
 .orders-full-table tbody tr.row-selected{background:#f5f9f6}
 .orders-full-table td:first-child{text-align:center}
 .order-id-button{padding:0;border:0;color:#33433c;background:transparent;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
+.order-channel-tag{display:block;width:max-content;max-width:100%;margin-top:3px;padding:2px 6px;border-radius:999px;color:#47715b;background:#edf6f0;font-size:11px;line-height:1.2;white-space:nowrap}
 .order-customer{display:block;color:#4c5a53;font-size:13px}
 .order-secondary{display:block;margin-top:3px;color:#99a39d;font-size:12px;font-weight:400;line-height:1.25}
 .order-product{display:flex;align-items:center;gap:6px;min-width:125px;color:#56645d;font-size:12px;white-space:normal}
@@ -1427,8 +1428,8 @@
 .ecommerce-status-list,.ecommerce-ranking{display:grid;gap:12px;padding:16px 18px}
 .ecommerce-status-list>div,.ecommerce-ranking>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px 12px;align-items:center}
 .ecommerce-status-list>div>div{display:flex;justify-content:space-between;gap:10px;font-size:13px}
-.ecommerce-status-list i,.ecommerce-ranking i,.ecommerce-channel-cards i,.ecommerce-comparison i{display:block;grid-column:1/-1;height:7px;overflow:hidden;border-radius:99px;background:#edf1ee}
-.ecommerce-status-list i b,.ecommerce-ranking i b,.ecommerce-channel-cards i b,.ecommerce-comparison i b{display:block;height:100%;border-radius:inherit;background:#4f8066}
+.ecommerce-status-list i,.ecommerce-ranking i,.ecommerce-comparison i{display:block;grid-column:1/-1;height:7px;overflow:hidden;border-radius:99px;background:#edf1ee}
+.ecommerce-status-list i b,.ecommerce-ranking i b,.ecommerce-comparison i b{display:block;height:100%;border-radius:inherit;background:#4f8066}
 .ecommerce-ranking>div>span{display:grid;gap:3px;min-width:0;font-size:13px}
 .ecommerce-ranking>div>span small{color:#89958e;font-size:11px}
 .ecommerce-ranking>div>strong{font-size:13px;white-space:nowrap}
@@ -1451,12 +1452,20 @@
 .ecommerce-product-table-wrap td:nth-child(2){display:grid;gap:3px}
 .ecommerce-product-table-wrap td small{color:#89958e;font-size:11px}
 .ecommerce-channel-table-wrap>small{display:block;padding-top:9px;color:#89958e;font-size:11px;line-height:1.5;white-space:normal}
-.ecommerce-channel-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:16px}
-.ecommerce-channel-cards article{display:grid;gap:7px;padding:13px;border:1px solid #e7ece8;border-radius:9px}
-.ecommerce-channel-cards span{color:#748179;font-size:13px}
-.ecommerce-channel-cards strong{font-size:19px}
-.ecommerce-channel-cards small{color:#89958e;font-size:12px}
-.ecommerce-channel-cards i{height:6px}
+.sales-channel-pie-layout{display:grid;grid-template-columns:minmax(220px,.85fr) minmax(0,1.15fr);align-items:center;gap:16px;padding:16px}
+.sales-channel-pie-chart{display:grid;place-items:center;min-width:0}
+.sales-channel-pie-chart svg{display:block;width:min(100%,280px);height:auto;overflow:visible}
+.sales-channel-pie-track{fill:none;stroke:#edf1ee;stroke-width:28}
+.sales-channel-pie-total-label{fill:#78867e;font-family:var(--sans);font-size:12px}
+.sales-channel-pie-total-value{fill:#20362c;font-family:var(--sans);font-size:13px;font-weight:700}
+.sales-channel-pie-legend{display:grid;align-content:center;gap:0;min-width:0}
+.sales-channel-pie-legend-row{display:grid;grid-template-columns:12px minmax(0,1fr) auto;align-items:center;gap:10px;padding:11px 4px;border-bottom:1px solid #edf0ee}
+.sales-channel-pie-swatch{width:11px;height:11px;border-radius:3px}
+.sales-channel-pie-legend-row>div{display:grid;gap:3px;min-width:0}
+.sales-channel-pie-legend-row strong{overflow:hidden;color:#33463b;font-size:13px;text-overflow:ellipsis;white-space:nowrap}
+.sales-channel-pie-legend-row small{color:#89958e;font-size:11px}
+.sales-channel-pie-legend-row>b{color:#263a30;font-size:13px;white-space:nowrap}
+.sales-channel-pie-legend>p{margin:10px 0 0;color:#89958e;font-size:11px;line-height:1.5}
 .ecommerce-analytics-error,.ecommerce-analytics-warning{margin:12px 0;padding:12px 14px;border:1px solid #efd4bc;border-radius:8px;color:#785527;background:#fffaf1;font-size:13px;line-height:1.5}
 .ecommerce-analytics-error{border-color:#efc9c1;color:#a34d42;background:#fff7f5}
 .ecommerce-analytics-warning strong{display:block;margin-bottom:3px}
@@ -1475,4 +1484,69 @@
  .ecommerce-funnel>p{grid-column:1/-1;margin:0;color:#89958e;font-size:12px;line-height:1.5}
 @media(max-width:1200px){.ecommerce-metrics-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.ecommerce-analytics-grid-main{grid-template-columns:minmax(0,1.4fr) minmax(270px,1fr)}}
 @media(max-width:900px){.ecommerce-analytics-heading{align-items:stretch;flex-direction:column}.ecommerce-analytics-controls{justify-items:stretch}.ecommerce-period-nav{flex-wrap:wrap}.ecommerce-analytics-grid,.ecommerce-analytics-grid-main,.ecommerce-analytics-grid-lower{grid-template-columns:1fr}.ecommerce-analytics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.ecommerce-metrics-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ecommerce-funnel{grid-template-columns:1fr}}
-@media(max-width:560px){.ecommerce-analytics-heading h1{font-size:24px}.ecommerce-analytics-heading p{font-size:13px}.ecommerce-analytics-kpis{gap:8px}.ecommerce-analytics-kpis article{min-height:100px;padding:12px}.ecommerce-analytics-kpis strong{font-size:18px}.ecommerce-metrics-grid{grid-template-columns:1fr;padding:12px}.ecommerce-metrics-grid article{min-height:unset}.ecommerce-metrics-panel>.report-panel-heading{align-items:flex-start;flex-direction:column}.report-ranges{overflow-x:auto}.report-ranges button{padding:0 10px;white-space:nowrap}.ecommerce-period-nav strong{min-width:unset;flex:1}.ecommerce-legend{width:100%}.ecommerce-trend-scroll{padding:12px}.ecommerce-small-stats{padding:12px}.ecommerce-channel-cards{grid-template-columns:1fr}}
+@media(max-width:560px){.ecommerce-analytics-heading h1{font-size:24px}.ecommerce-analytics-heading p{font-size:13px}.ecommerce-analytics-kpis{gap:8px}.ecommerce-analytics-kpis article{min-height:100px;padding:12px}.ecommerce-analytics-kpis strong{font-size:18px}.ecommerce-metrics-grid{grid-template-columns:1fr;padding:12px}.ecommerce-metrics-grid article{min-height:unset}.ecommerce-metrics-panel>.report-panel-heading{align-items:flex-start;flex-direction:column}.report-ranges{overflow-x:auto}.report-ranges button{padding:0 10px;white-space:nowrap}.ecommerce-period-nav strong{min-width:unset;flex:1}.ecommerce-legend{width:100%}.ecommerce-trend-scroll{padding:12px}.ecommerce-small-stats{padding:12px}.sales-channel-pie-layout{grid-template-columns:1fr;gap:2px;padding:12px}.sales-channel-pie-chart svg{width:min(100%,230px)}}
+
+/* Customer-level sales report */
+.customer-detail-panel{margin:0 0 14px}
+.ecommerce-analytics-workspace .customer-detail-panel{position:relative;top:auto;max-height:none;min-height:0;overflow:visible;align-self:stretch;scroll-margin-top:78px}
+.customer-detail-panel>.report-panel-heading{align-items:flex-start}
+.customer-detail-error{margin:12px 16px 0}
+.customer-report-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.customer-report-kpis article{display:grid;align-content:start;gap:5px;min-width:0;padding:13px;border:1px solid #e7ece8;border-radius:8px;background:#fbfcfb}
+.customer-report-kpis small{color:#748179;font-size:12px}
+.customer-report-kpis strong{overflow-wrap:anywhere;color:#20362c;font-size:20px;line-height:1.25}
+.customer-report-kpis span{color:#89958e;font-size:11px;line-height:1.45}
+.customer-report-chart-area{padding:16px;border-bottom:1px solid var(--line)}
+.customer-report-chart-heading,.customer-report-segment-heading,.customer-directory-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+.customer-report-chart-heading h3,.customer-report-segment-heading h3,.customer-directory-heading h3{margin:0 0 4px;color:#2c4035;font-size:15px;line-height:1.35}
+.customer-report-chart-heading p,.customer-report-segment-heading p,.customer-directory-heading p{margin:0;color:#89958e;font-size:12px;line-height:1.45}
+.customer-report-legend{display:flex;flex:none;gap:12px;color:#748179;font-size:12px}
+.customer-report-legend span{display:inline-flex;align-items:center;gap:5px}
+.customer-report-legend i{width:10px;height:10px;border-radius:3px;background:#508669}
+.customer-report-legend i.is-returning{background:#a9c5b1}
+.customer-channel-chart-scroll{max-width:100%;margin-top:17px;overflow-x:auto;overflow-y:hidden;padding:0 0 9px;overscroll-behavior-inline:contain;scrollbar-width:thin;scrollbar-color:#cbd8cf transparent}
+.customer-channel-chart{display:block;width:auto;max-width:none;height:300px}
+.customer-channel-chart-grid line{stroke:#e9efeb;stroke-width:1}
+.customer-channel-chart-grid text,.customer-channel-chart-label,.customer-channel-chart-value{fill:#78867e;font-family:var(--sans);font-size:12px}
+.customer-channel-chart-label{fill:#45574d;font-size:13px;font-weight:600}
+.customer-channel-chart-value{font-size:11px}
+.customer-channel-chart-tick{stroke:#dfe8e2;stroke-width:1;stroke-dasharray:3 4}
+.customer-channel-line{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.customer-channel-line.is-new{stroke:#508669}
+.customer-channel-line.is-returning{stroke:#a9c5b1;stroke-dasharray:7 5}
+.customer-channel-point{stroke-width:2.5;vector-effect:non-scaling-stroke}
+.customer-channel-point.is-new{fill:#fff;stroke:#508669}
+.customer-channel-point.is-returning{fill:#fff;stroke:#8eb49a}
+.customer-report-segment-heading{padding:15px 16px 10px}
+.customer-report-table-wrap{width:100%;overflow:auto}
+.customer-report-table-wrap table{width:100%;border-collapse:collapse;white-space:nowrap}
+.customer-report-table-wrap th,.customer-report-table-wrap td{padding:10px 12px;border-bottom:1px solid #edf0ee;text-align:left;font-size:12px;vertical-align:middle}
+.customer-report-table-wrap th{color:#77827d;background:#f8faf9;font-size:11px;font-weight:650}
+.customer-report-table-wrap td:first-child{white-space:normal}
+.customer-report-table-wrap td small{display:block;margin-top:3px;color:#89958e;font-size:11px;line-height:1.4}
+.customer-report-table-wrap .is-subgroup td:first-child{padding-left:28px;color:#69776f}
+.customer-report-table-wrap td strong{color:#2d4639}
+.customer-report-empty{text-align:center!important;color:#89958e;padding:28px!important}
+.customer-anonymous-block{margin:14px 16px;padding:13px;border:1px solid #efdfc2;border-radius:8px;background:#fffaf2}
+.customer-anonymous-block>strong{color:#795a2c;font-size:13px}
+.customer-anonymous-block>p{margin:5px 0 10px;color:#8b7656;font-size:12px;line-height:1.5}
+.customer-anonymous-list{display:grid;gap:7px}
+.customer-anonymous-list article{display:grid;grid-template-columns:1fr repeat(4,auto);align-items:center;gap:12px;padding-top:7px;border-top:1px solid #f1e6d4;color:#6f654f;font-size:12px}
+.customer-anonymous-list article strong{color:#51452e}
+.customer-directory-heading{align-items:center;padding:16px;border-top:1px solid var(--line)}
+.customer-directory-heading form{display:flex;gap:6px;width:min(360px,50%)}
+.customer-directory-heading input{flex:1;min-width:0;min-height:34px;padding:7px 9px;border:1px solid #dfe7e2;border-radius:6px;outline:0;color:#405248;background:#fff;font-size:12px}
+.customer-directory-heading input:focus{border-color:#8caf9a;box-shadow:0 0 0 2px #57917014}
+.customer-directory-heading form button,.customer-directory-footer button{min-height:34px;padding:0 10px;border:1px solid #dfe7e2;border-radius:6px;color:#3b7054;background:#fff;font-size:12px;cursor:pointer}
+.customer-directory-heading form button:hover,.customer-directory-footer button:hover:not(:disabled){background:#f2f7f3}
+.customer-directory-table td:first-child{min-width:150px}
+.customer-directory-table td:nth-child(2){display:grid;gap:3px}
+.customer-directory-table td:nth-child(3){max-width:220px;white-space:normal}
+.customer-cohort-pill{display:inline-flex;width:max-content;padding:3px 7px;border-radius:999px;color:#34714f;background:#eaf5ee;font-size:11px}
+.customer-cohort-pill.is-returning{color:#586e84;background:#eef3f7}
+.customer-directory-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 16px;color:#7b8981;font-size:12px}
+.customer-directory-footer>div{display:flex;align-items:center;gap:8px}
+.customer-directory-footer button:disabled{cursor:not-allowed;opacity:.45}
+.customer-report-note{margin:0;padding:0 16px 15px;color:#849087;font-size:11px;line-height:1.55}
+@media(max-width:900px){.customer-report-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.customer-report-kpis{gap:7px;padding:11px}.customer-report-kpis article{padding:10px}.customer-report-kpis strong{font-size:17px}.customer-report-chart-area{padding:12px}.customer-report-chart-heading,.customer-report-segment-heading,.customer-directory-heading{align-items:flex-start;flex-direction:column}.customer-report-legend{align-self:flex-end}.customer-channel-chart-scroll{margin-right:-12px}.customer-anonymous-list article{grid-template-columns:1fr 1fr;gap:5px}.customer-directory-heading{padding:13px}.customer-directory-heading form{width:100%}.customer-directory-footer{align-items:flex-start;flex-direction:column}.customer-directory-footer>div{width:100%;justify-content:space-between}.customer-report-table-wrap th,.customer-report-table-wrap td{padding:9px;font-size:11px}}
