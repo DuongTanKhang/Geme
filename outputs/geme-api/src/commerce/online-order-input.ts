@@ -55,6 +55,9 @@ export function onlineOrderInput(body: Record<string, any>) {
     : Number(body.loyaltyPointsToRedeem);
   if (!Number.isSafeInteger(loyaltyPointsToRedeem) || loyaltyPointsToRedeem < 0) throw new BadRequestException("Số điểm dùng để thanh toán không hợp lệ.");
 
+  const marketingSessionId = body.marketingSessionId == null || body.marketingSessionId === "" ? null : String(body.marketingSessionId).trim();
+  if (marketingSessionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(marketingSessionId)) throw new BadRequestException("Mã phiên thống kê không hợp lệ.");
+
   return {
     customerName: name,
     phone,
@@ -72,5 +75,6 @@ export function onlineOrderInput(body: Record<string, any>) {
     expectedTotalAmount,
     loyaltyPointsToRedeem,
     shippingMethod: "Giao hàng",
+    marketingSessionId,
   };
 }

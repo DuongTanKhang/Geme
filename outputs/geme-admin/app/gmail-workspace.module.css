@@ -1,0 +1,98 @@
+.page { color: #24342d; min-height: 100%; }
+.toolbar { align-items: flex-end; display: flex; gap: 24px; justify-content: space-between; margin: 0 0 22px; }
+.toolbarActions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.eyebrow { color: #718078; font-size: 11px; letter-spacing: .16em; }
+.toolbar h1 { font: 600 28px/1.2 var(--font-sans, Arial, sans-serif); margin: 5px 0 3px; }
+.toolbar p { color: #748078; line-height: 1.6; margin: 0; }
+.status { align-items: center; background: #f5f3ee; border: 1px solid #e8e3d9; border-radius: 999px; color: #746b5c; display: inline-flex; font-size: 13px; gap: 8px; max-width: 320px; overflow: hidden; padding: 8px 12px; text-overflow: ellipsis; white-space: nowrap; }
+.status i { background: #b69b69; border-radius: 50%; flex: 0 0 8px; height: 8px; }
+.connected { background: #edf7f0; border-color: #d5eadd; color: #226247; }
+.connected i { background: #3a9a68; }
+.primaryButton, .secondaryButton, .dangerButton, .refreshButton { border-radius: 7px; cursor: pointer; font: inherit; transition: background .15s ease, border-color .15s ease; }
+.primaryButton { background: #315f4c; border: 1px solid #315f4c; color: #fff; font-weight: 600; padding: 10px 16px; }
+.primaryButton:hover { background: #254d3d; }
+.secondaryButton { background: #fff; border: 1px solid #d9e1dc; color: #345c49; padding: 9px 12px; }
+.secondaryButton:hover, .refreshButton:hover { background: #f3f7f4; }
+.dangerButton { background: #fff; border: 1px solid #efd4d0; color: #a94438; padding: 9px 12px; }
+.primaryButton:disabled, .secondaryButton:disabled, .dangerButton:disabled, .refreshButton:disabled { cursor: wait; opacity: .6; }
+.error, .success { align-items: center; border-radius: 8px; display: flex; justify-content: space-between; margin: 0 0 14px; padding: 11px 14px; }
+.error { background: #fff8f6; border: 1px solid #f1d3cc; color: #a94438; }
+.success { background: #f0f8f3; border: 1px solid #d4e9da; color: #276448; }
+.error button, .success button { background: none; border: 0; color: inherit; cursor: pointer; font-size: 20px; line-height: 1; padding: 0 0 0 12px; }
+.setupCard { align-items: center; background: #fff; border: 1px solid #e1e7e3; border-radius: 12px; box-shadow: 0 8px 24px rgb(32 57 46 / 4%); display: flex; flex-direction: column; margin: 0 auto; max-width: 760px; padding: 48px 36px; text-align: center; }
+.emptyIcon { align-items: center; background: #edf5f0; border-radius: 50%; color: #31745b; display: flex; font-size: 30px; height: 64px; justify-content: center; margin-bottom: 18px; width: 64px; }
+.setupCard h2 { font-size: 21px; margin: 0 0 8px; }
+.setupCard > p { color: #748078; line-height: 1.6; margin: 0 0 18px; max-width: 590px; }
+.configNotice { background: #fff9ef; border: 1px solid #f0dfbf; border-radius: 8px; color: #775a24; display: grid; gap: 6px; margin: 2px 0 18px; max-width: 600px; padding: 12px 16px; text-align: left; width: 100%; }
+.configNotice span { font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.setupCard .subtle { font-size: 13px; margin-bottom: 16px; }
+.setupCard .scopeNote { font-size: 12px; margin: 18px 0 0; }
+.mailFrame { background: #fff; border: 1px solid #e1e7e3; border-radius: 12px; box-shadow: 0 8px 24px rgb(32 57 46 / 4%); display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 620px; overflow: hidden; }
+.sidebar { background: #fbfcfb; border-right: 1px solid #e8ece9; display: flex; flex-direction: column; padding: 18px 12px; }
+.compose { background: #eaf3ed; border: 0; border-radius: 8px; color: #244d3b; cursor: pointer; font: inherit; font-weight: 600; margin: 0 0 16px; padding: 12px 14px; text-align: left; }
+.compose:hover { background: #dcebe1; }
+.sidebar nav { display: grid; gap: 3px; }
+.folder { align-items: center; background: transparent; border: 0; border-radius: 7px; color: #65736b; cursor: pointer; display: flex; font: inherit; font-size: 14px; gap: 12px; min-width: 0; padding: 10px 12px; text-align: left; }
+.folder > span { color: #77867d; flex: 0 0 18px; font-size: 18px; text-align: center; }
+.folder:hover { background: #f1f5f2; }
+.active { background: #eaf2ed; color: #244d3b; font-weight: 600; }
+.separation { color: #89948d; font-size: 12px; line-height: 1.5; margin: auto 10px 0; padding-top: 24px; }
+.inbox { display: flex; flex-direction: column; min-width: 0; }
+.inboxToolbar { align-items: center; border-bottom: 1px solid #e8ece9; display: flex; gap: 12px; min-height: 66px; padding: 12px 16px; }
+.inboxToolbar > strong { color: #34483c; flex: 0 0 auto; font-size: 15px; }
+.search { align-items: center; background: #f5f7f5; border: 1px solid #e6ebe7; border-radius: 8px; color: #89958e; display: flex; flex: 1; gap: 8px; min-width: 120px; padding: 0 10px; }
+.search > span { font-size: 21px; }
+.search input { background: transparent; border: 0; color: #34483c; font: inherit; min-width: 0; outline: none; padding: 10px 0; width: 100%; }
+.search button { background: transparent; border: 0; color: #315f4c; cursor: pointer; font: inherit; font-size: 13px; padding: 8px; }
+.refreshButton { background: #fff; border: 1px solid #d9e1dc; color: #345c49; flex: 0 0 38px; font-size: 20px; height: 38px; }
+.messageList { flex: 1; min-width: 0; }
+.messageRow { align-items: center; background: #fff; border: 0; border-bottom: 1px solid #edf0ee; color: #65736b; cursor: pointer; display: grid; font: inherit; gap: 10px; grid-template-columns: 22px minmax(100px, 170px) minmax(0, 1fr) auto auto; min-height: 54px; padding: 10px 15px; text-align: left; width: 100%; }
+.messageRow:hover { background: #f7faf8; }
+.unread { background: #fcfdfc; color: #34483c; }
+.unread .sender, .unread .messageCopy strong { font-weight: 700; }
+.star { color: #bd9b42; font-size: 18px; text-align: center; }
+.sender { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.messageCopy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.messageCopy strong { color: #37483e; font-weight: 500; }
+.messageCopy > span { color: #89958e; }
+.messageRow time { color: #818d86; font-size: 12px; white-space: nowrap; }
+.attachmentMark { font-size: 12px; }
+.listEmpty { color: #849088; padding: 64px 20px; text-align: center; }
+.pagination { align-items: center; border-top: 1px solid #edf0ee; color: #7b8780; display: flex; font-size: 13px; justify-content: space-between; padding: 12px 16px; }
+.pagination button, .messageActions button { background: #fff; border: 1px solid #dce4df; border-radius: 6px; color: #355d49; cursor: pointer; font: inherit; padding: 8px 10px; }
+.pagination button:disabled, .messageActions button:disabled { cursor: wait; opacity: .55; }
+.messageDetail { min-height: 0; overflow: auto; padding: 18px 22px 28px; }
+.messageActions { align-items: center; border-bottom: 1px solid #edf0ee; display: flex; flex-wrap: wrap; gap: 7px; padding: 0 0 14px; }
+.messageActions button { font-size: 12px; }
+.messageDetail h2 { color: #253b30; font-size: 22px; font-weight: 500; margin: 22px 0 12px; overflow-wrap: anywhere; }
+.messageMeta { border-bottom: 1px solid #edf0ee; color: #67756d; display: grid; font-size: 13px; gap: 5px; padding-bottom: 16px; }
+.messageMeta strong { color: #34483c; }
+.messageMeta time { color: #859188; }
+.messageBody { color: #3e4c43; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; white-space: pre-wrap; }
+.attachments { border-top: 1px solid #edf0ee; display: grid; gap: 8px; margin-top: 20px; padding-top: 14px; }
+.attachments span { color: #647269; font-size: 13px; }
+.modalBackdrop { align-items: center; background: rgb(21 32 26 / 42%); display: flex; inset: 0; justify-content: center; padding: 20px; position: fixed; z-index: 1000; }
+.composeModal { background: #fff; border-radius: 12px; box-shadow: 0 18px 60px rgb(18 35 27 / 22%); display: flex; flex-direction: column; max-height: min(90vh, 820px); max-width: 680px; overflow: hidden; width: 100%; }
+.composeModal header { align-items: center; background: #f4f7f5; color: #34483c; display: flex; justify-content: space-between; padding: 14px 18px; }
+.composeModal header button { background: transparent; border: 0; color: #718078; cursor: pointer; font-size: 22px; }
+.composeModal label { border-bottom: 1px solid #edf0ee; color: #728077; display: grid; font-size: 13px; gap: 4px; padding: 8px 18px; }
+.composeModal input, .composeModal textarea { border: 0; color: #34483c; font: inherit; outline: none; resize: vertical; width: 100%; }
+.composeModal textarea { min-height: 150px; }
+.composeHint { color: #89958e; font-size: 12px; margin: 0; padding: 9px 18px; }
+.composeModal footer { align-items: center; border-top: 1px solid #edf0ee; display: flex; gap: 8px; padding: 12px 16px; }
+.composeModal footer > span { flex: 1; }
+
+@media (max-width: 800px) {
+  .toolbar { align-items: flex-start; flex-direction: column; }
+  .mailFrame { grid-template-columns: 1fr; min-height: 640px; }
+  .sidebar { border-bottom: 1px solid #e8ece9; border-right: 0; padding: 12px; }
+  .compose { margin-bottom: 10px; }
+  .sidebar nav { display: flex; flex-wrap: wrap; gap: 2px; }
+  .folder { font-size: 12px; padding: 8px; }
+  .sidebar .separation { display: none; }
+  .inboxToolbar { flex-wrap: wrap; }
+  .inboxToolbar > strong { width: 100%; }
+  .messageRow { gap: 6px; grid-template-columns: 18px minmax(80px, 28%) minmax(0, 1fr) auto; padding: 10px 9px; }
+  .messageRow time { display: none; }
+  .messageCopy { font-size: 13px; }
+}

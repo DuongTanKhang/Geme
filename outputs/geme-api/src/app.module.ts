@@ -13,8 +13,11 @@ import { SocialModule } from "./social/social.module.js";
 import { ShopeeModule } from "./shopee/shopee.module.js";
 import { ContactModule } from "./contact/contact.module.js";
 import { SePayModule } from "./sepay/sepay.module.js";
+import { AdminCalendarModule } from "./admin-calendar/admin-calendar.module.js";
+import { GmailModule } from "./gmail/gmail.module.js";
+import { MarketingModule } from "./marketing/marketing.module.js";
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), RequestRateLimitModule, PrismaModule, AdminAuthModule, SocialModule, ShopeeModule, ContactModule, SePayModule, HealthModule, MaterialsModule, CommerceModule, AccountModule, Pos365Module, ViettelPostModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), RequestRateLimitModule, PrismaModule, AdminAuthModule, AdminCalendarModule, MarketingModule, GmailModule, SocialModule, ShopeeModule, ContactModule, SePayModule, HealthModule, MaterialsModule, CommerceModule, AccountModule, Pos365Module, ViettelPostModule],
 })
 export class AppModule {}

@@ -20,7 +20,8 @@ const labels: Record<string, string> = {
   "integrations.read": "Xem kết nối POS và marketplace", "integrations.manage": "Quản lý kết nối và đồng bộ POS/marketplace",
   "shipping.read": "Xem vận đơn", "shipping.manage": "Tạo vận đơn và nhãn giao hàng", "social.read": "Xem nội dung mạng xã hội",
   "social.draft": "Soạn nội dung mạng xã hội", "social.approve": "Duyệt nội dung mạng xã hội", "social.publish": "Đăng và quản lý lịch đăng", "social.connect": "Kết nối hoặc ngắt kết nối Meta",
-  "social.manage": "Quyền cũ: soạn, duyệt, đăng và kết nối mạng xã hội"
+  "social.manage": "Quyền cũ: soạn, duyệt, đăng và kết nối mạng xã hội",
+  "marketing.read": "Xem phân tích Marketing", "marketing.manage": "Ghi chi phí chiến dịch Marketing"
 };
 
 export default function AccessWorkspace({ request }: Props) {

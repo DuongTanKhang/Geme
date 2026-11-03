@@ -254,6 +254,9 @@ model AdminUser {
   paymentRecords Payment[] @relation("PaymentRecordedBy")
   permissionGrants AdminPermissionGrant[] @relation("PermissionSubject")
   permissionsGranted AdminPermissionGrant[] @relation("PermissionGrantedBy")
+  calendarEventsCreated AdminCalendarEvent[] @relation("AdminCalendarEventCreator")
+  gmailOAuthStates GmailOAuthState[]
+  gmailConnectionsCreated GmailConnection[] @relation("GmailConnectionCreator")
 
   @@map("admin_users")
 }
@@ -271,6 +274,53 @@ model AdminPermissionGrant {
   @@id([adminId, permission])
   @@index([permission, effect])
   @@map("admin_permission_grants")
+}
+
+model AdminCalendarEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  title       String    @db.VarChar(160)
+  description String?   @db.VarChar(2000)
+  location    String?   @db.VarChar(160)
+  startsAt    DateTime  @map("starts_at") @db.Timestamptz(3)
+  endsAt      DateTime  @map("ends_at") @db.Timestamptz(3)
+  allDay      Boolean   @default(false) @map("all_day")
+  createdByAdminId String? @map("created_by_admin_id") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy   AdminUser? @relation("AdminCalendarEventCreator", fields: [createdByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([startsAt, endsAt])
+  @@map("admin_calendar_events")
+}
+
+model GmailOAuthState {
+  stateHash    String    @id @map("state_hash") @db.Char(64)
+  adminId      String    @map("admin_id") @db.Uuid
+  codeVerifier String    @map("code_verifier") @db.VarChar(128)
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(3)
+  consumedAt   DateTime? @map("consumed_at") @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  admin        AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("gmail_oauth_states")
+}
+
+model GmailConnection {
+  id                    String    @id @default(uuid()) @db.Uuid
+  email                 String    @unique @db.VarChar(320)
+  status                String    @default("ACTIVE") @db.VarChar(24)
+  refreshTokenCiphertext String   @map("refresh_token_ciphertext") @db.Text
+  scopes                String[]  @default([])
+  createdByAdminId      String    @map("created_by_admin_id") @db.Uuid
+  disconnectedAt        DateTime? @map("disconnected_at") @db.Timestamptz(3)
+  lastErrorCode         String?   @map("last_error_code") @db.VarChar(80)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdBy             AdminUser @relation("GmailConnectionCreator", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+
+  @@index([status, updatedAt(sort: Desc)])
+  @@map("gmail_connections")
 }
 
 model ContactInquiry {
@@ -600,6 +650,7 @@ model Order {
   idempotencyKey String?         @unique @map("idempotency_key") @db.VarChar(128)
   idempotencyRequestHash String?  @map("idempotency_request_hash") @db.VarChar(64)
   customerId      String?         @map("customer_id") @db.Uuid
+  marketingSessionId String?      @map("marketing_session_id") @db.Uuid
   status          OrderStatus     @default(PENDING_CONFIRMATION)
   customerName    String          @map("customer_name") @db.VarChar(160)
   customerEmail   String?         @map("customer_email") @db.VarChar(320)
@@ -644,6 +695,7 @@ model Order {
   createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
   customer        Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  marketingSession MarketingSession? @relation(fields: [marketingSessionId], references: [id], onDelete: SetNull)
   items           OrderItem[]
   payments        Payment[]
   sepayWebhookEvents SePayWebhookEvent[]
@@ -656,6 +708,7 @@ model Order {
 
   @@index([status, placedAt(sort: Desc)])
   @@index([customerId, placedAt(sort: Desc)])
+  @@index([marketingSessionId, placedAt(sort: Desc)])
   @@index([customerId, customerEmail])
   @@index([placedAt(sort: Desc)])
   @@index([placedAt(sort: Desc), status])
@@ -664,6 +717,47 @@ model Order {
   @@index([inventoryReservedAt, inventoryCommittedAt, inventoryReleasedAt])
   @@index([status, inventoryReservationExpiresAt])
   @@map("orders")
+}
+
+model MarketingSession {
+  id           String   @id @db.Uuid
+  visitorHash  String   @map("visitor_hash") @db.VarChar(64)
+  source       String?  @db.VarChar(120)
+  medium       String?  @db.VarChar(120)
+  campaign     String?  @db.VarChar(160)
+  referrerHost String?  @map("referrer_host") @db.VarChar(180)
+  landingPath  String   @map("landing_path") @db.VarChar(512)
+  lastPath     String   @map("last_path") @db.VarChar(512)
+  pageViews    Int      @default(1) @map("page_views")
+  cartAddCount Int      @default(0) @map("cart_add_count")
+  cartAddedAt  DateTime? @map("cart_added_at") @db.Timestamptz(3)
+  signedUpAt   DateTime? @map("signed_up_at") @db.Timestamptz(3)
+  startedAt    DateTime @default(now()) @map("started_at") @db.Timestamptz(3)
+  lastSeenAt   DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  orders       Order[]
+
+  @@index([startedAt(sort: Desc)])
+  @@index([signedUpAt(sort: Desc)])
+  @@index([source, startedAt(sort: Desc)])
+  @@index([campaign, startedAt(sort: Desc)])
+  @@index([cartAddedAt(sort: Desc)])
+  @@map("marketing_sessions")
+}
+
+model MarketingSpend {
+  id                String   @id @default(uuid()) @db.Uuid
+  spentOn           DateTime @map("spent_on") @db.Date
+  source            String   @db.VarChar(120)
+  campaign          String   @db.VarChar(160)
+  amount            Decimal  @db.Decimal(14, 0)
+  note              String?  @db.VarChar(500)
+  createdByAdminId  String?  @map("created_by_admin_id") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([spentOn(sort: Desc), source])
+  @@index([campaign, spentOn(sort: Desc)])
+  @@map("marketing_spend")
 }
 
 model LoyaltyPointTransaction {

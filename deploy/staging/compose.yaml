@@ -134,6 +134,11 @@ services:
       SEPAY_API_TOKEN: ${SEPAY_API_TOKEN:-}
       SEPAY_API_BASE_URL: ${SEPAY_API_BASE_URL:-https://userapi.sepay.vn/v2}
       SEPAY_ACCOUNT_NUMBERS: ${SEPAY_ACCOUNT_NUMBERS:-}
+      GMAIL_OAUTH_CLIENT_ID: ${GMAIL_OAUTH_CLIENT_ID:-}
+      GMAIL_OAUTH_CLIENT_SECRET: ${GMAIL_OAUTH_CLIENT_SECRET:-}
+      GMAIL_OAUTH_REDIRECT_URI: ${GMAIL_OAUTH_REDIRECT_URI:-https://testadmin.geme.vn/api/v1/integrations/gmail/callback}
+      GMAIL_OAUTH_TOKEN_ENCRYPTION_KEY: ${GMAIL_OAUTH_TOKEN_ENCRYPTION_KEY:-}
+      GMAIL_OAUTH_ADMIN_RETURN_URL: ${GMAIL_OAUTH_ADMIN_RETURN_URL:-https://testadmin.geme.vn/}
       VIETTELPOST_ENABLED: "false"
     expose: ["4000"]
     depends_on:
@@ -163,11 +168,11 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:5130
       ConnectionStrings__DefaultConnection: Server=sqlserver,1433;Database=Aegis_Security_Platform;User Id=sa;Password=${AEGIS_SQL_PASSWORD:?Set AEGIS_SQL_PASSWORD in .env};Encrypt=False;TrustServerCertificate=True
       ConnectionStrings__Redis: redis:6379
-      Database__ApplyMigrationsOnStartup: "true"
+      Database__ApplyMigrationsOnStartup: "false"
       Email__Host: ${AEGIS_EMAIL_HOST:-smtp.gmail.com}
       Email__Port: ${AEGIS_EMAIL_PORT:-587}
       Email__EnableSsl: ${AEGIS_EMAIL_ENABLE_SSL:-true}

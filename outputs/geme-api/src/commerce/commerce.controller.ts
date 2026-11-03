@@ -267,4 +267,5 @@ export class CommerceController {
   @Patch("settings") @admin("settings.manage") saveSettings(@Body() body: Record<string, unknown>) { return this.commerce.saveSettings(body); }
   @Get("reports/storefront") storefrontReport() { return this.commerce.storefrontSalesOverview(); }
   @Get("reports/overview") @admin("dashboard.read") report(@Query() query: Record<string, string>) { return this.commerce.report(query); }
+  @Get("reports/gross-profit") @admin("finance.read") grossProfitReport(@Query() query: Record<string, string>) { return this.commerce.grossProfitReport(query); }
 }

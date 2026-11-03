@@ -1,8 +1,10 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { BadRequestException, ConflictException, HttpException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { Redis } from "ioredis";
 import { Prisma } from "../generated/prisma/client.js";
 import { CommerceService } from "../commerce/commerce.service.js";
 import { PrismaService } from "../prisma/prisma.service.js";
+import { redisConnectionOptions } from "../queue/redis-connection.js";
 import { SePayBankAccountService } from "./sepay-bank-account.service.js";
 
 type SePayPayload = {
@@ -19,26 +21,109 @@ type SePayPayload = {
   referenceCode?: string;
 };
 
+export type SePayApiTransaction = {
+  id?: unknown;
+  transaction_date?: unknown;
+  account_number?: unknown;
+  va?: unknown;
+  transfer_type?: unknown;
+  amount_in?: unknown;
+  amount_out?: unknown;
+  transaction_content?: unknown;
+  reference_number?: unknown;
+  code?: unknown;
+  bank_brand_name?: unknown;
+};
+
+const nullableSePayString = (value: unknown, maxLength: number): string | null => {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const normalized = String(value).trim();
+  return normalized ? normalized.slice(0, maxLength) : null;
+};
+
+function parseSePayTransactionDate(value: unknown) {
+  const transactionText = String(value ?? "").trim();
+  const vietnamLocalDate = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/.exec(transactionText);
+  const parsed = vietnamLocalDate
+    ? new Date(`${vietnamLocalDate[1]}T${vietnamLocalDate[2]}+07:00`)
+    : transactionText ? new Date(transactionText) : null;
+  return parsed && Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
+export function mapSePayApiTransaction(row: SePayApiTransaction) {
+  const transactionId = String(row.id ?? "").trim();
+  const transferType = String(row.transfer_type ?? "").trim().toLowerCase();
+  const amountValue = transferType === "in" ? row.amount_in : row.amount_out;
+  const amount = Number(amountValue);
+  if (!transactionId || transactionId.length > 80 || !Number.isSafeInteger(amount) || amount < 0 || !["in", "out"].includes(transferType)) return null;
+  return {
+    transactionId,
+    gateway: nullableSePayString(row.bank_brand_name, 80),
+    accountNumber: nullableSePayString(row.account_number, 40),
+    subAccount: nullableSePayString(row.va, 80),
+    paymentCode: nullableSePayString(row.code, 120),
+    transferType,
+    amount: new Prisma.Decimal(String(amount)),
+    transactionDate: parseSePayTransactionDate(row.transaction_date),
+    referenceCode: nullableSePayString(row.reference_number, 160),
+    content: nullableSePayString(row.transaction_content, 4000),
+    rawPayload: row as Prisma.InputJsonValue,
+    status: "RECEIVED",
+  };
+}
+
 type WebhookAcceptance = "accepted" | "disabled" | "invalid-signature" | "invalid-request";
+
+type SePayReconciliationScan = {
+  sinceId: string | null;
+  from: string | null;
+  page: number;
+  latestId: string | null;
+};
+
+export function buildSePayReconciliationUrl(
+  endpoint: URL,
+  accountId: string,
+  scan: Pick<SePayReconciliationScan, "sinceId" | "from" | "page">,
+) {
+  const url = new URL(endpoint);
+  url.searchParams.set("bank_account_id", accountId);
+  url.searchParams.set("transfer_type", "in");
+  url.searchParams.set("transaction_date_sort", "asc");
+  url.searchParams.set("timestamp_format", "iso8601");
+  url.searchParams.set("per_page", "100");
+  url.searchParams.set("page", String(scan.page));
+  if (scan.sinceId) url.searchParams.set("since_id", scan.sinceId);
+  else if (scan.from) url.searchParams.set("transaction_date_from", scan.from);
+  return url;
+}
 
 class NeedsReviewError extends Error {}
 
 @Injectable()
 export class SePayService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SePayService.name);
+  private readonly redis = new Redis({ ...redisConnectionOptions(), maxRetriesPerRequest: 1, lazyConnect: true });
   private workerTimer: NodeJS.Timeout | null = null;
+  private reconciliationTimer: NodeJS.Timeout | null = null;
   private workerRunning = false;
+  private reconciliationRunning = false;
 
   constructor(private readonly prisma: PrismaService, private readonly commerce: CommerceService, private readonly sepayBankAccount: SePayBankAccountService) {}
 
   onModuleInit() {
     this.workerTimer = setInterval(() => void this.processQueue(), 2_000);
     this.workerTimer.unref();
+    this.reconciliationTimer = setInterval(() => void this.reconcileTransactions(), 5 * 60_000);
+    this.reconciliationTimer.unref();
     void this.processQueue();
+    void this.reconcileTransactions();
   }
 
   onModuleDestroy() {
     if (this.workerTimer) clearInterval(this.workerTimer);
+    if (this.reconciliationTimer) clearInterval(this.reconciliationTimer);
+    void this.redis.quit().catch(() => undefined);
   }
 
   async acceptWebhook(rawBody: Buffer | undefined, body: unknown, signatureHeader: string | undefined, timestampHeader: string | undefined): Promise<WebhookAcceptance> {
@@ -96,9 +181,149 @@ export class SePayService implements OnModuleInit, OnModuleDestroy {
   }
 
   private nullableString(value: unknown, maxLength: number): string | null {
-    if (typeof value !== "string" && typeof value !== "number") return null;
-    const normalized = String(value).trim();
-    return normalized ? normalized.slice(0, maxLength) : null;
+    return nullableSePayString(value, maxLength);
+  }
+
+  /**
+   * Recover incoming transfers whose SePay webhook was not delivered. The API
+   * response is authenticated with the server-only SePay token and each
+   * transaction is inserted into the same idempotent queue as a webhook.
+   */
+  private async reconcileTransactions() {
+    const token = process.env.SEPAY_API_TOKEN?.trim();
+    if (process.env.SEPAY_WEBHOOK_ENABLED !== "true" || !token || this.reconciliationRunning) return;
+    this.reconciliationRunning = true;
+    const lockToken = randomUUID();
+    let lockKey: string | null = null;
+    try {
+      const account = await this.sepayBankAccount.getSingleActiveAccount();
+      if (!account) return;
+      lockKey = `geme:sepay:reconcile:${account.id}:lock`;
+      const locked = await this.redis.set(lockKey, lockToken, "PX", 180_000, "NX");
+      if (locked !== "OK") return;
+
+      const baseUrl = (process.env.SEPAY_API_BASE_URL?.trim() || "https://userapi.sepay.vn/v2").replace(/\/+$/, "");
+      const endpoint = new URL(`${baseUrl}/transactions`);
+      if (endpoint.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(endpoint.hostname)) {
+        throw new Error("SePay API phải sử dụng HTTPS.");
+      }
+      const cursorKey = `geme:sepay:reconcile:${account.id}:cursor`;
+      const scanKey = `geme:sepay:reconcile:${account.id}:scan`;
+      const cursor = await this.redis.get(cursorKey);
+      let scan: SePayReconciliationScan;
+      const savedScan = await this.redis.get(scanKey);
+      if (savedScan) {
+        try {
+          const parsed = JSON.parse(savedScan) as Partial<SePayReconciliationScan>;
+          if (!Number.isSafeInteger(parsed.page) || Number(parsed.page) < 1) throw new Error("Trang đối soát không hợp lệ.");
+          scan = {
+            sinceId: typeof parsed.sinceId === "string" ? parsed.sinceId : null,
+            from: typeof parsed.from === "string" ? parsed.from : null,
+            page: Number(parsed.page),
+            latestId: typeof parsed.latestId === "string" ? parsed.latestId : null,
+          };
+        } catch {
+          // Restart a corrupt/incompatible scan from the last committed cursor.
+          scan = {
+            sinceId: cursor,
+            from: cursor ? null : this.formatSePayLocalDate(new Date(Date.now() - 7 * 86_400_000)),
+            page: 1,
+            latestId: null,
+          };
+          await this.redis.set(scanKey, JSON.stringify(scan));
+        }
+      } else {
+        scan = {
+          sinceId: cursor,
+          from: cursor ? null : this.formatSePayLocalDate(new Date(Date.now() - 7 * 86_400_000)),
+          page: 1,
+          latestId: null,
+        };
+        await this.redis.set(scanKey, JSON.stringify(scan));
+      }
+      let imported = 0;
+      let pages = 0;
+      let scanComplete = false;
+
+      // Keep the same since_id/date window while paging. SePay documents that
+      // since_id filters the result set but does not change its pagination; the
+      // cursor must advance only after every page in the scan has been read.
+      // Persist the page so a backlog larger than 1,000 rows resumes next pass.
+      for (let requestIndex = 0; requestIndex < 10; requestIndex++) {
+        const url = buildSePayReconciliationUrl(endpoint, account.id, scan);
+
+        const response = await fetch(url, {
+          headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(12_000),
+        });
+        if (!response.ok) throw new Error(`SePay transaction API trả HTTP ${response.status}.`);
+        const payload = await response.json() as {
+          status?: unknown;
+          data?: unknown;
+          meta?: { pagination?: { has_more?: unknown } };
+        };
+        if (payload.status !== "success" || !Array.isArray(payload.data)) {
+          throw new Error("SePay transaction API trả dữ liệu không hợp lệ.");
+        }
+        const sourceRows = payload.data as SePayApiTransaction[];
+        if (!sourceRows.length) {
+          scanComplete = true;
+          break;
+        }
+
+        const rows = sourceRows.map(mapSePayApiTransaction).filter((row): row is NonNullable<typeof row> => Boolean(row));
+        if (rows.length !== sourceRows.length) throw new Error("SePay trả giao dịch thiếu mã hoặc số tiền hợp lệ; giữ cursor để thử lại sau.");
+        if (rows.length) {
+          const latestId = rows[rows.length - 1].transactionId;
+          if (scan.page > 1 && latestId === scan.latestId) {
+            throw new Error("SePay không tiến trang đối soát; giữ cursor để thử lại sau.");
+          }
+          const result = await this.prisma.sePayWebhookEvent.createMany({ data: rows, skipDuplicates: true });
+          imported += result.count;
+          scan.latestId = latestId;
+        }
+        pages += 1;
+        const hasMore = payload.meta?.pagination?.has_more;
+        scanComplete = typeof hasMore === "boolean" ? !hasMore : sourceRows.length < 100;
+        if (scanComplete) break;
+        scan.page += 1;
+        await this.redis.set(scanKey, JSON.stringify(scan));
+        // Respect SePay API's documented limit of three requests per second.
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+
+      if (scanComplete) {
+        const commit = this.redis.multi();
+        if (scan.latestId) commit.set(cursorKey, scan.latestId);
+        commit.del(scanKey);
+        await commit.exec();
+      }
+
+      if (pages) this.logger.log(`SePay API đối soát ${pages} trang giao dịch; thêm ${imported} giao dịch mới vào hàng đợi.`);
+      if (imported) void this.processQueue();
+    } catch (error) {
+      // Keep the polling loop alive; never log the bearer token or raw bank data.
+      this.logger.warn(`Đối soát giao dịch SePay chưa hoàn tất: ${error instanceof Error ? error.message : "lỗi không xác định"}`);
+    } finally {
+      if (lockKey) {
+        await this.redis.eval(
+          "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+          1,
+          lockKey,
+          lockToken,
+        ).catch(() => undefined);
+      }
+      this.reconciliationRunning = false;
+    }
+  }
+
+  private formatSePayLocalDate(date: Date) {
+    const parts = new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "Asia/Ho_Chi_Minh",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    }).format(date);
+    return parts.replace("T", " ");
   }
 
   private async processQueue() {

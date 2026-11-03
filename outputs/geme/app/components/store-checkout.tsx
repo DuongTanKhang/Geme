@@ -5,6 +5,7 @@ import { formatStorePrice } from "../lib/store-format";
 import { normalizeApiBaseUrl } from "../lib/api-base";
 import { getVietQrImageUrl, getVietQrTransferInfo, type BankQrSettings } from "../lib/bank-qr";
 import { PaymentCountdown } from "./payment-countdown";
+import { getMarketingSessionId, trackMarketingPageView } from "../lib/marketing-tracking";
 
 type CheckoutLine = {
   key: string;
@@ -189,6 +190,7 @@ export function StoreCheckout() {
         else authenticated = true;
         setAccountSignedIn(authenticated);
       }
+      const marketingTracked = await trackMarketingPageView(window.location.pathname, { ensure: true });
       const endpoint = authenticated ? "/api/account/orders" : `${API_BASE}/orders`;
       const payload = {
         customerName: customer.name,
@@ -199,6 +201,7 @@ export function StoreCheckout() {
         paymentMethod,
         expectedTotalAmount: activeQuote.totalAmount,
         loyaltyPointsToRedeem: authenticated ? pointsToRedeem : 0,
+        marketingSessionId: marketingTracked ? getMarketingSessionId() || null : null,
         items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId, sku: line.sku, quantity: line.quantity })),
       };
       const fingerprintBytes = new TextEncoder().encode(JSON.stringify(payload));

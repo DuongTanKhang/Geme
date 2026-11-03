@@ -3569,6 +3569,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       if (existing) return existing;
       const customer = customerId ? await tx.customer.findUnique({ where: { id: customerId } }) : null;
       if (customerId && !customer) throw new BadRequestException("Không tìm thấy hồ sơ khách hàng đã chọn.");
+      const marketingSession = !storeSale && typeof input.marketingSessionId === "string"
+        ? await tx.marketingSession.findUnique({ where: { id: input.marketingSessionId }, select: { id: true } })
+        : null;
       const loyaltyPointsToRedeem = storeSale ? 0 : Number(input.loyaltyPointsToRedeem) || 0;
       if (loyaltyPointsToRedeem > 0) {
         if (!customer) throw new BadRequestException("Đăng nhập GEME để sử dụng điểm thưởng.");
@@ -3700,6 +3703,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         code,
         ...(idempotencyKey ? { idempotencyKey, idempotencyRequestHash } : {}),
         customerName, customerEmail, customerPhone,
+        ...(marketingSession ? { marketingSession: { connect: { id: marketingSession.id } } } : {}),
         shippingAddress: String(input.shippingAddress || input.address || "").trim(),
         shippingMethod: storeSale ? "Bán trực tiếp tại cửa hàng" : input.shippingMethod || null,
         note: input.note || null, subtotal, discountAmount, loyaltyPointsRedeemed: loyalty.pointsToRedeem, loyaltyDiscountAmount, shippingFee, totalAmount,
@@ -4210,11 +4214,115 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return this.settings();
   }
 
+  async grossProfitReport(query: Record<string, string>) {
+    const grains = new Set(["day", "week", "month", "quarter"]);
+    const grain = String(query.grain || "month").toLowerCase();
+    if (!grains.has(grain)) throw new BadRequestException("Kỳ báo cáo phải là day, week, month hoặc quarter.");
+    const to = parseReportDate(query.to, new Date(), "end");
+    const from = parseReportDate(query.from, new Date(to.getTime() - 30 * 86400000), "start");
+    if (to <= from) throw new BadRequestException("Ngày kết thúc phải sau ngày bắt đầu.");
+    if (to.getTime() - from.getTime() > 1095 * 86400000) throw new BadRequestException("Khoảng báo cáo tối đa là 3 năm.");
+
+    const rows = await this.prisma.$queryRaw<Array<{
+      bucket: string; revenue: unknown; cost: unknown; profit: unknown; soldQuantity: number;
+      missingCostLines: number; missingCostRevenue: unknown; returnedQuantity: number;
+    }>>`
+      WITH sales_lines AS (
+        SELECT o.id AS order_id, o.placed_at, i.id AS order_item_id, i.product_sku, i.quantity,
+               i.line_total,
+               (SELECT SUM(ri.unit_cost * ri.quantity) / NULLIF(SUM(ri.quantity), 0)
+                FROM inventory_receipt_items ri
+                JOIN inventory_receipts receipt ON receipt.id = ri.receipt_id
+                WHERE UPPER(BTRIM(ri.product_sku)) = UPPER(BTRIM(i.product_sku))
+                  AND ri.unit_cost > 0 AND receipt.status::text = 'COMPLETED'
+                  AND receipt.received_at <= o.placed_at) AS average_unit_cost
+        FROM orders o JOIN order_items i ON i.order_id = o.id
+        WHERE o.placed_at >= ${from} AND o.placed_at <= ${to}
+          AND o.status::text IN ('PROCESSING','SHIPPING','DELIVERED')
+      ), sales_buckets AS (
+        SELECT DATE_TRUNC(${grain}, s.placed_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date AS bucket,
+               SUM(s.line_total)::numeric AS revenue,
+               ROUND(SUM(COALESCE(s.average_unit_cost, 0) * s.quantity))::numeric AS cost,
+               SUM(s.quantity)::int AS sold_quantity,
+               COUNT(*) FILTER (WHERE s.average_unit_cost IS NULL)::int AS missing_cost_lines,
+               COALESCE(SUM(s.line_total) FILTER (WHERE s.average_unit_cost IS NULL), 0)::numeric AS missing_cost_revenue,
+               0::int AS returned_quantity
+        FROM sales_lines s GROUP BY 1
+      ), returned_lines AS (
+        SELECT r.id AS return_id, r.received_at, o.placed_at, oi.line_total, oi.quantity AS purchased_quantity,
+               ri.quantity AS returned_quantity, ri.restock,
+               COALESCE(SUM(ri.quantity) OVER (
+                 PARTITION BY ri.order_item_id ORDER BY r.received_at, r.created_at, r.id
+                 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+               ), 0)::int AS quantity_before,
+               (SELECT SUM(receipt_item.unit_cost * receipt_item.quantity) / NULLIF(SUM(receipt_item.quantity), 0)
+                FROM inventory_receipt_items receipt_item
+                JOIN inventory_receipts receipt ON receipt.id = receipt_item.receipt_id
+                WHERE UPPER(BTRIM(receipt_item.product_sku)) = UPPER(BTRIM(oi.product_sku))
+                  AND receipt_item.unit_cost > 0 AND receipt.status::text = 'COMPLETED'
+                  AND receipt.received_at <= o.placed_at) AS average_unit_cost
+        FROM order_returns r
+        JOIN order_return_items ri ON ri.return_id = r.id
+        JOIN order_items oi ON oi.id = ri.order_item_id
+        JOIN orders o ON o.id = oi.order_id
+        WHERE r.status::text IN ('RECEIVED','CLOSED') AND r.received_at >= ${from} AND r.received_at <= ${to}
+      ), return_buckets AS (
+        SELECT DATE_TRUNC(${grain}, r.received_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date AS bucket,
+               -SUM(FLOOR(r.line_total * (r.quantity_before + r.returned_quantity) / NULLIF(r.purchased_quantity, 0))
+                    - FLOOR(r.line_total * r.quantity_before / NULLIF(r.purchased_quantity, 0)))::numeric AS revenue,
+               -ROUND(SUM(CASE WHEN r.restock THEN COALESCE(r.average_unit_cost, 0) * r.returned_quantity ELSE 0 END))::numeric AS cost,
+               0::int AS sold_quantity, 0::int AS missing_cost_lines, 0::numeric AS missing_cost_revenue,
+               SUM(r.returned_quantity)::int AS returned_quantity
+        FROM returned_lines r GROUP BY 1
+      ), standalone_refund_buckets AS (
+        SELECT DATE_TRUNC(${grain}, refund.created_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date AS bucket,
+               -SUM(refund.amount)::numeric AS revenue, 0::numeric AS cost, 0::int AS sold_quantity,
+               0::int AS missing_cost_lines, 0::numeric AS missing_cost_revenue, 0::int AS returned_quantity
+        FROM payment_refunds refund
+        WHERE refund.return_id IS NULL AND refund.created_at >= ${from} AND refund.created_at <= ${to}
+        GROUP BY 1
+      ), movements AS (
+        SELECT * FROM sales_buckets UNION ALL SELECT * FROM return_buckets UNION ALL SELECT * FROM standalone_refund_buckets
+      )
+      SELECT TO_CHAR(bucket, 'YYYY-MM-DD') AS bucket,
+             SUM(revenue)::numeric AS revenue,
+             SUM(cost)::numeric AS cost,
+             (SUM(revenue) - SUM(cost))::numeric AS profit,
+             SUM(sold_quantity)::int AS "soldQuantity",
+             SUM(missing_cost_lines)::int AS "missingCostLines",
+             SUM(missing_cost_revenue)::numeric AS "missingCostRevenue",
+             SUM(returned_quantity)::int AS "returnedQuantity"
+      FROM movements GROUP BY bucket ORDER BY bucket ASC
+    `;
+    const timeline = rows.map((row) => ({
+      bucket: row.bucket,
+      revenue: Number(row.revenue) || 0,
+      cost: Number(row.cost) || 0,
+      profit: Number(row.profit) || 0,
+      soldQuantity: Number(row.soldQuantity) || 0,
+      missingCostLines: Number(row.missingCostLines) || 0,
+      missingCostRevenue: Number(row.missingCostRevenue) || 0,
+      returnedQuantity: Number(row.returnedQuantity) || 0,
+    }));
+    return {
+      from, to, grain,
+      revenue: timeline.reduce((sum, row) => sum + row.revenue, 0),
+      cost: timeline.reduce((sum, row) => sum + row.cost, 0),
+      profit: timeline.reduce((sum, row) => sum + row.profit, 0),
+      soldQuantity: timeline.reduce((sum, row) => sum + row.soldQuantity, 0),
+      missingCostLines: timeline.reduce((sum, row) => sum + row.missingCostLines, 0),
+      missingCostRevenue: timeline.reduce((sum, row) => sum + row.missingCostRevenue, 0),
+      returnedQuantity: timeline.reduce((sum, row) => sum + row.returnedQuantity, 0),
+      costMethod: "Giá nhập bình quân từ các phiếu nhập hoàn tất trước ngày bán; hàng trả chỉ hoàn lại giá vốn nếu được nhập lại kho.",
+      timeline,
+    };
+  }
+
   async report(query: Record<string, string>) {
     const from = parseReportDate(query.from, new Date(Date.now() - 30 * 86400000), "start");
     const to = parseReportDate(query.to, new Date(), "end");
     const orderWhere = { placedAt: { gte: from, lte: to }, status: { not: "CANCELLED" as const } };
-    const [orderStats, customerCount, newCustomers, productCount, productsSold, cashStats, refundStats, returnedGoodsStats, codUnreconciledStats, codRemittanceStats, timeline, categories, products, payments, salesChannels, promotionPerformance, topOrders] = await Promise.all([
+    const [orderStats, customerCount, newCustomers, productCount, productsSold, cashStats, refundStats, returnedGoodsStats, codUnreconciledStats, codRemittanceStats, timeline, categories, products, payments, salesChannels, promotionPerformance, topOrders, buyerGroups, orderStatusGroups, lifetimeValue] = await Promise.all([
       this.prisma.order.aggregate({ where: orderWhere, _sum: { totalAmount: true }, _count: { _all: true } }),
       this.prisma.customer.count({ where: { createdAt: { lte: to } } }),
       this.prisma.customer.count({ where: { createdAt: { gte: from, lte: to } } }),
@@ -4392,6 +4500,42 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         ORDER BY o.total_amount DESC, o.placed_at DESC
         LIMIT 5
       `,
+      this.prisma.$queryRaw<Array<{ firstTime: bigint; returning: bigint }>>`
+        WITH eligible_orders AS (
+          SELECT o.placed_at,
+                 COALESCE(o.customer_id::text,
+                   NULLIF(LOWER(BTRIM(o.customer_email)), ''),
+                   NULLIF(REGEXP_REPLACE(COALESCE(o.customer_phone, ''), '[^0-9]', '', 'g'), '')) AS buyer_key
+          FROM orders o
+          WHERE o.placed_at <= ${to} AND o.status::text IN ('PROCESSING','SHIPPING','DELIVERED')
+        ), identified_buyers AS (
+          SELECT buyer_key, MIN(placed_at) AS first_purchase_at,
+                 BOOL_OR(placed_at >= ${from} AND placed_at <= ${to}) AS purchased_in_period
+          FROM eligible_orders WHERE buyer_key IS NOT NULL GROUP BY buyer_key
+        )
+        SELECT COUNT(*) FILTER (WHERE purchased_in_period AND first_purchase_at >= ${from})::bigint AS "firstTime",
+               COUNT(*) FILTER (WHERE purchased_in_period AND first_purchase_at < ${from})::bigint AS returning
+        FROM identified_buyers
+      `,
+      this.prisma.order.groupBy({ by: ["status"], where: { placedAt: { gte: from, lte: to } }, _count: { _all: true } }),
+      this.prisma.$queryRaw<Array<{ buyerCount: bigint; averageLifetimeOrderValue: unknown; averageOrdersPerBuyer: unknown }>>`
+        WITH buyer_orders AS (
+          SELECT COALESCE(o.customer_id::text,
+                   NULLIF(LOWER(BTRIM(o.customer_email)), ''),
+                   NULLIF(REGEXP_REPLACE(COALESCE(o.customer_phone, ''), '[^0-9]', '', 'g'), '')) AS buyer_key,
+                 SUM(o.total_amount)::numeric AS lifetime_order_value,
+                 COUNT(*)::numeric AS order_count
+          FROM orders o
+          WHERE o.placed_at <= ${to} AND o.status::text IN ('PROCESSING','SHIPPING','DELIVERED')
+          GROUP BY 1 HAVING COALESCE(o.customer_id::text,
+                   NULLIF(LOWER(BTRIM(o.customer_email)), ''),
+                   NULLIF(REGEXP_REPLACE(COALESCE(o.customer_phone, ''), '[^0-9]', '', 'g'), '')) IS NOT NULL
+        )
+        SELECT COUNT(*)::bigint AS "buyerCount",
+               ROUND(AVG(lifetime_order_value))::numeric AS "averageLifetimeOrderValue",
+               AVG(order_count)::numeric AS "averageOrdersPerBuyer"
+        FROM buyer_orders
+      `,
     ]);
     const grossOrderValue = Number(orderStats._sum.totalAmount) || 0;
     const capturedPayments = Number(cashStats[0]?.captured) || 0;
@@ -4402,6 +4546,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return {
       from, to, revenue, capturedPayments, refundAmount, grossOrderValue, orderCount, customerCount, newCustomers, productCount,
       returnedGoodsValue: Number(returnedGoodsStats[0]?.returned) || 0,
+      buyerCounts: { firstTime: Number(buyerGroups[0]?.firstTime || 0), returning: Number(buyerGroups[0]?.returning || 0) },
+      lifetimeCustomerValue: {
+        buyers: Number(lifetimeValue[0]?.buyerCount || 0),
+        averageOrderValue: Number(lifetimeValue[0]?.averageLifetimeOrderValue || 0),
+        averageOrders: Number(lifetimeValue[0]?.averageOrdersPerBuyer || 0),
+      },
+      orderStatuses: orderStatusGroups.map((group) => ({ status: group.status, count: group._count._all })),
       codUnreconciled: Number(codUnreconciledStats[0]?.amount) || 0,
       codRemittanceOutstanding: Number(codRemittanceStats[0]?.outstanding) || 0,
       codUnverifiedRemittanceLines: Number(codRemittanceStats[0]?.unverifiedLines) || 0,

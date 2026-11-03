@@ -194,11 +194,18 @@ builder.Services.AddMemoryCache();
 
 var app = builder.Build();
 app.UseSerilogRequestLogging();
-if (app.Environment.IsDevelopment() && configuration.GetValue<bool>("Database:ApplyMigrationsOnStartup"))
+if (configuration.GetValue<bool>("Database:MigrateOnly")
+    || (app.Environment.IsDevelopment() && configuration.GetValue<bool>("Database:ApplyMigrationsOnStartup")))
 {
     await using var scope = app.Services.CreateAsyncScope();
     var db = scope.ServiceProvider.GetRequiredService<AegisDbContext>();
     await db.Database.MigrateAsync();
+    if (configuration.GetValue<bool>("Database:MigrateOnly"))
+    {
+        Log.Information("Aegis database migrations completed.");
+        Log.CloseAndFlush();
+        return;
+    }
 }
 
 if (app.Environment.IsDevelopment())
@@ -220,7 +227,10 @@ app.UseMiddleware<GlobalExceptionMiddleware>();
 if (!app.Environment.IsDevelopment())
 {
     app.UseHsts();
-    app.UseHttpsRedirection();
+    // TLS terminates at Caddy. This service is private to the Docker app
+    // network, so redirecting its internal HTTP health/API traffic would
+    // create an HTTPS redirect loop unless every dynamic Docker proxy IP is
+    // trusted explicitly by ForwardedHeadersOptions.
 }
 
 app.UseRouting();

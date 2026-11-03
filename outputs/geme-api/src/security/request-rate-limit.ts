@@ -17,7 +17,17 @@ export function ratePolicy(request: RateRequest, readLimit = 30_000, writeLimit 
     "/api/v1/account/orders": ["account-order", 600],
     "/api/v1/contact": ["contact", 5],
     "/api/v1/integrations/sepay/webhook": ["sepay-webhook", 1200],
+    "/api/v1/marketing/page-view": ["marketing-page-view", 600],
+    "/api/v1/marketing/signup": ["marketing-signup", 30],
   };
+  if (path.startsWith("/api/v1/admin/gmail/")) {
+    if (read) return { bucket: "gmail-read", limit: 180, read: true };
+    if (path === "/api/v1/admin/gmail/authorize" && method === "POST") return { bucket: "gmail-oauth", limit: 5, read: false };
+    if (path === "/api/v1/admin/gmail/messages/send" && method === "POST") return { bucket: "gmail-send", limit: 12, read: false };
+    if (/^\/api\/v1\/admin\/gmail\/drafts\/[^/]+\/send$/.test(path) && method === "POST") return { bucket: "gmail-send", limit: 12, read: false };
+    return { bucket: "gmail-write", limit: 90, read: false };
+  }
+  if (path === "/api/v1/integrations/gmail/callback") return { bucket: "gmail-oauth-callback", limit: 30, read: true };
   const selected = method === "POST" ? special[path] : undefined;
   return selected ? { bucket: selected[0], limit: selected[1], read: false }
     : { bucket: read ? "read" : "write", limit: read ? readLimit : writeLimit, read };

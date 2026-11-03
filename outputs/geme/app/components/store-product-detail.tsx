@@ -6,6 +6,7 @@ import type { StoreCategory, StoreProduct, StorePromotion } from "../lib/store-a
 import { isStoreMediaProxyUrl, storeMediaDeliveryUrl } from "../lib/store-media";
 import { formatStorePrice } from "../lib/store-format";
 import { formatStorePromotionPeriod, getStoreProductPrice } from "../lib/store-promotion";
+import { trackMarketingCartAdd } from "../lib/marketing-tracking";
 import { useWishlist } from "./wishlist-provider";
 
 type DetailTab = "description" | "reviews";
@@ -206,6 +207,7 @@ export function StoreProductDetail({
     if (existing) existing.quantity = Math.min(stock, Number(existing.quantity) + quantity);
     else cart.push(cartLine);
     sessionStorage.setItem(key, JSON.stringify(cart));
+    void trackMarketingCartAdd();
     window.dispatchEvent(new CustomEvent("geme:cart-updated", { detail: { count: cart.reduce((sum, item) => sum + Number(item.quantity || 0), 0) } }));
     setCartNotice(`${product.name} đã được thêm vào giỏ hàng.`);
   };

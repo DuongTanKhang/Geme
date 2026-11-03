@@ -73,7 +73,7 @@ export class ContactService {
       const current = await tx.contactInquiry.findUnique({ where: { id } });
       if (!current) throw new NotFoundException("Không tìm thấy yêu cầu liên hệ.");
       if (current.status === status) return current;
-      if (current.status === "ARCHIVED") throw new ConflictException("Yêu cầu đã lưu trữ; hãy khôi phục trước khi sửa tiếp.");
+      if (current.status === "ARCHIVED" && status !== "IN_PROGRESS") throw new ConflictException("Yêu cầu đã lưu trữ; hãy khôi phục trước khi sửa tiếp.");
       const saved = await tx.contactInquiry.update({ where: { id }, data: {
         status,
         resolutionNote: note || null,

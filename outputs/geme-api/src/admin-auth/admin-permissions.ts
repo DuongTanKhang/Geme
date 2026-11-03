@@ -20,6 +20,8 @@ export const ADMIN_PERMISSION_CATALOG = [
   "integrations.read", "shipping.read", "shipping.manage",
   "social.read", "social.draft", "social.approve", "social.publish", "social.connect", "social.manage",
   "contacts.read", "contacts.manage",
+  "calendar.read", "calendar.manage",
+  "marketing.read", "marketing.manage",
 ] as const;
 export type AdminPermission = typeof ADMIN_PERMISSION_CATALOG[number];
 export const RequireAdminPermissions = (...permissions: AdminPermission[]) => SetMetadata(ADMIN_PERMISSION_KEY, permissions);
@@ -41,13 +43,17 @@ export const ADMIN_PAGE_ACCESS_CATALOG = [
   { id: "customers", label: "Khách hàng", permissions: ["customers.read", "customers.write"] },
   { id: "loyalty", label: "Điểm thưởng", permissions: ["customers.read", "customers.write"] },
   { id: "contacts", label: "Tin nhắn liên hệ", permissions: ["contacts.read", "contacts.manage"] },
+  { id: "gmail", label: "Gmail", permissions: ["settings.manage"] },
   { id: "promotions", label: "Khuyến mãi", permissions: ["promotions.read", "promotions.write"] },
   { id: "posts", label: "Bài viết / Blog", permissions: ["content.read", "content.write"] },
   { id: "social", label: "Mạng xã hội", permissions: ["social.read", "social.draft", "social.approve", "social.publish", "social.connect"] },
   { id: "shopee", label: "Shopee", permissions: ["integrations.read", "integrations.manage"] },
   { id: "inventory", label: "Quản lý tồn kho", permissions: ["inventory.read", "inventory.write"] },
   { id: "banners", label: "Banner & Footer", permissions: ["settings.manage"] },
-  { id: "reports", label: "Báo cáo", permissions: ["dashboard.read"] },
+  { id: "reports", label: "Báo cáo", permissions: ["dashboard.read", "finance.read", "marketing.read"] },
+  { id: "profit", label: "Lợi nhuận sau giá nhập", permissions: ["finance.read"] },
+  { id: "calendar", label: "Lịch sự kiện", permissions: ["calendar.read", "calendar.manage"] },
+  { id: "marketing", label: "Marketing & phân tích chiến dịch", permissions: ["marketing.read", "marketing.manage"] },
   { id: "settings", label: "Cài đặt", permissions: ["settings.manage"] },
   { id: "access", label: "Vai trò & quyền truy cập", permissions: ["access.manage"] },
 ] as const;

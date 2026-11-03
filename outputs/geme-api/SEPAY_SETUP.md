@@ -20,6 +20,8 @@ For the staging domains, use `https://testadmin.geme.vn/api/v1/integrations/sepa
 
 After a valid full payment, GEME moves the order to **Chờ xác nhận** and queues the existing POS365 order sync. POS365 must be enabled and `POS365_ACCOUNT_ID_BANK_TRANSFER` must identify the payment account to record the transfer there. If POS365 sync is not configured or fails, GEME keeps the bank-confirmed payment and the existing POS sync status/error indicates the follow-up needed.
 
+When `SEPAY_WEBHOOK_ENABLED=true` and `SEPAY_API_TOKEN` is configured, the API also reconciles incoming transactions from `GET /v2/transactions` every five minutes. It uses the single active bank account UUID, stores an API transaction in the same idempotent database queue, and applies exactly the same account, payment-code, order-state, 15-minute QR window, and exact-amount checks as a signed webhook. A Redis cursor resumes backlogs after restarts; a pass handles at most 1,000 transactions and continues on the next poll. The initial scan covers the last seven days. Transactions that fail matching or amount checks go to **Cần kiểm tra** and do not mark an order paid. Redis must be available for the distributed poll lock and durable cursor.
+
 ## Environment
 
 Set these only on the API environment, never in browser code or committed files:
@@ -44,7 +46,7 @@ Keep `SEPAY_WEBHOOK_ENABLED=false` until the webhook secret and receiving-accoun
 3. Create a webhook for incoming transfers and select the linked GEME bank accounts. Set the URL above, enable the payment-code prefix filter for `GEME` (and “only send when payment code is present” if shown), choose JSON, and select **HMAC-SHA256**. Generate a secret and copy it directly into the API environment.
 4. Create an API Token in SePay → Company Settings → API Access, then set `SEPAY_API_TOKEN` and `SEPAY_API_BASE_URL` on the API (not in Admin). The token currently has full API access. Deploy the API and migration, set the webhook HMAC secret, then enable the webhook and send a small test transfer. Verify the SePay event is applied and the order advances to **Chờ xác nhận**; separately verify POS365 records the paid amount.
 
-SePay's webhook docs recommend a periodic API reconciliation because events can be missed during long outages. This implementation deduplicates and retries events that reach GEME, but it does not yet poll SePay's transaction API to recover a webhook that was never delivered. Keep SePay's webhook retry enabled and reconcile the bank/SePay transaction list during operations until that API backfill is added.
+The webhook remains the real-time path; periodic transaction-API reconciliation recovers missed webhook deliveries. Keep SePay webhook retries enabled as a second delivery mechanism and review any transactions surfaced in **Cần kiểm tra** rather than manually marking them paid.
 
 ## Official references
 

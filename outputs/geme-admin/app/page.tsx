@@ -11,6 +11,7 @@ export default async function Home() {
   const apiBase = (process.env.GEME_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:4000/api/v1").replace(/\/+$/, "");
   let initialPermissions: string[] | undefined;
   let initialRole: string | undefined;
+  let initialAdminId: string | undefined;
   try {
     const response = await fetch(`${apiBase}/admin/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -21,6 +22,7 @@ export default async function Home() {
     if (response.ok) {
       const identity: unknown = await response.json();
       if (identity && typeof identity === "object") {
+        if ("id" in identity && typeof identity.id === "string") initialAdminId = identity.id;
         if ("role" in identity && typeof identity.role === "string") initialRole = identity.role;
         if ("permissions" in identity && Array.isArray(identity.permissions)) {
           initialPermissions = identity.permissions.filter((permission): permission is string => typeof permission === "string");
@@ -33,5 +35,5 @@ export default async function Home() {
     // requests remain protected server-side and show the existing offline state.
   }
 
-  return <AdminShell initialPermissions={initialPermissions} initialRole={initialRole} />;
+  return <AdminShell initialPermissions={initialPermissions} initialRole={initialRole} initialAdminId={initialAdminId} />;
 }

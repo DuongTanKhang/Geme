@@ -6,6 +6,7 @@ import type { StoreProduct } from "../lib/store-api";
 import type { StorePromotion } from "../lib/store-api";
 import { formatStorePrice } from "../lib/store-format";
 import { formatStorePromotionPeriod, getStoreProductPrice } from "../lib/store-promotion";
+import { trackMarketingCartAdd } from "../lib/marketing-tracking";
 import { useWishlist } from "./wishlist-provider";
 import ViewportVideo from "./viewport-video";
 import { isStoreMediaProxyUrl, storeMediaDeliveryUrl } from "../lib/store-media";
@@ -102,6 +103,7 @@ export function StoreProductCard({ product, promotions, compact = false, priorit
     }
     cart.push(line);
     sessionStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
+    void trackMarketingCartAdd();
     window.dispatchEvent(new CustomEvent("geme:cart-updated", { detail: { count: cart.reduce((sum, item) => sum + Number(item.quantity || 0), 0) } }));
     setIsInCart(true);
     setCartPickerOpen(false);

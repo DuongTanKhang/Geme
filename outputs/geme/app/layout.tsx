@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { CatalogLiveSync } from "./components/catalog-live-sync";
 import { StructuredData } from "./components/structured-data";
 import { WishlistProvider } from "./components/wishlist-provider";
+import { MarketingTracker } from "./components/marketing-tracker";
 import { absoluteSiteUrl, getPublicSiteUrl } from "./lib/seo";
 import "./globals.css";
 
@@ -28,6 +29,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
       <body>
         <StructuredData value={organization} />
         <CatalogLiveSync />
+        <MarketingTracker />
         <WishlistProvider>{children}</WishlistProvider>
       </body>
     </html>
