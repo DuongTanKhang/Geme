@@ -44,6 +44,7 @@ const tabs: { key: PanelTab; label: string }[] = [
 
 export const DEFAULT_CATEGORIES: AdminCategory[] = [
   { id: "CAT001", name: "Trang sức", slug: "trang-suc", products: 0, status: "Hoạt động", kind: "Trang sức", level: 1, sortOrder: "1", description: "Các thiết kế trang sức GEME chế tác từ đá quý tự nhiên." },
+  { id: "CAT036", name: "Vật Phẩm", slug: "vat-pham", products: 0, status: "Hoạt động", kind: "Khác", level: 1, sortOrder: "2", description: "Các vật phẩm GEME ngoài danh mục trang sức và đá quý." },
   { id: "CAT002", name: "Nhẫn", slug: "nhan", products: 0, status: "Hoạt động", kind: "Trang sức", level: 2, parentId: "CAT001", pricingMode: "FIXED", sortOrder: "1.1" },
   { id: "CAT003", name: "Vòng tay", slug: "vong-tay", products: 0, status: "Hoạt động", kind: "Trang sức", level: 2, parentId: "CAT001", pricingMode: "FIXED", sortOrder: "1.2" },
   { id: "CAT004", name: "Dây chuyền", slug: "day-chuyen", products: 0, status: "Hoạt động", kind: "Trang sức", level: 2, parentId: "CAT001", pricingMode: "FIXED", sortOrder: "1.3" },
@@ -59,11 +60,11 @@ export const DEFAULT_CATEGORIES: AdminCategory[] = [
   { id: "CAT035", name: "Vòng chuỗi hạt", slug: "vong-chuoi-hat", products: 0, status: "Hoạt động", kind: "Trang sức", level: 3, usage: "product", parentId: "CAT003", pricingMode: "QUALITY_AND_BEAD_SIZE", sortOrder: "1.2.3" },
   { id: "CAT016", name: "Kiềng đá", slug: "kieng-da", products: 0, status: "Hoạt động", kind: "Trang sức", level: 3, usage: "product", parentId: "CAT003", pricingMode: "QUALITY", sortOrder: "1.2.4" },
   { id: "CAT025", name: "Vòng tay bạc", slug: "vong-tay-bac", products: 0, status: "Hoạt động", kind: "Trang sức", level: 3, usage: "product", parentId: "CAT003", pricingMode: "FIXED", sortOrder: "1.2.5" },
-  { id: "CAT013", name: "Đá quý", slug: "da-quy", products: 0, status: "Hoạt động", kind: "Đá quý", level: 1, sortOrder: "2", description: "Các mặt đá quý tự nhiên được tuyển chọn tại GEME." },
+  { id: "CAT013", name: "Đá quý", slug: "da-quy", products: 0, status: "Hoạt động", kind: "Đá quý", level: 1, sortOrder: "3", description: "Các mặt đá quý tự nhiên được tuyển chọn tại GEME." },
   { id: "CAT018", name: "Mặt đá quý", slug: "mat-da", products: 0, status: "Hoạt động", kind: "Đá quý", level: 2, usage: "product", parentId: "CAT013", pricingMode: "QUALITY", sortOrder: "2.1" },
-  { id: "CAT022", name: "Khác", slug: "khac", products: 0, status: "Hoạt động", kind: "Khác", level: 1, sortOrder: "3" },
-  { id: "CAT023", name: "New Arrival", slug: "new-arrival", products: 0, status: "Hoạt động", kind: "Khác", level: 2, parentId: "CAT022", sortOrder: "3.1", isHot: true },
-  { id: "CAT024", name: "Quà tặng", slug: "qua-tang", products: 0, status: "Hoạt động", kind: "Khác", level: 2, parentId: "CAT022", sortOrder: "3.2" },
+  { id: "CAT022", name: "Khác", slug: "khac", products: 0, status: "Hoạt động", kind: "Khác", level: 1, sortOrder: "4" },
+  { id: "CAT023", name: "New Arrival", slug: "new-arrival", products: 0, status: "Hoạt động", kind: "Khác", level: 2, parentId: "CAT022", sortOrder: "4.1", isHot: true },
+  { id: "CAT024", name: "Quà tặng", slug: "qua-tang", products: 0, status: "Hoạt động", kind: "Khác", level: 2, parentId: "CAT022", sortOrder: "4.2" },
 ];
 
 const iconPaths: Record<string, string> = {
@@ -224,7 +225,7 @@ export default function CategoriesWorkspace({ categories, onSave, onDelete, onNo
       onNotify("Danh mục đã ở cấp sâu nhất cho nhóm này.");
       return;
     }
-    const requestsJewelry = !parent && kindFilter !== "Đá quý";
+    const requestsJewelry = !parent && (kindFilter === "Tất cả" || kindFilter === "Trang sức");
     const defaultJewelryRoot = requestsJewelry
       ? categories.find((item) => item.kind === "Trang sức" && categoryLevel(item) === 1 && item.slug === "trang-suc" && item.status === "Hoạt động")
       : undefined;
@@ -240,12 +241,12 @@ export default function CategoriesWorkspace({ categories, onSave, onDelete, onNo
       slug: "",
       products: 0,
       status: "Hoạt động",
-      kind: effectiveParent?.kind ?? (kindFilter === "Đá quý" ? "Đá quý" : "Trang sức"),
+      kind: effectiveParent?.kind ?? (kindFilter === "Đá quý" ? "Đá quý" : kindFilter === "Khác" ? "Khác" : "Trang sức"),
       usage: effectiveParent ? "product" : undefined,
       level,
       parentId: effectiveParent?.id,
       description: "",
-      sortOrder: effectiveParent ? `${effectiveParent.sortOrder}.1` : "1",
+      sortOrder: effectiveParent ? `${effectiveParent.sortOrder}.1` : String(Math.max(0, ...categories.filter((item) => !item.parentId).map((item) => Number(item.sortOrder) || 0)) + 1),
       pricingMode: !effectiveParent ? "FIXED" : effectiveParent.kind === "Đá quý" ? "GEMSTONE_SIZE" : effectiveParent.slug === "vong-tay" ? "QUALITY_AND_BEAD_SIZE" : "FIXED",
       isHot: false,
     };

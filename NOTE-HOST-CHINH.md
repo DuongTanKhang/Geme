@@ -10,7 +10,8 @@ Theo yêu cầu chủ dự án: luôn sao lưu bản cũ trước khi cập nh�
 2. Nếu có migration hoặc thao tác thay đổi dữ liệu: backup database liên quan, kiểm tra bản backup và kế hoạch rollback dữ liệu trước khi chạy. Không reset DB, không chạy seed lại trong một đợt cập nhật thông thường.
 3. Build và kiểm tra trước khi thay container; giữ bản cũ phục vụ trong lúc build. Chuẩn bị sẵn lệnh/script rollback source + cấu hình + image cũ.
 4. Sau cập nhật, kiểm tra health, API, trang web và chức năng bị ảnh hưởng. Nếu lỗi nghiêm trọng, phục hồi bản cũ rồi kiểm tra lại; không báo triển khai thành công khi chưa xác minh.
-5. Ghi lại thời gian, phạm vi, thư mục backup, phiên bản image, kiểm tra và kết quả trong biên bản release. Không xóa bản rollback trong lúc chủ dự án đang test. Chỉ commit sau khi chủ dự án xác nhận test đạt nếu đang theo quy trình test trước, commit sau.
+5. Quy tắc lưu backup host test: mỗi lần triển khai, tạo một thư mục backup mới có timestamp/release ID, xác minh đủ source/config cần khôi phục, image rollback và script rollback; sau khi backup mới đã xác minh thì xóa các thư mục backup cũ và tag image rollback cũ, chỉ giữ lại backup mới nhất. Thực hiện trước khi thay container để nếu deploy lỗi vẫn có đúng snapshot trước triển khai để quay lui. Không xóa backup mới nhất trong lúc chủ dự án đang test.
+6. Ghi lại thời gian, phạm vi, thư mục backup, phiên bản image, kiểm tra và kết quả trong biên bản release. Chỉ commit sau khi chủ dự án xác nhận test đạt nếu đang theo quy trình test trước, commit sau.
 
 ## Code đã chuẩn bị để đi theo build
 
@@ -220,3 +221,66 @@ Theo yêu cầu chủ dự án: luôn sao lưu bản cũ trước khi cập nh�
 - Backup local trước sửa: `outputs/backups/sales-channel-pie-20261103-1450-local/` (source hai file trước sửa, compose, trạng thái container, image rollback `geme-local-admin:rollback-sales-channel-pie-20261103-1450`, script quay lui `rollback.ps1`).
 - Backup staging trước deploy: `/opt/geme-staging/backups/sales-channel-pie-20261103-1505/`; archive `source-config.tar.gz` đã kiểm tra checksum. Image cũ `geme-staging-admin:rollback-sales-channel-pie-20261103-1505`; script rollback `bash /opt/geme-staging/releases/sales-channel-pie-20261103-1505/rollback.sh`. Cấu hình `.env` chỉ được lưu trên VPS trong thư mục hạn chế quyền.
 - Chưa kiểm tra trực quan sau đăng nhập bằng phiên Admin thật; đã xác minh build, health, endpoint công khai và hash source. Không cập nhật production, không commit/push.
+
+## VietMap keys on staging Admin — 03/11/2026
+
+- Release `vietmap-dual-key-20261103-100541` cập nhật Admin lên `testadmin.geme.vn`; UI map dùng Tilemap key, VietMap API key giữ server-side. Không đổi API, database hay chạy migration.
+- Trước khi thay container, đã lưu cấu hình/source cũ tại `/opt/geme-staging/backups/vietmap-dual-key-20261103-100541/`, image cũ `geme-staging-admin:rollback-vietmap-dual-key-20261103-100541` và script rollback `/opt/geme-staging/releases/vietmap-dual-key-20261103-100541/rollback.sh`. Thư mục backup/rollback có quyền hạn chế; `.env` backup mode 600.
+- Build Admin thành công. Health: Admin container healthy; map config endpoint HTTP 200, hai key được nhận diện, API key riêng tư không xuất hiện trong JSON. Admin login, API readiness và Storefront trả HTTP 200. Tilemap style đã kiểm tra trả HTTP 200 khi gửi referrer testadmin.
+- Các dịch vụ Search/Route chưa được gọi từ map quản lý giao hàng ở release này; phần giao diện map hiện chỉ sử dụng Tilemap. Không commit/push.
+
+## Storefront host test — khôi phục tìm kiếm và sửa đường dẫn blog — 04/11/2026
+
+- Đối chiếu local với source staging: API tìm kiếm và CSS gợi ý đã có trên host, nhưng `site-header.tsx` staging chỉ là ô nhập tĩnh. Local có component tìm kiếm hoạt động: gợi ý theo tên/SKU, mở sản phẩm, Enter chuyển tới trang kết quả; component này đã được triển khai sang Storefront `test.geme.vn`.
+- Sửa lỗi blog local tại `outputs/geme/app/blog/[slug]/page.tsx`: trang đọc CSP nonce theo request nhưng cấu hình ISR `revalidate = 5` xung đột với render header động, dẫn đến `DYNAMIC_SERVER_USAGE` và HTTP 500. Chuyển trang bài viết sang `dynamic = "force-dynamic"`; cache ngắn của lời gọi API bài viết vẫn giữ nguyên.
+- Đã build production Storefront trên VPS thành công và chỉ recreate container Storefront. Admin, API, Aegis, database, Redis và Caddy không bị thay đổi; không migration/seed hoặc sửa dữ liệu.
+- Backup trước deploy blog: `/opt/geme-staging/backups/blog-article-20261104T1416Z/`; image cũ `geme-staging-storefront:rollback-blog-article-20261104T1416Z`; rollback `bash /opt/geme-staging/backups/blog-article-20261104T1416Z/rollback.sh`.
+- Backup trước deploy thanh tìm kiếm: `/opt/geme-staging/backups/search-ui-20261104T1430Z/`; image cũ `geme-staging-storefront:rollback-search-ui-20261104T1430Z`; rollback `bash /opt/geme-staging/backups/search-ui-20261104T1430Z/rollback.sh`. `.env` được sao lưu trên VPS với mode 600; thư mục backup mode 700. Giữ hai bản sao lưu/image này trong thời gian kiểm thử.
+- Xác minh staging: Storefront healthy; `/blog` và cả 7/7 bài viết trả HTTP 200; API tìm `NSSREM110` trả đúng SKU + tên “Nhẫn điểm nhấn sắc xanh”; API tìm `Topaz` trả sản phẩm; `/san-pham?search=NSSREM110` trả 200 và có SKU/tên mong đợi. SHA256 component local khớp source staging (`ffa297b9cf4eae9ba9c9c71b0bb547626a0cdd3c0b62919ee4820678144b172f`). Log Storefront 10 phút gần nhất không có `DYNAMIC_SERVER_USAGE` hoặc lỗi máy chủ.
+- Docker báo thiếu buildx plugin nên dùng builder mặc định; build vẫn hoàn thành thành công. Chưa chạy unit/E2E hoặc kiểm thử trình duyệt tương tác sau đăng nhập; chưa commit/push hay deploy production.
+
+## Storefront host test — breakpoint menu và cân bằng banner mobile — 04/11/2026
+
+- Sửa breakpoint menu gập: hamburger xuất hiện khi viewport từ 1200px trở xuống để tránh menu desktop bị chật khi thu nhỏ cửa sổ PC; panel menu có cuộn riêng. Trên điện thoại giữ nguyên hành vi hiện có.
+- Cố định chiều cao vùng chữ banner collection trên mobile (tiêu đề, mô tả, điều khiển slide) để tiêu đề 1 dòng/2 dòng không làm ảnh của slide kế tiếp bắt đầu ở vị trí khác nhau.
+- Trước khi cập nhật staging, đã sao lưu source, Compose, `.env` và image Storefront cũ tại `/opt/geme-staging/backups/header-menu-hero-20261104T1506Z/`; checksum backup đã xác minh. Image quay lui: `geme-staging-storefront:rollback-header-menu-hero-20261104T1506Z`; rollback: `bash /opt/geme-staging/backups/header-menu-hero-20261104T1506Z/rollback.sh`.
+- Chỉ cập nhật và recreate container Storefront; không thay đổi Admin, API, Aegis, database, Redis hay Caddy. Storefront staging báo healthy; `https://test.geme.vn/` và `/san-pham` đều HTTP 200. Build production Next.js thành công, TypeScript và tạo 45 trang hoàn tất. Thiếu Docker Buildx trên VPS nhưng builder mặc định build thành công.
+- Bản local source đã được cập nhật và production build đã chạy thành công. Chưa thể recreate container local vì Docker Desktop daemon hiện không chạy; chưa chạy unit/E2E hoặc kiểm tra trực quan trình duyệt sau deploy. Không cập nhật production, không commit/push.
+
+## Storefront host test — đồng nhất header trang chủ và trang sản phẩm — 04/11/2026
+
+- Thực tế tại 1085px, trang chủ có CSS riêng đặt chiều rộng `.header-main` khác với trang còn lại. Đã bỏ các ghi đè chiều rộng riêng ở trang chủ để mọi page dùng cùng lề và kích thước header.
+- Menu link hiển thị trực tiếp ở 1024–1200px (bao gồm viewport 1085px) với khoảng cách/font gọn hơn. Hamburger chỉ dùng ở 761–1023px; mobile giữ breakpoint và bố cục chung.
+- Build production local và staging thành công. Đã cập nhật riêng Storefront trên `test.geme.vn`; container healthy, trang chủ `/` và trang Trang sức `/san-pham` đều HTTP 200. Hash source trên VPS trùng với local.
+- Backup release tại `/opt/geme-staging/backups/header-responsive-20261104T1542Z/`, gồm source, Compose, `.env` và image cũ. Checksum và script rollback đã xác minh. Rollback: `bash /opt/geme-staging/backups/header-responsive-20261104T1542Z/rollback.sh`.
+- Docker Desktop local vẫn không chạy nên chưa recreate container local; source local đã sửa và production build pass. Chưa kiểm tra trực quan trình duyệt ở đúng viewport 1085×698, chưa commit/push hay cập nhật production.
+
+## Storefront host test — đồng nhất header trang chủ với Trang sức trên desktop và mobile — 04/11/2026
+
+- Chẩn đoán lý do lần sửa trước chưa đổi giao diện: cả hai trang dùng chung `SiteHeader`, nhưng CSS di sản của trang chủ còn selector có độ ưu tiên cao đặt `zoom`/chiều rộng cho header và `translateX` cho nội dung. Các reset CSS phía sau có độ ưu tiên thấp hơn nên không thắng cascade.
+- Đã sao lưu source local trước sửa tại `outputs/backups/home-header-parity-20261104/` (SHA256 `globals.css`: `05efb3bc6cc481bf0ae15937a5cf532c0a5b7d153a923ef74455bcc6ec12e9a3`; `site-header.tsx`: `5976a7e1118814b51b3ca787e1a9680650f97b7ed4c97a866d156af84c868017`).
+- Đã bỏ các override zoom/lệch ngang cũ trên trang chủ; giữ nguyên breakpoint và style chung của SiteHeader. Bản local production build pass khi đặt `GEME_SITE_URL=https://geme.vn`; TypeScript và 45 route hoàn tất.
+- Đã sao lưu staging trước deploy tại `/opt/geme-staging/backups/home-header-parity-20261104T160557Z/` (source, Compose, `.env`, checksum); image cũ `geme-staging-storefront:rollback-home-header-parity-20261104T160557Z`; rollback: `bash /opt/geme-staging/backups/home-header-parity-20261104T160557Z/rollback.sh`.
+- Đã chép CSS mới và build/recreate riêng Storefront. Build Next.js/TypeScript và 45 route thành công; Admin, API, Aegis, database, Redis, Caddy không bị thay đổi.
+- Staging Storefront healthy; `/` và `/san-pham` trả HTTP 200. SHA256 CSS local/host giống nhau: `8e41bfe0a548e12f46ae3bfc51945a47db305a00f6d7f558d4c5d9d55c564735`; log khởi động không có lỗi.
+- Không thể mở trình duyệt host để kiểm tra trực quan do chính sách browser chặn quyền truy cập origin. Docker Desktop local đang tắt nên source và production build local đã cập nhật, nhưng container local chưa được recreate. Không cập nhật production, không commit/push.
+
+## Storefront — nút Zalo/Facebook trên trang Liên hệ — local + staging — 04/11/2026
+
+- Trang Liên hệ hiển thị nút Zalo từ số điện thoại Cài đặt; chuẩn hóa số VN dạng `+84` về `0` trước khi tạo `https://zalo.me/<số>`.
+- Nút Facebook ưu tiên Messenger link của Facebook Page đang được chọn trong Social/Méta; API công khai chỉ trả URL `m.me`, không xuất access token. Nếu chưa có Page được chọn thì có thể dùng link Facebook trong Banner & Footer làm dự phòng.
+- Source local đã cập nhật; API TypeScript và Storefront production build đều thành công. Docker Desktop local không chạy nên container local chưa được recreate.
+- Staging `test.geme.vn`: đã backup trước deploy tại `/opt/geme-staging/backups/contact-social-meta-20261104T234500Z/` (source/config trước cập nhật, `.env` mode 600, image API/Storefront cũ). Rollback bằng `bash /opt/geme-staging/backups/contact-social-meta-20261104T234500Z/rollback.sh`.
+- Đã build/recreate riêng API và Storefront. API + Storefront healthy; `/lien-he`, `/`, và API readiness đều HTTP 200. Public settings hiện có số điện thoại nhưng staging chưa có Facebook Page Meta được chọn, nên tại thời điểm kiểm tra chỉ hiện link Zalo; nút Facebook sẽ bật khi liên kết/chọn Page hoặc cấu hình link dự phòng.
+- Không đổi schema/database hoặc chạy migration. Chưa kiểm tra trực quan bằng trình duyệt; không deploy production, không commit/push.
+- Tiếp tục ý tưởng “AI sale ảo có thể huấn luyện” vào [NOTE-AI.md](NOTE-AI.md) để xem xét sau.
+
+## Đồng bộ local và staging bản mới nhất — 05/11/2026
+
+- Đối chiếu 22 file runtime/Compose giữa source local và `/opt/geme-staging`; tất cả giống hệt nhau. Không chép đè source đang làm dở, không sửa dữ liệu hoặc schema. Prisma trước cập nhật báo 70 migration và schema up to date.
+- Local Docker: chỉ khởi động/recreate `geme-api`, `admin`, `storefront`; giữ nguyên trạng thái các worker. Cả ba container healthy; Storefront `/` và `/lien-he`, Admin `/login`, API `/api/v1/health/ready` đều HTTP 200.
+- Staging: build và recreate riêng `api`, `admin`, `storefront`; API, Admin, Storefront đều healthy. `testadmin.geme.vn/login`, API readiness, `test.geme.vn/` và `/lien-he` đều HTTP 200. Không thay DB/Postgres/Redis/SQL Server, Aegis, Caddy hoặc workers; không chạy migration.
+- Backup local trước cập nhật: `outputs/backups/sync-latest-20261105-1324-local/` (snapshot source/Compose, manifest; secrets `.env.docker` không được chép). Image rollback tags: `geme-local-geme-api:rollback-sync-latest-20261105-1324`, `geme-local-admin:rollback-sync-latest-20261105-1324`, `geme-local-storefront:rollback-sync-latest-20261105-1324`.
+- Backup staging trước cập nhật: `/opt/geme-staging/backups/sync-latest-20261105-1329/` (source archive, Compose, `.env.before` mode 600, SHA256 và manifest). Rollback bằng `bash /opt/geme-staging/backups/sync-latest-20261105-1329/rollback.sh`; script tag lại image cũ và recreate riêng ba dịch vụ đã triển khai.
+- Build staging thành công; Docker phát cảnh báo môi trường không có buildx (đã dùng builder mặc định) và cảnh báo hiện hữu về `AEGIS_AUTH_API_URL` truyền qua Docker ARG/ENV. Hai cảnh báo không làm build thất bại; nên chuyển cấu hình nhạy cảm khỏi ARG/ENV trong đợt hardening riêng.
+- Chưa kiểm tra trực quan bằng đăng nhập admin hoặc giao dịch thực; đây là đồng bộ source/runtime và smoke HTTP trên staging test, không phải production. Không commit/push.

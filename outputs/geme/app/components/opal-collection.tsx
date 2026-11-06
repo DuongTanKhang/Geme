@@ -159,6 +159,10 @@ export function OpalCollection({ products, categories, materials, connected, pro
     }
     return [root.id, found];
   })), [categories]);
+  const sizeScopeTypes = filtersOpen ? draftTypes : selectedTypes;
+  const sizeScopedProducts = useMemo(() => sizeScopeTypes.length
+    ? products.filter((product) => sizeScopeTypes.some((categoryId) => categoryDescendants.get(categoryId)?.has(product.categoryId || "")))
+    : [], [products, categoryDescendants, sizeScopeTypes]);
   const categoryOptions = useMemo(() => {
     const ids = new Set(enabledCategories.map((category) => category.id));
     const visited = new Set<string>();
@@ -189,26 +193,37 @@ export function OpalCollection({ products, categories, materials, connected, pro
   }, [enabledStones, products, categoryDescendants, stoneScopeTypes]);
   const availableStones = useMemo(() => enabledStones.filter((stone) => (stoneCounts.get(stone.slug) || 0) > 0), [enabledStones, stoneCounts]);
   const sizeOptions = useMemo(() => {
-    const sizes = new Set(products.flatMap((product) => product.variants.map((variant) => variant.beadSize).filter((size): size is string => Boolean(size?.trim()))));
-    return [...sizes].sort((a, b) => a.localeCompare(b, "vi", { numeric: true })).map((size) => ({ size, count: products.filter((product) => product.variants.some((variant) => variant.beadSize === size)).length }));
-  }, [products]);
+    const sizes = new Set(sizeScopedProducts.flatMap((product) => product.variants.map((variant) => variant.beadSize).filter((size): size is string => Boolean(size?.trim()))));
+    return [...sizes].sort((a, b) => a.localeCompare(b, "vi", { numeric: true })).map((size) => ({ size, count: sizeScopedProducts.filter((product) => product.variants.some((variant) => variant.beadSize === size)).length }));
+  }, [sizeScopedProducts]);
+  useEffect(() => {
+    const available = new Set(sizeOptions.map(({ size }) => size));
+    if (filtersOpen) setDraftSizes((current) => current.filter((size) => available.has(size)));
+    else setSelectedSizes((current) => current.filter((size) => available.has(size)));
+  }, [filtersOpen, sizeOptions]);
+  const selectedSizeSet = useMemo(() => new Set(selectedTypes.length
+    ? products
+      .filter((product) => selectedTypes.some((categoryId) => categoryDescendants.get(categoryId)?.has(product.categoryId || "")))
+      .flatMap((product) => product.variants.map((variant) => variant.beadSize).filter((size): size is string => Boolean(size?.trim())))
+    : []), [products, selectedTypes, categoryDescendants]);
+  const appliedSizes = useMemo(() => selectedTypes.length ? selectedSizes.filter((size) => selectedSizeSet.has(size)) : [], [selectedTypes.length, selectedSizes, selectedSizeSet]);
   const filteredProducts = useMemo(() => {
     const normalizedSearch = search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").trim();
     const filtered = products.filter((product) => {
       const matchesType = selectedTypes.length === 0 || selectedTypes.some((categoryId) => categoryDescendants.get(categoryId)?.has(product.categoryId || ""));
       const productStones = [product.materialOption?.slug, product.gemstoneType?.slug].filter(Boolean);
       const matchesStone = selectedStones.length === 0 || selectedStones.some((slug) => productStones.includes(slug));
-      const matchesSize = selectedSizes.length === 0 || product.variants.some((variant) => selectedSizes.includes(variant.beadSize || ""));
+      const matchesSize = appliedSizes.length === 0 || product.variants.some((variant) => appliedSizes.includes(variant.beadSize || ""));
       const matchesPrice = !priceRange || (!product.isPremiumGemstone && (priceRange === "under2" ? product.price < 2_000_000 : priceRange === "2to5" ? product.price >= 2_000_000 && product.price <= 5_000_000 : priceRange === "5to10" ? product.price > 5_000_000 && product.price <= 10_000_000 : product.price > 10_000_000));
       const searchable = `${product.name} ${product.sku} ${product.variants.map((variant) => variant.sku || "").join(" ")}`.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi");
       const matchesSearch = !normalizedSearch || searchable.includes(normalizedSearch);
       return matchesType && matchesStone && matchesSize && matchesPrice && matchesSearch;
     });
     return filtered.sort((a, b) => sort === "price-asc" ? Number(a.isPremiumGemstone) - Number(b.isPremiumGemstone) || a.price - b.price : sort === "price-desc" ? Number(a.isPremiumGemstone) - Number(b.isPremiumGemstone) || b.price - a.price : sort === "best-selling" ? (bestSellerRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (bestSellerRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER) : compareNewestByGemstone(a, b));
-  }, [products, categoryDescendants, selectedTypes, selectedStones, selectedSizes, priceRange, sort, bestSellerRanks, search]);
+  }, [products, categoryDescendants, selectedTypes, selectedStones, appliedSizes, priceRange, sort, bestSellerRanks, search]);
   const visibleProducts = useMemo(() => filteredProducts.slice(0, visibleCount), [filteredProducts, visibleCount]);
 
-  const filterStateKey = JSON.stringify([selectedTypes, selectedStones, selectedSizes, priceRange, sort, search]);
+  const filterStateKey = JSON.stringify([selectedTypes, selectedStones, appliedSizes, priceRange, sort, search]);
   const previousFilterStateKey = useRef(filterStateKey);
   useEffect(() => {
     if (previousFilterStateKey.current === filterStateKey) return;
@@ -228,7 +243,8 @@ export function OpalCollection({ products, categories, materials, connected, pro
   const applyFilters = () => {
     setSelectedTypes(draftTypes);
     setSelectedStones(draftStones);
-    setSelectedSizes(draftSizes);
+    const validSizes = new Set(sizeOptions.map(({ size }) => size));
+    setSelectedSizes(draftTypes.length ? draftSizes.filter((size) => validSizes.has(size)) : []);
     setPriceRange(draftPriceRange);
     setVisibleCount(PRODUCT_BATCH_SIZE);
     setFiltersOpen(false);
@@ -242,7 +258,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
     window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
     setVisibleCount(PRODUCT_BATCH_SIZE);
   };
-  const activeFilterCount = selectedTypes.length + selectedStones.length + selectedSizes.length + Number(Boolean(priceRange)) + Number(Boolean(search));
+  const activeFilterCount = selectedTypes.length + selectedStones.length + appliedSizes.length + Number(Boolean(priceRange)) + Number(Boolean(search));
   const selectedCategoryName = selectedTypes.length === 1 ? categories.find((category) => category.id === selectedTypes[0])?.name || initialCategory : undefined;
   const selectedStoneName = selectedStones.length === 1 ? enabledStones.find((stone) => stone.slug === selectedStones[0])?.name || initialStoneName : undefined;
   const title = search ? `Kết quả tìm kiếm · ${search}` : selectedCategoryName ? selectedCategoryName + (selectedStoneName ? ` · ${selectedStoneName}` : "") : selectedStoneName ? `Trang sức ${selectedStoneName}` : sort === "best-selling" ? "Sản phẩm bán chạy" : "Tất cả sản phẩm";
@@ -299,6 +315,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
         </fieldset>}
         {sizeOptions.length > 0 && <fieldset>
           <legend>Kích thước</legend>
+          <p className="catalog-size-filter-note">Chỉ áp dụng cho sản phẩm có biến thể kích thước trong danh mục đang chọn.</p>
           {sizeOptions.map(({ size, count }) => <label key={size}><input type="checkbox" checked={draftSizes.includes(size)} onChange={() => toggle(size, draftSizes, setDraftSizes)} />{size} <span>({count})</span></label>)}
         </fieldset>}
         <fieldset>

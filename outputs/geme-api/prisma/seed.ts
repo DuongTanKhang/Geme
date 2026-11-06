@@ -11,7 +11,8 @@ const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) })
 async function main() {
   const roots = [
     { id: "00000000-0000-4000-8000-000000000001", name: "Trang sức", slug: "trang-suc", kind: "JEWELRY" as const, sortOrder: 1 },
-    { id: "00000000-0000-4000-8000-000000000002", name: "Đá quý", slug: "da-quy", kind: "GEMSTONE" as const, sortOrder: 2 },
+    { id: "00000000-0000-4000-8000-000000000003", name: "Vật Phẩm", slug: "vat-pham", kind: "OTHER" as const, sortOrder: 2 },
+    { id: "00000000-0000-4000-8000-000000000002", name: "Đá quý", slug: "da-quy", kind: "GEMSTONE" as const, sortOrder: 3 },
   ];
 
   for (const root of roots) {

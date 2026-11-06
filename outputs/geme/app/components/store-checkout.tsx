@@ -6,6 +6,7 @@ import { normalizeApiBaseUrl } from "../lib/api-base";
 import { getVietQrImageUrl, getVietQrTransferInfo, type BankQrSettings } from "../lib/bank-qr";
 import { PaymentCountdown } from "./payment-countdown";
 import { getMarketingSessionId, trackMarketingPageView } from "../lib/marketing-tracking";
+import CheckoutAddressPicker from "./checkout-address-picker";
 
 type CheckoutLine = {
   key: string;
@@ -70,7 +71,8 @@ export function StoreCheckout() {
   const [accountSignedIn, setAccountSignedIn] = useState<boolean | null>(null);
   const [pointsToRedeem, setPointsToRedeem] = useState(0);
   const [paymentMethod, setPaymentMethod] = useState("COD");
-  const [customer, setCustomer] = useState({ name: "", phone: "", email: "", address: "", note: "" });
+  const [customer, setCustomer] = useState({ name: "", phone: "", email: "", address: "", addressDetail: "", note: "" });
+  const [shippingLocation, setShippingLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const customerTouched = useRef(new Set<string>());
 
   useEffect(() => {
@@ -180,6 +182,7 @@ export function StoreCheckout() {
     setError("");
     if (!lines.length) { setError("Giỏ hàng chưa có sản phẩm."); return; }
     if (!activeQuote || quoteLoading) { setError(quoteError || "Đang xác nhận giá và tồn kho. Vui lòng thử lại sau ít giây."); return; }
+    if (!shippingLocation) { setError("Hãy chọn địa chỉ gợi ý của VietMap và xác nhận vị trí giao hàng trên bản đồ."); return; }
     setSubmitting(true);
     try {
       let authenticated = accountSignedIn;
@@ -196,7 +199,9 @@ export function StoreCheckout() {
         customerName: customer.name,
         phone: customer.phone,
         email: customer.email,
-        shippingAddress: customer.address,
+        shippingAddress: [customer.address, customer.addressDetail].filter(Boolean).join(", "),
+        shippingLatitude: shippingLocation.latitude,
+        shippingLongitude: shippingLocation.longitude,
         note: customer.note,
         paymentMethod,
         expectedTotalAmount: activeQuote.totalAmount,
@@ -320,12 +325,18 @@ export function StoreCheckout() {
         </section>}
         <label>Họ và tên<input required value={customer.name} onChange={(event) => { customerTouched.current.add("name"); setCustomer({ ...customer, name: event.target.value }); }} autoComplete="name" /></label>
         <div className="checkout-form-row"><label>Số điện thoại<input required type="tel" value={customer.phone} onChange={(event) => { customerTouched.current.add("phone"); setCustomer({ ...customer, phone: event.target.value }); }} autoComplete="tel" /></label><label>Email<input required type="email" value={customer.email} onChange={(event) => { customerTouched.current.add("email"); setCustomer({ ...customer, email: event.target.value }); }} autoComplete="email" /></label></div>
-        <label>Địa chỉ nhận hàng<textarea required rows={3} value={customer.address} onChange={(event) => { customerTouched.current.add("address"); setCustomer({ ...customer, address: event.target.value }); }} autoComplete="street-address" /></label>
+        <CheckoutAddressPicker
+          value={customer.address}
+          point={shippingLocation}
+          onAddressChange={(address) => { customerTouched.current.add("address"); setCustomer((current) => ({ ...current, address })); }}
+          onPointChange={setShippingLocation}
+        />
+        <label>Số nhà / tầng / căn hộ (không bắt buộc)<input value={customer.addressDetail} onChange={(event) => setCustomer((current) => ({ ...current, addressDetail: event.target.value }))} autoComplete="address-line2" /></label>
         <label>Phương thức thanh toán<select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option value="COD">Thanh toán khi nhận hàng</option><option value="BANK_TRANSFER">Chuyển khoản thủ công</option><option value="BANK_TRANSFER_QR" disabled={!bankQrLoaded || !bankQrReady}>Quét mã QR VietQR · tự điền số tiền{!bankQrReady ? " (chưa cấu hình)" : ""}</option></select></label>
         {paymentMethod === "BANK_TRANSFER_QR" && <p className="checkout-payment-note">QR được tạo riêng theo đúng tổng tiền và mã đơn. GEME sẽ xác nhận sau khi đối soát giao dịch.</p>}
         <label>Ghi chú<textarea rows={2} value={customer.note} onChange={(event) => { customerTouched.current.add("note"); setCustomer({ ...customer, note: event.target.value }); }} /></label>
         {error && <p className="checkout-error" role="alert">{error}</p>}
-        <button className="checkout-submit" type="submit" disabled={submitting || quoteLoading || !activeQuote}>{submitting ? "ĐANG GỬI ĐƠN…" : quoteLoading || !activeQuote ? "ĐANG KIỂM TRA GIÁ…" : `XÁC NHẬN ĐẶT HÀNG · ${formatStorePrice(total)}`}</button>
+        <button className="checkout-submit" type="submit" disabled={submitting || quoteLoading || !activeQuote || !shippingLocation}>{submitting ? "ĐANG GỬI ĐƠN…" : quoteLoading || !activeQuote ? "ĐANG KIỂM TRA GIÁ…" : !shippingLocation ? "CHỌN VỊ TRÍ GIAO HÀNG TRÊN BẢN ĐỒ" : `XÁC NHẬN ĐẶT HÀNG · ${formatStorePrice(total)}`}</button>
       </form>
     </div> : <section className="checkout-empty"><p>Giỏ hàng chưa có sản phẩm.</p><a href="/san-pham">Khám phá sản phẩm</a></section>}
   </main>;

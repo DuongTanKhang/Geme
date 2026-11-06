@@ -59,7 +59,7 @@ export function fromApiProduct(value: Row): AdminProduct {
     jewelryStoneGroupId: value.jewelryStoneGroupId || null,
     jewelryStoneGroup: value.jewelryStoneGroup ? { id: value.jewelryStoneGroup.id, slug: value.jewelryStoneGroup.slug, name: value.jewelryStoneGroup.name, active: value.jewelryStoneGroup.active } : null,
     isPremiumGemstone: value.kind === "GEMSTONE" && Boolean(value.isPremiumGemstone),
-    productType: value.kind === "GEMSTONE" ? "Đá quý" : "Trang sức",
+    productType: value.kind === "GEMSTONE" ? "Đá quý" : value.kind === "OTHER" ? "Vật phẩm" : "Trang sức",
     category: categoryName,
     categoryId: String(value.categoryId || ""),
     materialOptionId: value.materialOptionId || undefined,
@@ -92,10 +92,11 @@ export function fromApiProduct(value: Row): AdminProduct {
 
 export function toApiProduct(value: AdminProduct, publish?: boolean) {
   const gemstone = value.productType === "Đá quý";
+  const accessory = value.productType === "Vật phẩm";
   return {
     sku: value.id,
     name: value.name,
-    kind: gemstone ? "GEMSTONE" : "JEWELRY",
+    kind: gemstone ? "GEMSTONE" : accessory ? "OTHER" : "JEWELRY",
     categoryId: gemstone ? value.gemstoneTypeId || value.categoryId : value.categoryId,
     gemstoneTypeId: gemstone ? value.gemstoneTypeId || value.categoryId : null,
     materialOptionId: value.materialOptionId || null,

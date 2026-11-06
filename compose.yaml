@@ -20,6 +20,8 @@ services:
       GEME_SITE_URL: ${GEME_SITE_URL:-https://geme.vn}
       MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-}
       AEGIS_AUTH_API_URL: http://aegis:5130
+      VIETMAP_API_KEY: ${VIETMAP_API_KEY:-}
+      VIETMAP_TILEMAP_KEY: ${VIETMAP_TILEMAP_KEY:-}
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
@@ -50,6 +52,8 @@ services:
       MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-}
       GEME_STOREFRONT_ASSETS_URL: http://storefront:3000
       AEGIS_AUTH_API_URL: http://aegis:5130
+      VIETMAP_API_KEY: ${VIETMAP_API_KEY:-}
+      VIETMAP_TILEMAP_KEY: ${VIETMAP_TILEMAP_KEY:-}
     ports:
       - "127.0.0.1:3001:3001"
     volumes:

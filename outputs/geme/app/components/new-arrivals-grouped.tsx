@@ -195,7 +195,11 @@ export function NewArrivalsGrouped({ groups, selectedGroup, categories, stoneGro
     startTransition(() => router.push(`${pathname}${query ? `?${query}` : ""}`, { scroll: false }));
   };
 
-  const changeCategory = (id: string) => navigate({ categoryIds: id ? [id] : [] });
+  const changeCategory = (id: string) => navigate({ categoryIds: id ? [id] : [], sizes: [] });
+  const changeDraftCategory = (id: string) => {
+    setDraftCategoryIds((items) => toggleValue(id, items));
+    setDraftSizes([]);
+  };
   const applyFilters = (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
     let minPrice = draftMinPrice.trim() ? Number(draftMinPrice) : null;
@@ -210,7 +214,7 @@ export function NewArrivalsGrouped({ groups, selectedGroup, categories, stoneGro
       return;
     }
     setErrorText("");
-    navigate({ categoryIds: draftCategoryIds, stoneGroupIds: draftStoneGroupIds, sizes: draftSizes, minPrice, maxPrice, search: searchText.trim() });
+    navigate({ categoryIds: draftCategoryIds, stoneGroupIds: draftStoneGroupIds, sizes: draftCategoryIds.length ? draftSizes : [], minPrice, maxPrice, search: searchText.trim() });
     setFiltersOpen(false);
   };
   const clearFilters = () => {
@@ -266,9 +270,10 @@ export function NewArrivalsGrouped({ groups, selectedGroup, categories, stoneGro
           <button type="button" className="new-arrivals-filter-overlay" aria-hidden={!isMobile} tabIndex={isMobile ? 0 : -1} aria-label="Đóng bộ lọc" onClick={() => setFiltersOpen(false)} />
           <form className="new-arrivals-filter-panel" id="new-arrivals-filter-panel" ref={filterPanelRef} role={isMobile ? "dialog" : undefined} aria-modal={isMobile ? true : undefined} aria-labelledby="new-arrivals-filter-title" tabIndex={isMobile ? -1 : undefined} onSubmit={applyFilters}>
             <div className="new-arrivals-filter-header"><h3 id="new-arrivals-filter-title">Bộ lọc</h3><button type="button" aria-label="Đóng bộ lọc" onClick={() => setFiltersOpen(false)}>×</button></div>
-            {categoryOptions.length > 0 && <fieldset><legend>Loại sản phẩm</legend>{categoryOptions.map(({ category, depth, count }) => <label key={category.id} style={{ marginInlineStart: Math.min(depth, 3) * 12 }}><input type="checkbox" checked={draftCategoryIds.includes(category.id)} onChange={() => setDraftCategoryIds((items) => toggleValue(category.id, items))}/>{category.name} <span>({count})</span></label>)}</fieldset>}
+            {categoryOptions.length > 0 && <fieldset><legend>Loại sản phẩm</legend>{categoryOptions.map(({ category, depth, count }) => <label key={category.id} style={{ marginInlineStart: Math.min(depth, 3) * 12 }}><input type="checkbox" checked={draftCategoryIds.includes(category.id)} onChange={() => changeDraftCategory(category.id)}/>{category.name} <span>({count})</span></label>)}</fieldset>}
             {stoneOptions.length > 0 && <fieldset><legend>Loại đá</legend>{stoneOptions.map((stone) => <label key={stone.id}><input type="checkbox" checked={draftStoneGroupIds.includes(stone.id)} onChange={() => setDraftStoneGroupIds((items) => toggleValue(stone.id, items))}/>{stone.name} <span>({stone.count})</span></label>)}</fieldset>}
-            {sizeOptions.length > 0 && <fieldset><legend>Kích thước</legend>{sizeOptions.map(({ size, count }) => <label key={size}><input type="checkbox" checked={draftSizes.includes(size)} onChange={() => setDraftSizes((items) => toggleValue(size, items))}/>{size} <span>({count})</span></label>)}</fieldset>}
+            {sizeOptions.length > 0 && draftCategoryIds.length > 0 && <fieldset><legend>Kích thước</legend><p className="catalog-size-filter-note">Chỉ hiển thị kích thước có biến thể trong danh mục đã chọn.</p>{sizeOptions.map(({ size, count }) => <label key={size}><input type="checkbox" checked={draftSizes.includes(size)} onChange={() => setDraftSizes((items) => toggleValue(size, items))}/>{size} <span>({count})</span></label>)}</fieldset>}
+            {draftCategoryIds.length > 0 && draftCategoryIds.join(",") !== filters.categoryIds.join(",") && <p className="catalog-size-filter-note">Áp dụng danh mục trước để tải các kích thước đang có.</p>}
             <fieldset><legend>Khoảng giá</legend><label><input type="radio" name="new-arrivals-price" checked={!draftPriceRange && draftMinPrice === "" && draftMaxPrice === ""} onChange={() => { setDraftPriceRange(""); setDraftMinPrice(""); setDraftMaxPrice(""); }}/>Tất cả mức giá</label>{priceRanges.map(([value, label]) => <label key={value}><input type="radio" name="new-arrivals-price" checked={draftPriceRange === value} onChange={() => { setDraftPriceRange(value); setDraftMinPrice(""); setDraftMaxPrice(""); }}/>{label}</label>)}<label><input type="radio" name="new-arrivals-price" checked={draftPriceRange === "custom"} onChange={() => setDraftPriceRange("custom")}/>Tùy chỉnh</label><div className="new-arrivals-custom-price"><label>Từ <input type="number" min="0" value={draftMinPrice} onChange={(event) => { setDraftMinPrice(event.target.value); setDraftPriceRange("custom"); }}/></label><label>Đến <input type="number" min="0" value={draftMaxPrice} onChange={(event) => { setDraftMaxPrice(event.target.value); setDraftPriceRange("custom"); }}/></label></div></fieldset>
             <fieldset className="new-arrivals-search-facet"><legend>Tìm sản phẩm</legend><input type="search" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Tên hoặc SKU"/></fieldset>
             <div className="new-arrivals-filter-actions"><button type="button" className="new-arrivals-reset" onClick={clearFilters}>Xóa bộ lọc</button><button type="submit" className="new-arrivals-apply">Áp dụng</button></div>

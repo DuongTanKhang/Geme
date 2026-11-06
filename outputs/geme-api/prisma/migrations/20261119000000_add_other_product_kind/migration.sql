@@ -1,0 +1,1 @@
+ALTER TYPE "product_kind" ADD VALUE IF NOT EXISTS 'OTHER';

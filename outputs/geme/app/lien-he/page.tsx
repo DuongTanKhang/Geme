@@ -24,6 +24,7 @@ function ContactIcon({ name }: { name: ContactIconName }) {
 function SocialIcon({ label }: { label: string }) {
   const common = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true as const };
   const platform = label.toLocaleLowerCase("vi");
+  if (platform.includes("zalo")) return <svg {...common}><path d="M5 4.5h14A2.5 2.5 0 0 1 21.5 7v8a2.5 2.5 0 0 1-2.5 2.5h-7l-5.5 3v-3.2A2.5 2.5 0 0 1 4.5 15V7A2.5 2.5 0 0 1 7 4.5Z" /><path d="M8.5 9h6l-6 4h6" /></svg>;
   if (platform.includes("instagram")) return <svg {...common}><rect x="3.2" y="3.2" width="17.6" height="17.6" rx="5" /><circle cx="12" cy="12" r="4" /><circle cx="17.7" cy="6.5" r=".8" fill="currentColor" stroke="none" /></svg>;
   if (platform.includes("facebook")) return <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.7 21v-8h2.7l.4-3.1h-3.1v-2c0-.9.3-1.5 1.6-1.5H17V3.6c-.3 0-1.3-.1-2.4-.1-2.4 0-4 1.5-4 4.2v2.2H8V13h2.7v8h3Z" /></svg>;
   if (platform.includes("tiktok")) return <svg {...common}><path d="M14 3v11.2a3.8 3.8 0 1 1-3.1-3.7" /><path d="M14 5c1 2.2 2.7 3.5 5 3.8" /></svg>;
@@ -58,6 +59,49 @@ function socialItems(value: unknown) {
   });
 }
 
+function zaloHref(phone: string) {
+  const digits = phone.replace(/\D/g, "");
+  if (!digits) return "";
+  const localNumber = digits.startsWith("84") && digits.length >= 11 ? `0${digits.slice(2)}` : digits;
+  return /^0\d{9,10}$/.test(localNumber) ? `https://zalo.me/${localNumber}` : "";
+}
+
+function facebookMessageHref(socials: Array<{ label: string; href: string }>) {
+  const account = socials.find((item) => /facebook|messenger/i.test(item.label));
+  if (!account) return "";
+  try {
+    const url = new URL(account.href);
+    const host = url.hostname.toLocaleLowerCase("en").replace(/^www\./, "");
+    if (host === "m.me" || host === "fb.me") return url.href;
+    if (host !== "facebook.com" && host !== "fb.com") return "";
+    if (/^\/messages\/t\//i.test(url.pathname)) return url.href;
+    const profileId = url.searchParams.get("id");
+    if (/^\/profile\.php$/i.test(url.pathname) && profileId && /^\d+$/.test(profileId)) return `https://www.facebook.com/messages/t/${profileId}`;
+    const parts = url.pathname.split("/").filter(Boolean);
+    const reserved = new Set(["share", "sharer", "watch", "groups", "events", "login", "business", "help", "marketplace", "gaming", "photo.php", "permalink.php"]);
+    const pageHandle = parts[0]?.toLocaleLowerCase("en") === "pages" ? parts.at(-1) : parts[0];
+    if (!pageHandle || reserved.has(pageHandle.toLocaleLowerCase("en"))) return "";
+    return `https://m.me/${encodeURIComponent(pageHandle)}`;
+  } catch {
+    return "";
+  }
+}
+
+function safeFacebookMessengerHref(value: unknown) {
+  const candidate = displayText(value);
+  if (!candidate) return "";
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== "https:") return "";
+    const host = url.hostname.toLocaleLowerCase("en").replace(/^www\./, "");
+    if ((host === "m.me" || host === "fb.me") && /^\/[A-Za-z0-9._-]{1,100}\/?$/.test(url.pathname)) return url.href;
+    if ((host === "facebook.com" || host === "fb.com") && /^\/messages\/t\/[A-Za-z0-9._-]{1,100}\/?$/i.test(url.pathname)) return url.href;
+    return "";
+  } catch {
+    return "";
+  }
+}
+
 export default async function ContactPage() {
   const { settings } = await getStoreSiteSettings();
   const footer = asRecord(settings.footerContent);
@@ -67,6 +111,9 @@ export default async function ContactPage() {
   const email = displayText(settings.supportEmail ?? footer.email) || "support@geme.vn";
   const supportHours = displayText(settings.openingHours ?? footer.openingHours) || "08:00 - 22:00 (Tất cả các ngày)";
   const socials = socialItems(footer.socialLinks ?? settings.socialLinks);
+  const zaloUrl = zaloHref(phone);
+  const facebookChatUrl = safeFacebookMessengerHref(settings.facebookMessengerUrl) || facebookMessageHref(socials);
+  const otherSocials = socials.filter((item) => !/facebook|messenger/i.test(item.label));
   const heroImage = "/images/home/geme/01-hero-opal.webp";
   const directionsUrl = address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : "";
   const mapEmbedUrl = address ? `https://www.google.com/maps?q=${encodeURIComponent(address)}&output=embed` : "";
@@ -89,7 +136,10 @@ export default async function ContactPage() {
           <article className="contact-detail"><span className="contact-detail-icon"><ContactIcon name="location" /></span><div><h3>Địa chỉ</h3><p>{address || "Địa chỉ cửa hàng chưa được cấu hình."}</p><p className="contact-detail-note">{addressNote || (address ? "Vui lòng liên hệ trước khi ghé thăm." : "Vui lòng xác nhận địa điểm với GEME trước khi ghé thăm.")}</p></div></article>
           <article className="contact-detail"><span className="contact-detail-icon"><ContactIcon name="phone" /></span><div><h3>Điện thoại</h3><p>{phone ? <a href={`tel:${phone.replace(/[^+\d]/g, "")}`}>{phone}</a> : "Số điện thoại chưa được cấu hình."}</p><p className="contact-detail-note">{supportHours}</p></div></article>
           <article className="contact-detail"><span className="contact-detail-icon"><ContactIcon name="mail" /></span><div><h3>Email</h3><p><a href={`mailto:${email}`}>{email}</a></p><p className="contact-detail-note">Phản hồi trong vòng 24h</p></div></article>
-          <article className="contact-detail contact-detail-social"><span className="contact-detail-icon"><ContactIcon name="chat" /></span><div><h3>Mạng xã hội</h3>{socials.length ? <div className="contact-socials">{socials.map((item) => <a href={item.href} aria-label={item.label} key={`${item.label}-${item.href}`} target="_blank" rel="noreferrer"><SocialIcon label={item.label} /></a>)}</div> : <p className="contact-detail-note">Thông tin mạng xã hội chưa được cấu hình.</p>}</div></article>
+          <article className="contact-detail contact-detail-social"><span className="contact-detail-icon"><ContactIcon name="chat" /></span><div><h3>Mạng xã hội</h3><div className="contact-social-actions">
+            {zaloUrl ? <a className="contact-social-action" href={zaloUrl} aria-label="Mở cuộc trò chuyện Zalo với GEME" target="_blank" rel="noopener noreferrer"><SocialIcon label="Zalo" /><span>Zalo</span></a> : <span className="contact-social-action is-disabled" title="Cấu hình số điện thoại trong Cài đặt quản trị để bật Zalo" aria-disabled="true"><SocialIcon label="Zalo" /><span>Zalo</span></span>}
+            {facebookChatUrl ? <a className="contact-social-action" href={facebookChatUrl} aria-label="Nhắn tin cho GEME trên Facebook" target="_blank" rel="noopener noreferrer"><SocialIcon label="Facebook" /><span>Facebook</span></a> : <span className="contact-social-action is-disabled" title="Cấu hình link trang Facebook trong Cài đặt → Banner & Footer để bật Messenger" aria-disabled="true"><SocialIcon label="Facebook" /><span>Facebook</span></span>}
+          </div>{otherSocials.length > 0 && <div className="contact-socials">{otherSocials.map((item) => <a href={item.href} aria-label={item.label} key={`${item.label}-${item.href}`} target="_blank" rel="noopener noreferrer"><SocialIcon label={item.label} /></a>)}</div>}{!zaloUrl || !facebookChatUrl ? <p className="contact-detail-note">{!zaloUrl ? "Cấu hình số điện thoại trong Cài đặt quản trị để bật Zalo. " : ""}{!facebookChatUrl ? "Nhập link trang Facebook trong Cài đặt → Banner & Footer để bật Messenger." : ""}</p> : null}</div></article>
         </div>
       </div>
       <ContactForm supportEmail={email} />

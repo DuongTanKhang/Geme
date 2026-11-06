@@ -102,6 +102,7 @@ enum CustomerStatus {
 
 enum ProductKind {
   JEWELRY
+  OTHER
   GEMSTONE
 
   @@map("product_kind")
@@ -659,6 +660,8 @@ model Order {
   customerEmail   String?         @map("customer_email") @db.VarChar(320)
   customerPhone   String?         @map("customer_phone") @db.VarChar(32)
   shippingAddress String          @map("shipping_address") @db.Text
+  shippingLatitude Float?         @map("shipping_latitude")
+  shippingLongitude Float?        @map("shipping_longitude")
   shippingMethod  String?         @map("shipping_method") @db.VarChar(120)
   trackingCode    String?         @map("tracking_code") @db.VarChar(120)
   shippingProvider String?        @map("shipping_provider") @db.VarChar(40)

@@ -158,6 +158,7 @@ export class CommerceController {
   @Post("loyalty/customers/:customerId/adjustment") @admin("customers.write") adjustLoyaltyPoints(@Req() request: AdminRequest, @Param("customerId") customerId: string, @Body() body: Record<string, unknown>) { return this.loyalty.adjustCustomer(customerId, body.points, body.note, request.adminIdentity); }
 
   @Get("orders") @admin("orders.read") orders(@Query() query: Record<string, string>) { return this.commerce.orders(query); }
+  @Get("shipping/delivery-map") @admin("shipping.read") shippingDeliveryMap() { return this.commerce.shippingDeliveryMap(); }
   @Get("orders/:code/payment-status")
   @Header("Cache-Control", "private, no-store, max-age=0")
   publicOrderPaymentStatus(@Param("code") code: string, @Headers("idempotency-key") idempotencyKey?: string) {

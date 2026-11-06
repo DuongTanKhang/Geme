@@ -5,9 +5,10 @@ import { normalizeApiBaseUrl } from "../lib/api-base";
 import { useWishlist } from "./wishlist-provider";
 
 type MenuId = "trang-suc" | "da-quy" | "san-pham";
+type NavMenuId = Exclude<MenuId, "san-pham">;
 
 type MenuStone = { id: string; name: string; slug: string; imageUrl?: string; appliedCategoryIds?: string[]; availableCategoryIds?: string[]; sortOrder?: number };
-type MenuCategory = { id: string; name: string; slug: string; kind: "JEWELRY" | "GEMSTONE"; usage: "PRODUCT_CATEGORY" | "GEMSTONE_TYPE"; level: number; parentId?: string | null; status: "ACTIVE" | "INACTIVE"; imageUrl?: string | null; sortOrder?: number };
+type MenuCategory = { id: string; name: string; slug: string; kind: "JEWELRY" | "GEMSTONE" | "OTHER"; usage: "PRODUCT_CATEGORY" | "GEMSTONE_TYPE"; level: number; parentId?: string | null; status: "ACTIVE" | "INACTIVE"; imageUrl?: string | null; sortOrder?: number };
 type ApiMaterialOption = { id: string; name: string; scope: "JEWELRY" | "GEMSTONE"; kind: "MATERIAL" | "STONE"; active: boolean; imageUrl?: string | null; slug?: string; sortOrder?: number; appliedCategoryIds?: string[]; availableCategoryIds?: string[] };
 type StoreCartLine = { key: string; productId: string; variantId: string | null; slug: string; name: string; sku: string; price: number; shape?: string | null; quality: string | null; beadSize: string | null; carat?: number | null; gemstoneQuality?: string | null; quantity: number; stock: number };
 const CART_STORAGE_KEY = "geme-cart-v1";
@@ -251,6 +252,7 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [jewelryStones, setJewelryStones] = useState<MenuStone[]>([]);
   const [gemstoneStones, setGemstoneStones] = useState<MenuStone[]>([]);
+  const [rootCategories, setRootCategories] = useState<MenuCategory[]>([]);
   const [jewelryCategories, setJewelryCategories] = useState<MenuCategory[]>([]);
   const [gemstoneTypes, setGemstoneTypes] = useState<MenuCategory[]>([]);
   const [gemstoneCategories, setGemstoneCategories] = useState<MenuCategory[]>([]);
@@ -282,6 +284,9 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
     const applyCategories = (records: MenuCategory[]) => {
       if (!active) return;
       const enabled = records.filter((item) => item.status === "ACTIVE");
+      setRootCategories(enabled
+        .filter((item) => item.usage === "PRODUCT_CATEGORY" && !item.parentId)
+        .sort((left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name, "vi")));
       setJewelryCategories(enabled.filter((item) => item.kind === "JEWELRY" && item.usage === "PRODUCT_CATEGORY"));
       setGemstoneTypes(enabled.filter((item) => item.kind === "GEMSTONE" && item.level === 2 && (item.usage === "GEMSTONE_TYPE" || enabled.some((cut) => cut.kind === "GEMSTONE" && cut.level === 3 && cut.parentId === item.id))));
       setGemstoneCategories(enabled.filter((item) => item.kind === "GEMSTONE" && item.usage === "PRODUCT_CATEGORY"));
@@ -390,10 +395,14 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setActiveMenu(null);
   };
 
-  const navItems: { id: MenuId; label: string; href: string }[] = [
-    { id: "trang-suc", label: "TRANG SỨC", href: "/san-pham" },
-    { id: "da-quy", label: "ĐÁ QUÝ", href: "/da-quy" },
-    { id: "san-pham", label: "NEW ARRIVALS", href: "/new-arrivals" },
+  const navItems: { key: string; label: string; href: string; menuId?: NavMenuId; isNewArrivals?: boolean }[] = [
+    ...rootCategories.map((category) => ({
+      key: category.id,
+      label: category.name.toLocaleUpperCase("vi"),
+      href: category.kind === "JEWELRY" ? "/san-pham" : category.kind === "GEMSTONE" ? "/da-quy" : `/san-pham?danh-muc=${encodeURIComponent(category.slug)}`,
+      menuId: category.kind === "JEWELRY" ? "trang-suc" as const : category.kind === "GEMSTONE" ? "da-quy" as const : undefined,
+    })),
+    { key: "new-arrivals", label: "NEW ARRIVALS", href: "/new-arrivals", isNewArrivals: true },
   ];
 
   return <header className="site-header" onMouseEnter={cancelMenuClose} onMouseLeave={() => { if (!mobileOpen) closeMenuSoon(); }} onBlur={onHeaderBlur} onKeyDown={(event) => { if (event.key === "Escape") { cancelMenuClose(); setActiveMenu(null); setMobileOpen(false); } }}>
@@ -402,23 +411,23 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
       <nav className={`main-nav${mobileOpen ? " is-open" : ""}`} id="geme-main-nav" aria-label="Điều hướng chính">
         {navItems.map((item) => <a
           href={item.href}
-          className={`nav-link${activeMenu === item.id ? " is-active" : ""}${activePage === "new-arrivals" && item.id === "san-pham" ? " is-current" : ""}`}
-          aria-current={activePage === "new-arrivals" && item.id === "san-pham" || activePage === "gemstone" && item.id === "da-quy" ? "page" : undefined}
-          aria-expanded={item.id === "san-pham" ? undefined : activeMenu === item.id}
-          aria-controls={activeMenu === item.id ? (mobileOpen ? "geme-mobile-submenu" : "geme-mega-menu") : undefined}
-          key={item.id}
-          onMouseEnter={() => { if (!mobileOpen) openMenu(item.id === "san-pham" ? null : item.id); }}
-          onFocus={() => { if (!mobileOpen) openMenu(item.id === "san-pham" ? null : item.id); }}
+          className={`nav-link${item.menuId && activeMenu === item.menuId ? " is-active" : ""}${activePage === "new-arrivals" && item.isNewArrivals ? " is-current" : ""}${activePage === "gemstone" && item.menuId === "da-quy" ? " is-current" : ""}`}
+          aria-current={activePage === "new-arrivals" && item.isNewArrivals || activePage === "gemstone" && item.menuId === "da-quy" ? "page" : undefined}
+          aria-expanded={item.menuId ? activeMenu === item.menuId : undefined}
+          aria-controls={item.menuId && activeMenu === item.menuId ? (mobileOpen ? "geme-mobile-submenu" : "geme-mega-menu") : undefined}
+          key={item.key}
+          onMouseEnter={() => { if (!mobileOpen) openMenu(item.menuId || null); }}
+          onFocus={() => { if (!mobileOpen) openMenu(item.menuId || null); }}
           onClick={(event) => {
-            if (item.id !== "san-pham" && window.matchMedia("(max-width: 760px)").matches) {
+            if (item.menuId && window.matchMedia("(max-width: 1023px)").matches) {
               event.preventDefault();
-              setActiveMenu((current) => current === item.id ? null : item.id);
+              setActiveMenu((current) => current === item.menuId ? null : item.menuId || null);
             } else {
               openMenu(null);
               setMobileOpen(false);
             }
           }}
-        >{item.label}<span className="mobile-nav-indicator" aria-hidden="true">{activeMenu === item.id ? "−" : "+"}</span></a>)}
+        >{item.label}{item.menuId && <span className="mobile-nav-indicator" aria-hidden="true">{activeMenu === item.menuId ? "−" : "+"}</span>}</a>)}
         <a className="nav-link nav-link-page" href="/ve-geme" onMouseEnter={() => openMenu(null)} onFocus={() => openMenu(null)} onClick={() => { openMenu(null); setMobileOpen(false); }}>VỀ GEME</a>
         <a className={`nav-link nav-link-page${activePage === "blog" ? " is-current" : ""}`} href="/blog" onMouseEnter={() => openMenu(null)} onFocus={() => openMenu(null)} onClick={() => { openMenu(null); setMobileOpen(false); }}>BLOG</a>
         <a className="nav-link nav-link-page" href="/lien-he" onMouseEnter={() => openMenu(null)} onFocus={() => openMenu(null)} onClick={() => { openMenu(null); setMobileOpen(false); }}>LIÊN HỆ</a>

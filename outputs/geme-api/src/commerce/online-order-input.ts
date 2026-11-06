@@ -38,9 +38,17 @@ export function onlineOrderInput(body: Record<string, any>) {
   const phone = phoneInput.startsWith("+84") && digits.startsWith("84") ? `0${digits.slice(2)}` : digits.startsWith("84") && digits.length === 11 ? `0${digits.slice(2)}` : phoneInput;
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const shippingAddress = typeof body.shippingAddress === "string" ? body.shippingAddress.trim() : "";
+  const shippingLatitude = Number(body.shippingLatitude);
+  const shippingLongitude = Number(body.shippingLongitude);
   const note = typeof body.note === "string" ? body.note : "";
   if (!digits || digits.length < 9 || digits.length > 12 || /[^+\d().\s-]/.test(phoneInput)) throw new BadRequestException("Nhập số điện thoại người nhận hợp lệ (9–12 chữ số).");
   if (!shippingAddress || shippingAddress.length < 8) throw new BadRequestException("Nhập đầy đủ địa chỉ giao hàng trước khi đặt hàng.");
+  if (body.shippingLatitude === undefined || body.shippingLatitude === null || body.shippingLatitude === "" || body.shippingLongitude === undefined || body.shippingLongitude === null || body.shippingLongitude === "" || !Number.isFinite(shippingLatitude) || !Number.isFinite(shippingLongitude)) {
+    throw new BadRequestException("Hãy chọn địa chỉ gợi ý và xác nhận vị trí giao hàng trên bản đồ VietMap.");
+  }
+  if (shippingLatitude < 8.2 || shippingLatitude > 23.5 || shippingLongitude < 102 || shippingLongitude > 110) {
+    throw new BadRequestException("Vị trí giao hàng phải nằm trong lãnh thổ Việt Nam. Hãy chọn lại vị trí trên bản đồ.");
+  }
   if (name.length > 160 || phone.length > 32 || email.length > 320 || shippingAddress.length > 1000 || note.length > 2000) throw new BadRequestException("Thông tin giao hàng vượt quá độ dài cho phép. Hãy chỉnh nội dung rồi thử lại.");
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BadRequestException("Địa chỉ email không hợp lệ.");
 
@@ -63,6 +71,8 @@ export function onlineOrderInput(body: Record<string, any>) {
     phone,
     email,
     shippingAddress,
+    shippingLatitude,
+    shippingLongitude,
     note,
     paymentMethod,
     qrPayment,

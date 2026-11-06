@@ -58,8 +58,11 @@ export class NewArrivalsService {
     }
     const stoneGroupIds = [...new Set(readArray(query.stoneGroupIds ?? query.stoneGroupId))];
     if (stoneGroupIds.length > 40 || stoneGroupIds.some((id) => id !== "other" && !uuidPattern.test(id))) throw new BadRequestException("stoneGroupId không hợp lệ.");
-    const sizes = [...new Set(readArray(query.size))];
-    if (sizes.length > 40 || sizes.some((size) => size.length > 24 || /[\u0000-\u001f]/.test(size))) throw new BadRequestException("size không hợp lệ.");
+    const requestedSizes = [...new Set(readArray(query.size))];
+    if (requestedSizes.length > 40 || requestedSizes.some((size) => size.length > 24 || /[\u0000-\u001f]/.test(size))) throw new BadRequestException("size không hợp lệ.");
+    // Size is a category-specific facet. Ignore stale/deep-linked sizes until
+    // the customer selects a product category that can define their meaning.
+    const sizes = categoryIds.size ? requestedSizes : [];
     const numeric = (key: "minPrice" | "maxPrice") => {
       const raw = first(query[key]);
       if (raw === undefined || raw === "") return null;
@@ -179,8 +182,11 @@ export class NewArrivalsService {
     `;
   }
 
-  private async filterFacets(now: Date) {
+  private async filterFacets(now: Date, categoryIds: string[] = []) {
     const tagPredicate = Prisma.sql`p."kind" = 'JEWELRY' AND p."status" = 'ACTIVE' AND p."is_new" = true AND (p."new_until" IS NULL OR p."new_until" > ${now})`;
+    const sizeScope = categoryIds.length
+      ? Prisma.sql`AND p."category_id" = ANY(${categoryIds}::uuid[])`
+      : Prisma.sql`AND false`;
     const [categoryRows, stoneRows, sizeRows] = await Promise.all([
       this.prisma.$queryRaw<Array<{ id: string; count: number }>>`SELECT p."category_id"::text AS id, COUNT(*)::int AS count FROM "products" p WHERE ${tagPredicate} AND p."category_id" IS NOT NULL GROUP BY p."category_id"`,
       this.prisma.$queryRaw<Array<{ id: string | null; slug: string; name: string; count: number }>>`
@@ -212,7 +218,7 @@ export class NewArrivalsService {
       this.prisma.$queryRaw<Array<{ size: string; count: number }>>`
         SELECT pv."bead_size" AS size, COUNT(DISTINCT p."id")::int AS count
         FROM "product_price_variants" pv JOIN "products" p ON p."id" = pv."product_id"
-        WHERE ${tagPredicate} AND NULLIF(BTRIM(pv."bead_size"), '') IS NOT NULL
+        WHERE ${tagPredicate} ${sizeScope} AND NULLIF(BTRIM(pv."bead_size"), '') IS NOT NULL
         GROUP BY pv."bead_size" ORDER BY pv."bead_size" ASC
       `,
     ]);
@@ -278,7 +284,7 @@ export class NewArrivalsService {
     SELECT ranked.*, group_ordered.group_rank, group_ordered.total_groups, group_ordered.total_products
     FROM ranked JOIN group_ordered ON group_ordered.group_key = COALESCE(ranked.result_group_id, 'other')
     WHERE ranked.product_rank <= 8 AND group_ordered.group_rank > ${groupOffset} AND group_ordered.group_rank <= ${groupOffset + groupPageSize}
-    ORDER BY group_ordered.group_rank ASC, ranked.product_rank ASC`), this.filterFacets(filter.now)]);
+    ORDER BY group_ordered.group_rank ASC, ranked.product_rank ASC`), this.filterFacets(filter.now, filter.categoryIds)]);
     const activeNewById = new Map<string, boolean>(rows.map((row) => [String(row.id), Boolean(row.new_label_active)]));
     const products = await this.cards(rows.map((row) => String(row.id)), activeNewById);
     const productsById = new Map(products.map((product: any) => [String(product.id), product]));
@@ -324,7 +330,7 @@ export class NewArrivalsService {
     const order = this.order(filter);
     const [totalRows, facetResult] = await Promise.all([
       this.prisma.$queryRaw<Array<{ total: bigint | number }>>(Prisma.sql`${cte} SELECT COUNT(*)::bigint AS total FROM filtered`),
-      this.filterFacets(filter.now),
+      this.filterFacets(filter.now, filter.categoryIds),
     ]);
     const total = Number(totalRows[0]?.total || 0);
     const offset = (page - 1) * 40;

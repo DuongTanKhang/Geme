@@ -38,6 +38,8 @@ services:
       AEGIS_AUTH_API_URL: http://aegis:5130
       GEME_SITE_URL: https://test.geme.vn
       MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://geme-public-media.geme-media-gateway.workers.dev}
+      VIETMAP_API_KEY: ${VIETMAP_API_KEY:-}
+      VIETMAP_TILEMAP_KEY: ${VIETMAP_TILEMAP_KEY:-}
     expose: ["3000"]
     depends_on:
       api:
@@ -50,7 +52,13 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-    networks: [app]
+    # Docker's host stub resolver intermittently returns EAI_AGAIN on the VPS.
+    # Keep Docker service discovery, but forward external lookups to public resolvers.
+    dns: [1.1.1.1, 8.8.8.8]
+    networks:
+      app: {}
+      egress:
+        gw_priority: 1
 
   admin:
     build:
@@ -70,6 +78,8 @@ services:
       MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://geme-public-media.geme-media-gateway.workers.dev}
       GEME_STOREFRONT_ASSETS_URL: http://storefront:3000
       AEGIS_AUTH_API_URL: http://aegis:5130
+      VIETMAP_API_KEY: ${VIETMAP_API_KEY:-}
+      VIETMAP_TILEMAP_KEY: ${VIETMAP_TILEMAP_KEY:-}
     expose: ["3001"]
     depends_on:
       api:

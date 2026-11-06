@@ -12,6 +12,7 @@ import { canTransitionOrder } from "./order-state.js";
 import { getInventoryReservationExpiry, getQrPaymentWindow } from "./reservation-expiry.js";
 import { assertBangleQualityImages, normalizeBangleQuality, synchronizeBangleVariantMedia } from "./bangle-variant-media.js";
 import { isNewLabelActive } from "./new-arrivals.rules.js";
+import { HCMC_HISTORIC_DISTRICTS, parseHcmcDeliveryArea } from "./delivery-geography.js";
 import { LoyaltyService } from "../loyalty/loyalty.service.js";
 import type { AegisCustomerIdentity } from "../auth/aegis-customer.guard.js";
 
@@ -490,10 +491,17 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       const legacyRoot = await this.prisma.category.findFirst({ where: { name: "Trang sức", kind: "JEWELRY", level: 1 }, select: { id: true } });
       root = legacyRoot
         ? await this.prisma.category.update({ where: { id: legacyRoot.id }, data: { name: "Trang sức", slug: "trang-suc", kind: "JEWELRY", usage: "PRODUCT_CATEGORY", level: 1, pricingMode: "FIXED", parentId: null }, select: { id: true } })
-        : await this.prisma.category.create({ data: { name: "Trang sức", slug: "trang-suc", kind: "JEWELRY", usage: "PRODUCT_CATEGORY", level: 1, pricingMode: "FIXED", sortOrder: 10, status: "ACTIVE", description: "Các thiết kế trang sức GEME chế tác từ đá quý tự nhiên." }, select: { id: true } });
+      : await this.prisma.category.create({ data: { name: "Trang sức", slug: "trang-suc", kind: "JEWELRY", usage: "PRODUCT_CATEGORY", level: 1, pricingMode: "FIXED", sortOrder: 1, status: "ACTIVE", description: "Các thiết kế trang sức GEME chế tác từ đá quý tự nhiên." }, select: { id: true } });
     } else {
-      await this.prisma.category.update({ where: { id: root.id }, data: { name: "Trang sức", kind: "JEWELRY", usage: "PRODUCT_CATEGORY", level: 1, pricingMode: "FIXED", parentId: null } });
+      await this.prisma.category.update({ where: { id: root.id }, data: { name: "Trang sức", kind: "JEWELRY", usage: "PRODUCT_CATEGORY", level: 1, pricingMode: "FIXED", parentId: null, sortOrder: 1 } });
     }
+    await this.prisma.category.upsert({
+      where: { slug: "vat-pham" },
+      create: { id: "00000000-0000-4000-8000-000000000003", name: "Vật Phẩm", slug: "vat-pham", kind: "OTHER", usage: "PRODUCT_CATEGORY", level: 1, pricingMode: "FIXED", parentId: null, sortOrder: 2, status: "ACTIVE", description: "Các vật phẩm GEME ngoài danh mục trang sức và đá quý." },
+      update: { name: "Vật Phẩm", kind: "OTHER", usage: "PRODUCT_CATEGORY", level: 1, pricingMode: "FIXED", parentId: null, sortOrder: 2, status: "ACTIVE", description: "Các vật phẩm GEME ngoài danh mục trang sức và đá quý." },
+    });
+    await this.prisma.category.updateMany({ where: { slug: "da-quy", kind: "GEMSTONE", level: 1, parentId: null }, data: { sortOrder: 3 } });
+    await this.prisma.category.updateMany({ where: { slug: "khac", kind: "OTHER", level: 1, parentId: null }, data: { sortOrder: 4 } });
     for (const category of requiredJewelryCategories) {
       await this.prisma.category.upsert({
         where: { slug: category.slug },
@@ -619,7 +627,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return {
       name,
       slug: slugify(input.slug || name),
-      kind: enumValue(input.kind, ["JEWELRY", "GEMSTONE"], "JEWELRY") as any,
+      kind: enumValue(input.kind, ["JEWELRY", "OTHER", "GEMSTONE"], "JEWELRY") as any,
       usage: enumValue(input.usage, ["PRODUCT_CATEGORY", "GEMSTONE_TYPE"], "PRODUCT_CATEGORY") as any,
       level: Math.max(1, Math.min(3, Number(input.level) || (input.parentId ? 2 : 1))),
   pricingMode: enumValue(input.pricingMode, ["FIXED", "QUALITY", "QUALITY_AND_BEAD_SIZE", "GEMSTONE_SIZE", "GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"], "FIXED") as any,
@@ -2956,6 +2964,163 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.order.findMany({ select: selectAdminOrder, orderBy: { placedAt: "desc" }, take });
   }
 
+  async shippingDeliveryMap() {
+    const addressRows = await this.prisma.$queryRaw<Array<{ address: string; orderCount: number; paidAmount: unknown }>>`
+      WITH captured_by_order AS (
+        SELECT order_id, SUM(amount)::numeric AS captured_amount
+        FROM payments
+        WHERE paid_at IS NOT NULL AND status::text IN ('PAID', 'PARTIALLY_REFUNDED', 'REFUNDED')
+        GROUP BY order_id
+      ), refunds_by_order AS (
+        SELECT payment.order_id, SUM(refund.amount)::numeric AS refunded_amount
+        FROM payment_refunds refund
+        JOIN payments payment ON payment.id = refund.payment_id
+        GROUP BY payment.order_id
+      ), eligible_deliveries AS (
+        SELECT "order".shipping_address AS address,
+               "order".total_amount AS total_amount,
+               GREATEST(COALESCE(captured.captured_amount, 0) - COALESCE(refunds.refunded_amount, 0), 0)::numeric AS net_paid
+        FROM orders "order"
+        LEFT JOIN captured_by_order captured ON captured.order_id = "order".id
+        LEFT JOIN refunds_by_order refunds ON refunds.order_id = "order".id
+        WHERE ("order".status::text = 'DELIVERED' OR "order".carrier_shipment_status = 'DELIVERED')
+          AND "order".status::text <> 'CANCELLED'
+          AND "order".total_amount > 0
+          AND GREATEST(COALESCE(captured.captured_amount, 0) - COALESCE(refunds.refunded_amount, 0), 0) >= "order".total_amount
+      )
+      SELECT address,
+             COUNT(*)::int AS "orderCount",
+             SUM(net_paid)::numeric AS "paidAmount"
+      FROM eligible_deliveries
+      GROUP BY address
+    `;
+
+    const deliveryPointRows = await this.prisma.$queryRaw<Array<{ code: string; address: string; latitude: number; longitude: number }>>`
+      WITH captured_by_order AS (
+        SELECT order_id, SUM(amount)::numeric AS captured_amount
+        FROM payments
+        WHERE paid_at IS NOT NULL AND status::text IN ('PAID', 'PARTIALLY_REFUNDED', 'REFUNDED')
+        GROUP BY order_id
+      ), refunds_by_order AS (
+        SELECT payment.order_id, SUM(refund.amount)::numeric AS refunded_amount
+        FROM payment_refunds refund
+        JOIN payments payment ON payment.id = refund.payment_id
+        GROUP BY payment.order_id
+      )
+      SELECT "order".id::text AS id,
+             "order".code,
+             "order".shipping_address AS address,
+             "order".shipping_latitude AS latitude,
+             "order".shipping_longitude AS longitude
+      FROM orders "order"
+      LEFT JOIN captured_by_order captured ON captured.order_id = "order".id
+      LEFT JOIN refunds_by_order refunds ON refunds.order_id = "order".id
+      WHERE ("order".status::text = 'DELIVERED' OR "order".carrier_shipment_status = 'DELIVERED')
+        AND "order".status::text <> 'CANCELLED'
+        AND "order".total_amount > 0
+        AND "order".shipping_latitude BETWEEN 10.2 AND 11.3
+        AND "order".shipping_longitude BETWEEN 106.2 AND 107.3
+        AND GREATEST(COALESCE(captured.captured_amount, 0) - COALESCE(refunds.refunded_amount, 0), 0) >= "order".total_amount
+      ORDER BY "order".placed_at DESC
+      LIMIT 1500
+    `;
+
+    const districts = new Map(HCMC_HISTORIC_DISTRICTS.map((district) => [district.key, {
+      key: district.key,
+      name: district.label,
+      orderCount: 0,
+      paidAmount: 0,
+      wards: new Map<string, { key: string; name: string; orderCount: number; paidAmount: number }>(),
+    }]));
+    const unclassified = {
+      hcmcOrders: 0,
+      hcmcPaidAmount: 0,
+      unknownDistrictOrders: 0,
+      unknownWardOrders: 0,
+      outsideHcmcOrders: 0,
+      outsideHcmcPaidAmount: 0,
+    };
+    let eligibleOrders = 0;
+    let eligiblePaidAmount = 0;
+    let hcmcOrders = 0;
+    let hcmcPaidAmount = 0;
+    let mappedOrders = 0;
+
+    for (const row of addressRows) {
+      const orderCount = Math.max(0, Number(row.orderCount) || 0);
+      const paidAmount = Number(row.paidAmount) || 0;
+      const area = parseHcmcDeliveryArea(row.address);
+      eligibleOrders += orderCount;
+      eligiblePaidAmount += paidAmount;
+      if (!area.isHcmc) {
+        unclassified.outsideHcmcOrders += orderCount;
+        unclassified.outsideHcmcPaidAmount += paidAmount;
+        continue;
+      }
+      hcmcOrders += orderCount;
+      hcmcPaidAmount += paidAmount;
+      unclassified.hcmcOrders += orderCount;
+      unclassified.hcmcPaidAmount += paidAmount;
+      if (area.districtKey === "unknown-district") {
+        unclassified.unknownDistrictOrders += orderCount;
+        continue;
+      }
+      const district = districts.get(area.districtKey);
+      if (!district) {
+        unclassified.unknownDistrictOrders += orderCount;
+        continue;
+      }
+      district.orderCount += orderCount;
+      district.paidAmount += paidAmount;
+      if (area.wardKey === "chua-ro-phuong" || area.wardLabel === "Chưa rõ phường") {
+        unclassified.unknownWardOrders += orderCount;
+        continue;
+      }
+      const ward = district.wards.get(area.wardKey) || { key: area.wardKey, name: area.wardLabel, orderCount: 0, paidAmount: 0 };
+      ward.orderCount += orderCount;
+      ward.paidAmount += paidAmount;
+      district.wards.set(ward.key, ward);
+      mappedOrders += orderCount;
+    }
+
+    const deliveryPoints = deliveryPointRows.flatMap((row) => {
+      const area = parseHcmcDeliveryArea(row.address);
+      const latitude = Number(row.latitude);
+      const longitude = Number(row.longitude);
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return [];
+      return [{ code: row.code, latitude, longitude, districtKey: area.districtKey }];
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      basis: "Đơn giao thành công và số tiền đã thu ròng (đã trừ hoàn tiền) đạt ít nhất tổng đơn.",
+      summary: {
+        eligibleOrders,
+        eligiblePaidAmount,
+        hcmcOrders,
+        hcmcPaidAmount,
+        mappedOrders,
+        unknownDistrictOrders: unclassified.unknownDistrictOrders,
+        unknownWardOrders: unclassified.unknownWardOrders,
+        outsideHcmcOrders: unclassified.outsideHcmcOrders,
+        outsideHcmcPaidAmount: unclassified.outsideHcmcPaidAmount,
+        coordinateConfirmedOrders: deliveryPoints.length,
+      },
+      districts: [...districts.values()]
+        .map((district) => ({
+          key: district.key,
+          name: district.name,
+          orderCount: district.orderCount,
+          paidAmount: district.paidAmount,
+          wards: [...district.wards.values()].sort((a, b) => b.orderCount - a.orderCount || a.name.localeCompare(b.name, "vi")),
+        }))
+        .sort((a, b) => b.orderCount - a.orderCount || a.name.localeCompare(b.name, "vi")),
+      deliveryPoints,
+      deliveryPointsLimited: deliveryPointRows.length === 1500,
+      unclassified,
+    };
+  }
+
   private async releaseOrderReservation(tx: any, order: Input, changedProductIds: Set<string>, reason = "ORDER_CANCELLED") {
     for (const item of order.items as any[]) {
       if (!item.productId) continue;
@@ -3611,6 +3776,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       phone: input.phone,
       email: input.email,
       shippingAddress: input.shippingAddress,
+      shippingLatitude: input.shippingLatitude ?? null,
+      shippingLongitude: input.shippingLongitude ?? null,
       note: input.note,
       paymentMethod: method,
       qrPayment,
@@ -3793,6 +3960,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         buyerTypeAtCheckout,
         ...(marketingSession ? { marketingSession: { connect: { id: marketingSession.id } } } : {}),
         shippingAddress: String(input.shippingAddress || input.address || "").trim(),
+        shippingLatitude: Number.isFinite(Number(input.shippingLatitude)) ? Number(input.shippingLatitude) : null,
+        shippingLongitude: Number.isFinite(Number(input.shippingLongitude)) ? Number(input.shippingLongitude) : null,
         shippingMethod: storeSale ? "Bán trực tiếp tại cửa hàng" : input.shippingMethod || null,
         note: input.note || null, subtotal, discountAmount, loyaltyPointsRedeemed: loyalty.pointsToRedeem, loyaltyDiscountAmount, shippingFee, totalAmount,
         status: paid ? "DELIVERED" as any : method !== "COD" ? "PENDING_PAYMENT" as any : "PENDING_CONFIRMATION" as any,
@@ -4238,6 +4407,17 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const publicKeys = ["banners", "footerContent", "catalogEditorialPromos", "newArrivalsMedia", "bankQr", "address", "addressNote", "phone", "supportEmail", "openingHours", "socialLinks", "blogCategories"];
     const rows = await this.prisma.siteSetting.findMany({ where: { key: { in: publicKeys } }, select: { key: true, value: true } });
     const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+    const facebookPage = await this.prisma.socialAccount.findFirst({
+      where: { platform: "FACEBOOK_PAGE", active: true, selected: true, connection: { status: "ACTIVE" } },
+      select: { remoteAccountId: true, username: true },
+      orderBy: { updatedAt: "desc" },
+    });
+    const facebookHandle = String(facebookPage?.username || facebookPage?.remoteAccountId || "").trim();
+    if (/^[A-Za-z0-9._-]{1,100}$/.test(facebookHandle)) {
+      settings.facebookMessengerUrl = `https://m.me/${encodeURIComponent(facebookHandle)}`;
+    } else {
+      delete settings.facebookMessengerUrl;
+    }
     const bankQr = settings.bankQr && typeof settings.bankQr === "object" ? settings.bankQr as Record<string, unknown> : null;
     const bankCode = typeof bankQr?.bankCode === "string" ? bankQr.bankCode.trim() : "";
     const accountNumber = typeof bankQr?.accountNumber === "string" ? bankQr.accountNumber.trim() : "";
@@ -4410,7 +4590,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const from = parseReportDate(query.from, new Date(Date.now() - 30 * 86400000), "start");
     const to = parseReportDate(query.to, new Date(), "end");
     const orderWhere = { placedAt: { gte: from, lte: to }, status: { not: "CANCELLED" as const } };
-    const [orderStats, customerCount, newCustomers, productCount, productsSold, cashStats, refundStats, returnedGoodsStats, codUnreconciledStats, codRemittanceStats, timeline, categories, products, payments, salesChannels, promotionPerformance, topOrders, buyerGroups, orderStatusGroups, lifetimeValue] = await Promise.all([
+    const [orderStats, customerCount, newCustomers, productCount, productsSold, cashStats, refundStats, returnedGoodsStats, codUnreconciledStats, codRemittanceStats, timeline, categories, products, payments, salesChannels, promotionPerformance, topOrders, buyerGroups, orderStatusGroups, lifetimeValue, productKindSales, topProductsByKind, jewelryStoneSales, topSellingProductStone] = await Promise.all([
       this.prisma.order.aggregate({ where: orderWhere, _sum: { totalAmount: true }, _count: { _all: true } }),
       this.prisma.customer.count({ where: { createdAt: { lte: to } } }),
       this.prisma.customer.count({ where: { authSubjectId: { not: null }, createdAt: { gte: from, lte: to } } }),
@@ -4624,6 +4804,104 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
                AVG(order_count)::numeric AS "averageOrdersPerBuyer"
         FROM buyer_orders
       `,
+      this.prisma.$queryRaw<Array<{ kind: string; sold: number; revenue: unknown; orders: number }>>`
+        SELECT p.kind::text AS kind,
+               COALESCE(SUM(i.quantity), 0)::int AS sold,
+               COALESCE(SUM(i.line_total), 0)::numeric AS revenue,
+               COUNT(DISTINCT o.id)::int AS orders
+        FROM order_items i
+        JOIN orders o ON o.id = i.order_id
+        JOIN products p ON p.id = i.product_id
+        WHERE o.placed_at >= ${from} AND o.placed_at <= ${to}
+          AND o.status::text IN ('PROCESSING','SHIPPING','DELIVERED')
+        GROUP BY p.kind
+        ORDER BY sold DESC, revenue DESC
+      `,
+      this.prisma.$queryRaw<Array<{ kind: string; rank: number; product: string; sku: string; image: string; category: string; stone: string; sold: number; revenue: unknown; orders: number }>>`
+        WITH product_sales AS (
+          SELECT p.kind::text AS kind,
+                 p.name AS product,
+                 p.sku AS sku,
+                 COALESCE(image.url, '') AS image,
+                 COALESCE(c.name, 'Không phân loại') AS category,
+                 CASE WHEN p.kind::text = 'GEMSTONE'
+                   THEN COALESCE(gemstone.name, c.name, material.name, 'Chưa gắn loại đá')
+                   ELSE COALESCE(material.name, stone_group.name, 'Chưa gắn loại đá')
+                 END AS stone,
+                 SUM(i.quantity)::int AS sold,
+                 COALESCE(SUM(i.line_total), 0)::numeric AS revenue,
+                 COUNT(DISTINCT o.id)::int AS orders
+          FROM order_items i
+          JOIN orders o ON o.id = i.order_id
+          JOIN products p ON p.id = i.product_id
+          LEFT JOIN categories c ON c.id = p.category_id
+          LEFT JOIN categories gemstone ON gemstone.id = p.gemstone_type_id
+          LEFT JOIN material_options material ON material.id = p.material_option_id
+          LEFT JOIN jewelry_stone_groups stone_group ON stone_group.id = p.jewelry_stone_group_id
+          LEFT JOIN LATERAL (
+            SELECT pi.url FROM product_images pi
+            WHERE pi.product_id = p.id
+            ORDER BY pi.is_primary DESC, pi.sort_order ASC
+            LIMIT 1
+          ) image ON TRUE
+          WHERE o.placed_at >= ${from} AND o.placed_at <= ${to}
+            AND o.status::text IN ('PROCESSING','SHIPPING','DELIVERED')
+            AND p.kind::text IN ('JEWELRY','GEMSTONE')
+          GROUP BY p.id, p.kind, p.name, p.sku, image.url, c.name,
+                   gemstone.name, material.name, stone_group.name
+        ), ranked AS (
+          SELECT product_sales.*,
+                 ROW_NUMBER() OVER (PARTITION BY kind ORDER BY sold DESC, revenue DESC, sku ASC)::int AS rank
+          FROM product_sales
+        )
+        SELECT kind, rank, product, sku, image, category, stone, sold, revenue, orders
+        FROM ranked
+        WHERE rank <= 10
+        ORDER BY kind ASC, rank ASC
+      `,
+      this.prisma.$queryRaw<Array<{ name: string; sold: number; revenue: unknown; orders: number; products: number }>>`
+        SELECT COALESCE(material.name, stone_group.name, 'Chưa gắn loại đá') AS name,
+               COALESCE(SUM(i.quantity), 0)::int AS sold,
+               COALESCE(SUM(i.line_total), 0)::numeric AS revenue,
+               COUNT(DISTINCT o.id)::int AS orders,
+               COUNT(DISTINCT p.id)::int AS products
+        FROM order_items i
+        JOIN orders o ON o.id = i.order_id
+        JOIN products p ON p.id = i.product_id
+        LEFT JOIN material_options material ON material.id = p.material_option_id
+        LEFT JOIN jewelry_stone_groups stone_group ON stone_group.id = p.jewelry_stone_group_id
+        WHERE o.placed_at >= ${from} AND o.placed_at <= ${to}
+          AND o.status::text IN ('PROCESSING','SHIPPING','DELIVERED')
+          AND p.kind::text = 'JEWELRY'
+        GROUP BY COALESCE(material.name, stone_group.name, 'Chưa gắn loại đá')
+        ORDER BY sold DESC, revenue DESC, name ASC
+        LIMIT 20
+      `,
+      this.prisma.$queryRaw<Array<{ kind: string; product: string; sku: string; category: string; stone: string; sold: number; revenue: unknown }>>`
+        SELECT p.kind::text AS kind,
+               p.name AS product,
+               p.sku AS sku,
+               COALESCE(c.name, 'Không phân loại') AS category,
+               CASE WHEN p.kind::text = 'GEMSTONE'
+                 THEN COALESCE(gemstone.name, c.name, material.name, 'Chưa gắn loại đá')
+                 ELSE COALESCE(material.name, stone_group.name, 'Chưa gắn loại đá')
+               END AS stone,
+               SUM(i.quantity)::int AS sold,
+               COALESCE(SUM(i.line_total), 0)::numeric AS revenue
+        FROM order_items i
+        JOIN orders o ON o.id = i.order_id
+        JOIN products p ON p.id = i.product_id
+        LEFT JOIN categories c ON c.id = p.category_id
+        LEFT JOIN categories gemstone ON gemstone.id = p.gemstone_type_id
+        LEFT JOIN material_options material ON material.id = p.material_option_id
+        LEFT JOIN jewelry_stone_groups stone_group ON stone_group.id = p.jewelry_stone_group_id
+        WHERE o.placed_at >= ${from} AND o.placed_at <= ${to}
+          AND o.status::text IN ('PROCESSING','SHIPPING','DELIVERED')
+        GROUP BY p.id, p.kind, p.name, p.sku, c.name,
+                 gemstone.name, material.name, stone_group.name
+        ORDER BY sold DESC, revenue DESC, p.sku ASC
+        LIMIT 1
+      `,
     ]);
     const grossOrderValue = Number(orderStats._sum.totalAmount) || 0;
     const capturedPayments = Number(cashStats[0]?.captured) || 0;
@@ -4649,6 +4927,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       timeline: toAdminMoney(timeline as any[], ["revenue"]),
       categories: toAdminMoney(categories as any[], ["revenue"]),
       products: toAdminMoney(products as any[], ["revenue"]),
+      productKindSales: toAdminMoney(productKindSales as any[], ["revenue"]),
+      topProductsByKind: toAdminMoney(topProductsByKind as any[], ["revenue"]),
+      jewelryStoneSales: toAdminMoney(jewelryStoneSales as any[], ["revenue"]),
+      topSellingProductStone: toAdminMoney(topSellingProductStone as any[], ["revenue"])[0] || null,
       payments: toAdminMoney(payments as any[], ["amount"]),
       salesChannels: toAdminMoney(salesChannels as any[], ["revenue"]),
       promotionPerformance: toAdminMoney(promotionPerformance as any[], ["discount"]),

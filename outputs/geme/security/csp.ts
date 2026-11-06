@@ -17,14 +17,14 @@ export function contentSecurityPolicy(nonce: string, env: Record<string, string 
     "object-src 'none'",
     "frame-ancestors 'none'",
     "form-action 'self'",
-    "script-src 'self' 'nonce-" + nonce + "' 'strict-dynamic'" + (development ? " 'unsafe-eval'" : ""),
+    "script-src 'self' 'nonce-" + nonce + "' 'strict-dynamic' https://unpkg.com" + (development ? " 'unsafe-eval'" : ""),
     "script-src-attr 'none'",
     // React uses inline style attributes for gallery sizing and editing previews.
-    "style-src 'self' 'unsafe-inline'",
-    "font-src 'self' data:",
+    "style-src 'self' 'unsafe-inline' https://unpkg.com",
+    "font-src 'self' data: https://maps.vietmap.vn",
     "img-src 'self' https: data: blob:" + (development ? " http:" : ""),
     "media-src 'self' https: data: blob:" + (development ? " http:" : ""),
-    "connect-src " + [...connect].join(" "),
+    "connect-src " + [...connect, "https://maps.vietmap.vn"].join(" "),
     "frame-src 'self' blob: https://www.google.com",
     "worker-src 'self' blob:",
   ].join("; ");

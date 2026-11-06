@@ -26,7 +26,7 @@ export type AdminProduct = {
   jewelryStoneGroupId?: string | null;
   jewelryStoneGroup?: Pick<AdminJewelryStoneGroup, "id" | "slug" | "name" | "active"> | null;
   isPremiumGemstone?: boolean;
-  productType?: "Trang sức" | "Đá quý";
+  productType?: "Trang sức" | "Đá quý" | "Vật phẩm";
   category?: string;
   categoryId?: string;
   materialOptionId?: string;
@@ -87,6 +87,7 @@ type Props = {
   onSetNewLabel: (product: AdminProduct, isNew: boolean, newUntil?: string | null) => Promise<AdminProduct>;
   onAssignProductGroup: (product: AdminProduct, groupId: string | null) => Promise<void>;
   onSetPublication: (product: AdminProduct, status: "ACTIVE" | "HIDDEN", reason: string) => Promise<AdminProduct>;
+  initialCatalogKind?: "Trang sức" | "Đá quý" | "Vật phẩm";
 };
 
 const PRODUCT_PAGE_SIZE = 50;
@@ -141,7 +142,7 @@ const tabs = [
   { key: "history", label: "Lịch sử", icon: "clock" },
 ];
 
-export default function ProductsWorkspace({ products, categories: categoryRecords, materials, request, onSave, onDelete, onAdd, onNotify, onLoadDetails, permissions, isAdmin = false, onSetNewLabel, onAssignProductGroup, onSetPublication }: Props) {
+export default function ProductsWorkspace({ products, categories: categoryRecords, materials, request, onSave, onDelete, onAdd, onNotify, onLoadDetails, permissions, isAdmin = false, onSetNewLabel, onAssignProductGroup, onSetPublication, initialCatalogKind }: Props) {
   const canFullCatalog = isAdmin || permissions.includes("catalog.write");
   const canEditContent = canFullCatalog || permissions.includes("catalog.content.write");
   const canEditPrice = canFullCatalog || permissions.includes("catalog.price.write");
@@ -151,8 +152,9 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   const canPublish = isAdmin || canFullCatalog || permissions.includes("catalog.publish");
   const canManageNewArrivals = isAdmin || permissions.includes("catalog.write") || permissions.includes("settings.manage");
   const canDelete = (canFullCatalog || permissions.includes("catalog.delete")) && permissions.includes("integrations.manage");
-  const [catalogKind, setCatalogKind] = useState<"Trang sức" | "Đá quý">(products.some((item) => item.productType === "Trang sức") ? "Trang sức" : "Đá quý");
-  const [selectedId, setSelectedId] = useState(products.find((item) => item.productType === "Trang sức")?.id ?? products[0]?.id ?? "");
+  const defaultCatalogKind = initialCatalogKind ?? (products.some((item) => item.productType === "Trang sức") ? "Trang sức" : "Đá quý");
+  const [catalogKind, setCatalogKind] = useState<"Trang sức" | "Đá quý" | "Vật phẩm">(defaultCatalogKind);
+  const [selectedId, setSelectedId] = useState(products.find((item) => item.productType === defaultCatalogKind)?.id ?? "");
   const [activeTab, setActiveTab] = useState("basic");
   const [imageIndex, setImageIndex] = useState(0);
   const [draft, setDraft] = useState<Partial<AdminProduct>>({});
@@ -180,6 +182,16 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   const [savingStoneGroup, setSavingStoneGroup] = useState(false);
 
   useEffect(() => {
+    const nextKind = initialCatalogKind ?? (products.some((item) => item.productType === "Trang sức") ? "Trang sức" : "Đá quý");
+    setCatalogKind(nextKind);
+    setPage(0);
+    setCategoryFilter("");
+    setTypeFilter("");
+    setSelectedId(products.find((item) => item.productType === nextKind)?.id ?? "");
+    setDraft({});
+  }, [initialCatalogKind]);
+
+  useEffect(() => {
     if (!canFullCatalog) return;
     let active = true;
     void request("admin/catalog/jewelry-stone-groups").then((result) => {
@@ -200,8 +212,9 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   const selected = useMemo(() => products.find((product) => product.id === selectedId), [products, selectedId]);
   const product = selected ? { ...selected, ...draft } : undefined;
   useEffect(() => {
-    if (!selectedId && products.length) {
-      setSelectedId(products.find((item) => item.productType === catalogKind)?.id ?? products[0].id);
+    if (!selectedId) {
+      const firstProduct = products.find((item) => item.productType === catalogKind);
+      if (firstProduct) setSelectedId(firstProduct.id);
     }
   }, [products, selectedId, catalogKind]);
   useEffect(() => {
@@ -221,16 +234,28 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     return () => { active = false; };
   }, [selected?.apiId, selected?.detailsLoaded, detailsRetry, onLoadDetails]);
   const isGemstone = product?.productType === "Đá quý";
+  const categoryKind = product?.productType === "Vật phẩm" ? "Khác" : product?.productType;
   const selectedCategory = product && (product.productType === "Đá quý"
     ? categoryRecords.find((item) => item.id === product.gemstoneTypeId) ?? categoryRecords.find((item) => item.id === product.categoryId)
-    : categoryRecords.find((item) => item.id === product.categoryId) ?? categoryRecords.find((item) => item.kind === product.productType && item.name === product.category));
+    : categoryRecords.find((item) => item.id === product.categoryId) ?? categoryRecords.find((item) => item.kind === categoryKind && item.name === product.category));
   const gemstoneTypes = categoryRecords.filter((item) => item.kind === "Đá quý" && item.level === 2 && item.status === "Hoạt động");
   const pricingMode = product?.categoryPricingMode ?? selectedCategory?.pricingMode ?? (isGemstone ? "GEMSTONE_SIZE" : "FIXED");
   const usesQualityPricing = qualityPricing(pricingMode);
-  const productRoot = categoryRecords.find((item) => !item.parentId && item.kind === product?.productType);
+  const productRoot = categoryRecords.find((item) => !item.parentId && item.kind === categoryKind && (product?.productType !== "Vật phẩm" || item.slug === "vat-pham"));
+  const isWithinProductRoot = (category: AdminCategory) => {
+    if (!productRoot) return false;
+    let parentId = category.parentId;
+    const seen = new Set<string>();
+    while (parentId && !seen.has(parentId)) {
+      if (parentId === productRoot.id) return true;
+      seen.add(parentId);
+      parentId = categoryRecords.find((item) => item.id === parentId)?.parentId;
+    }
+    return false;
+  };
   const productCategories = isGemstone
     ? gemstoneTypes
-    : categoryRecords.filter((item) => item.kind === product?.productType && item.parentId && item.status === "Hoạt động" && item.usage !== "stone" && (item.level ?? 2) > 1);
+    : categoryRecords.filter((item) => item.kind === categoryKind && item.parentId && item.status === "Hoạt động" && item.usage !== "stone" && (item.level ?? 2) > 1 && isWithinProductRoot(item));
   const materialCategoryId = product?.categoryId || selectedCategory?.id;
   const isApplicableMaterial = (item: MaterialOption) => item.id === product?.materialOptionId || !Array.isArray(item.appliedCategoryIds) || !materialCategoryId || item.appliedCategoryIds.includes(materialCategoryId);
   const materialOptions = materials.filter((item) => item.scope === "Trang sức" && item.active && isApplicableMaterial(item));
@@ -273,8 +298,16 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     if (item.stock === 0) counts.outOfStock += 1;
     if (item.productType === "Trang sức") counts.jewelry += 1;
     if (item.productType === "Đá quý") counts.gemstone += 1;
+    if (item.productType === "Vật phẩm") counts.accessories += 1;
     return counts;
-  }, { active: 0, hidden: 0, outOfStock: 0, jewelry: 0, gemstone: 0 }), [products]);
+  }, { active: 0, hidden: 0, outOfStock: 0, jewelry: 0, gemstone: 0, accessories: 0 }), [products]);
+  const catalogProducts = products.filter((item) => item.productType === catalogKind);
+  const catalogCounts = {
+    total: catalogProducts.length,
+    active: catalogProducts.filter((item) => item.status === "Đang hoạt động").length,
+    hidden: catalogProducts.filter((item) => item.status === "Tạm ẩn").length,
+    outOfStock: catalogProducts.filter((item) => item.stock === 0).length,
+  };
   const pageCount = Math.max(1, Math.ceil(rows.length / PRODUCT_PAGE_SIZE));
   const currentPage = Math.min(page, pageCount - 1);
   const visibleRows = useMemo(() => rows.slice(currentPage * PRODUCT_PAGE_SIZE, (currentPage + 1) * PRODUCT_PAGE_SIZE), [rows, currentPage]);
@@ -290,7 +323,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   };
   const update = (key: keyof AdminProduct, value: string | number | boolean | string[] | ProductPriceVariant[] | undefined) => setDraft((old) => ({ ...old, [key]: value }));
   const cancelChanges = () => setDraft({});
-  const categoryTypeChanged = (value: "Trang sức" | "Đá quý") => {
+  const categoryTypeChanged = (value: "Trang sức" | "Đá quý" | "Vật phẩm") => {
     update("productType", value);
     update("category", "");
     update("categoryId", "");
@@ -609,7 +642,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     URL.revokeObjectURL(url);
   };
   const clearFilters = () => { setSearch(""); setCategoryFilter(""); setTypeFilter(""); setStatusFilter(""); setPage(0); };
-  const changeCatalogKind = (kind: "Trang sức" | "Đá quý") => {
+  const changeCatalogKind = (kind: "Trang sức" | "Đá quý" | "Vật phẩm") => {
     setCatalogKind(kind);
     setPage(0);
     setCategoryFilter("");
@@ -623,7 +656,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
   return <div className="products-workspace">
     <main className="products-main">
       <div className="products-heading">
-        <div><h1>Sản phẩm</h1><p>Quản lý bài đăng trên website. SKU, biến thể và số lượng lấy từ mục Quản lý tồn kho.</p></div>
+        <div><h1>{catalogKind === "Vật phẩm" ? "Vật phẩm" : "Sản phẩm"}</h1><p>Quản lý bài đăng trên website. SKU, biến thể và số lượng lấy từ mục Quản lý tồn kho.</p></div>
         <div className="products-actions">
           {canManageNewArrivals && <button className="button button-quiet" type="button" onClick={() => setStoneGroupWorkspaceOpen(true)}>Nhóm đá / New Arrivals</button>}
           {canFullCatalog && <button className="button button-quiet" onClick={() => onNotify("Nhập Excel sẽ được kết nối ở bước backend.")}><Icon name="upload"/>Nhập Excel</button>}
@@ -633,15 +666,15 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       </div>
 
       <section className="product-summary">
-        <button className="product-metric" onClick={() => { setStatusFilter(""); setPage(0); }}><span className="metric-icon green"><Icon name="cart"/></span><span><small>Tổng sản phẩm</small><strong>{products.length}</strong></span></button>
-        <button className="product-metric" onClick={() => { setStatusFilter("Đang hoạt động"); setPage(0); }}><span className="metric-icon mint"><Icon name="gem"/></span><span><small>Đang hoạt động</small><strong>{productCounts.active}</strong></span></button>
-        <button className="product-metric" onClick={() => { setStatusFilter("Tạm ẩn"); setPage(0); }}><span className="metric-icon amber"><Icon name="eye"/></span><span><small>Tạm ẩn</small><strong>{productCounts.hidden}</strong></span></button>
-        <button className="product-metric" onClick={() => { setStatusFilter("Hết hàng"); setPage(0); }}><span className="metric-icon rose"><Icon name="bag"/></span><span><small>Hết hàng</small><strong>{productCounts.outOfStock}</strong></span></button>
+        <button className="product-metric" onClick={() => { setStatusFilter(""); setPage(0); }}><span className="metric-icon green"><Icon name="cart"/></span><span><small>Tổng sản phẩm</small><strong>{catalogCounts.total}</strong></span></button>
+        <button className="product-metric" onClick={() => { setStatusFilter("Đang hoạt động"); setPage(0); }}><span className="metric-icon mint"><Icon name="gem"/></span><span><small>Đang hoạt động</small><strong>{catalogCounts.active}</strong></span></button>
+        <button className="product-metric" onClick={() => { setStatusFilter("Tạm ẩn"); setPage(0); }}><span className="metric-icon amber"><Icon name="eye"/></span><span><small>Tạm ẩn</small><strong>{catalogCounts.hidden}</strong></span></button>
+        <button className="product-metric" onClick={() => { setStatusFilter("Hết hàng"); setPage(0); }}><span className="metric-icon rose"><Icon name="bag"/></span><span><small>Hết hàng</small><strong>{catalogCounts.outOfStock}</strong></span></button>
       </section>
 
       <section className="products-table-panel">
         <div className="product-kind-tabs" role="tablist" aria-label="Nhóm hồ sơ sản phẩm">
-          {(["Trang sức", "Đá quý"] as const).map((kind) => <button key={kind} type="button" role="tab" aria-selected={catalogKind === kind} className={catalogKind === kind ? "active" : ""} onClick={() => changeCatalogKind(kind)}>{kind}<span>{kind === "Trang sức" ? productCounts.jewelry : productCounts.gemstone}</span></button>)}
+          {(["Trang sức", "Vật phẩm", "Đá quý"] as const).map((kind) => <button key={kind} type="button" role="tab" aria-selected={catalogKind === kind} className={catalogKind === kind ? "active" : ""} onClick={() => changeCatalogKind(kind)}>{kind}<span>{kind === "Trang sức" ? productCounts.jewelry : kind === "Đá quý" ? productCounts.gemstone : productCounts.accessories}</span></button>)}
         </div>
         <div className="product-filterbar">
           <label className="product-search"><Icon name="search"/><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(0); }} placeholder="Tìm kiếm sản phẩm, mã SKU, tên sản phẩm..." aria-label="Tìm sản phẩm"/></label>
@@ -681,7 +714,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
       {activeTab === "basic" && <section className="product-editor" aria-label="Thông tin cơ bản">
         <label className="product-field"><span>Tên sản phẩm <b>*</b></span><input value={product.name} disabled={!canEditContent} onChange={(event) => update("name", event.target.value)} /></label>
         <div className="product-basic-classification">
-          <div className="product-field-grid product-catalog-grid"><label className="product-field"><span>Nhóm sản phẩm <b>*</b></span><select disabled={!canFullCatalog} value={product.productType ?? "Trang sức"} onChange={(event) => categoryTypeChanged(event.target.value as "Trang sức" | "Đá quý")}><option>Trang sức</option><option>Đá quý</option></select></label><label className="product-field"><span>{isGemstone ? "Loại đá / danh mục cấp 2" : "Danh mục sản phẩm"} <b>*</b></span><select disabled={!canFullCatalog} value={isGemstone ? product.gemstoneTypeId ?? product.categoryId ?? "" : product.categoryId ?? selectedCategory?.id ?? ""} onChange={(event) => categoryChanged(event.target.value)}><option value="">{isGemstone ? "Chọn loại đá" : "Chọn danh mục"}</option>{productCategories.map((category) => {const parent = categoryRecords.find((item) => item.id === category.parentId);return <option key={category.id} value={category.id}>{!isGemstone && parent && parent.id !== productRoot?.id ? parent.name + " / " + category.name : category.name}</option>;})}</select></label></div>
+          <div className="product-field-grid product-catalog-grid"><label className="product-field"><span>Nhóm sản phẩm <b>*</b></span><select disabled={!canFullCatalog} value={product.productType ?? "Trang sức"} onChange={(event) => categoryTypeChanged(event.target.value as "Trang sức" | "Đá quý" | "Vật phẩm")}><option>Trang sức</option><option>Vật phẩm</option><option>Đá quý</option></select></label><label className="product-field"><span>{isGemstone ? "Loại đá / danh mục cấp 2" : "Danh mục sản phẩm"} <b>*</b></span><select disabled={!canFullCatalog} value={isGemstone ? product.gemstoneTypeId ?? product.categoryId ?? "" : product.categoryId ?? selectedCategory?.id ?? ""} onChange={(event) => categoryChanged(event.target.value)}><option value="">{isGemstone ? "Chọn loại đá" : "Chọn danh mục"}</option>{productCategories.map((category) => {const parent = categoryRecords.find((item) => item.id === category.parentId);return <option key={category.id} value={category.id}>{!isGemstone && parent && parent.id !== productRoot?.id ? parent.name + " / " + category.name : category.name}</option>;})}</select></label></div>
           {isGemstone ? <div className="product-category-guidance" role="note"><span className="product-category-guidance-icon" aria-hidden="true">◇</span><div className="product-category-guidance-copy"><strong>Quản lý theo danh mục đá</strong><span>Dạng cắt, kích thước hoặc carat/chất lượng được cấu hình trong tab <b>Biến thể &amp; Giá</b>.</span></div></div> : <label className="product-field product-material-field"><span>Đá gắn / Chất liệu</span><select disabled={!canFullCatalog} value={product.materialOptionId ?? ""} onChange={(event) => { const option = materials.find((item) => item.id === event.target.value); update("materialOptionId", option?.id ?? ""); update("subcategory", option?.name ?? ""); }}><option value="">Chọn đá gắn hoặc chất liệu</option>{materialOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>}
         </div>
         {!isGemstone && <section className="new-arrivals-product-metadata" aria-label="Dữ liệu New Arrivals"><div className="product-field"><span>Nhóm đá chính</span><select disabled={!canFullCatalog || savingStoneGroup} value={product.jewelryStoneGroupId ?? ""} onChange={async (event) => { setSavingStoneGroup(true); try { await onAssignProductGroup(product, event.target.value || null); onNotify("Đã cập nhật nhóm đá chính cho sản phẩm."); } catch (error) { onNotify(error instanceof Error ? error.message : "Không cập nhật được nhóm đá."); } finally { setSavingStoneGroup(false); } }}><option value="">Chưa gán trực tiếp · dùng mapping đã xác nhận</option>{stoneGroups.filter((group) => group.active || group.id === product.jewelryStoneGroupId).map((group) => <option key={group.id} value={group.id}>{group.name}{group.active ? "" : " (tạm dừng)"}</option>)}</select><small>{product.jewelryStoneGroup?.name ? `Đang gán trực tiếp: ${product.jewelryStoneGroup.name}` : "Chưa xác định nhóm đá chính; hệ thống chỉ dùng mapping đã quản lý."}</small></div><div className="product-field"><span>Ngày đăng lần đầu</span><div className="new-arrivals-readonly-date">{product.firstPublishedAt ? new Intl.DateTimeFormat("vi-VN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Ho_Chi_Minh" }).format(new Date(product.firstPublishedAt)) : product.publicationHistoryKnown ? "Chưa đăng lần nào" : "Chưa xác định · dữ liệu lịch sử cũ"}</div></div></section>}

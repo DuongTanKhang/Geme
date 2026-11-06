@@ -12,7 +12,10 @@ import { absolutePublicImageUrl, absoluteSiteUrl, plainText, validDate } from ".
 
 type Props = { params: Promise<{ slug: string }> };
 
-export const revalidate = 5;
+// This route reads the request CSP nonce through StructuredData. Keep the page
+// request-rendered so Next does not try to statically prerender a request-bound
+// header. The article API fetch itself remains cached briefly by store-api.
+export const dynamic = "force-dynamic";
 
 export function generateStaticParams(): Array<{ slug: string }> {
   return [];
