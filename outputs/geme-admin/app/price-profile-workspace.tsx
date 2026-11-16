@@ -7,7 +7,7 @@ import type { MaterialOption } from "./materials-workspace";
 import { parsePriceInput } from "./product-images";
 
 type VariantDraft = { price: string; originalPrice: string };
-type ProductDraft = { price: string; originalPrice: string; variants: Record<string, VariantDraft> };
+type ProductDraft = { price: string; originalPrice: string; variants: Record<string, VariantDraft>; sphereItems: Record<string, string> };
 type PriceSyncStatus = { id: string; sku: string; status: string | null; error: string | null; syncedAt: string | null };
 type Props = {
   products: AdminProduct[];
@@ -32,6 +32,7 @@ function makeDraft(product: AdminProduct): ProductDraft {
     variants: Object.fromEntries((product.priceVariants || []).map((variant, index) => [variantKey(variant, index), {
       price: String(variant.price || ""), originalPrice: String(variant.originalPrice || ""),
     }])),
+    sphereItems: Object.fromEntries((product.sphereItems || []).map((item) => [item.id, String(item.price || "")])),
   };
 }
 
@@ -132,8 +133,9 @@ function jewelryProfileDetails(product: AdminProduct): JewelryProfileDetails {
 
 function categoryMatches(product: AdminProduct, selectedId: string, descendants: Map<string, Set<string>>) {
   if (selectedId === "all") return true;
-  if (selectedId === "__uncategorized__") return !product.categoryId;
-  return descendants.get(selectedId)?.has(product.categoryId || "") ?? product.categoryId === selectedId;
+  const productCategoryId = product.productType === "Đá quý" ? product.gemstoneTypeId || product.categoryId : product.categoryId;
+  if (selectedId === "__uncategorized__") return !productCategoryId;
+  return descendants.get(selectedId)?.has(productCategoryId || "") ?? productCategoryId === selectedId;
 }
 
 function categoryFiltersMatch(product: AdminProduct, selectedIds: string[], descendants: Map<string, Set<string>>) {
@@ -169,9 +171,13 @@ export default function PriceProfileWorkspace({ products, categories, materials,
   const [categoryFilters, setCategoryFilters] = useState<string[]>([]);
   const [stoneFilters, setStoneFilters] = useState<string[]>([]);
   const [sizeFilters, setSizeFilters] = useState<string[]>([]);
+  const [qualityFilters, setQualityFilters] = useState<string[]>([]);
+  const [weightFilters, setWeightFilters] = useState<string[]>([]);
   const [draftCategoryFilters, setDraftCategoryFilters] = useState<string[]>([]);
   const [draftStoneFilters, setDraftStoneFilters] = useState<string[]>([]);
   const [draftSizeFilters, setDraftSizeFilters] = useState<string[]>([]);
+  const [draftQualityFilters, setDraftQualityFilters] = useState<string[]>([]);
+  const [draftWeightFilters, setDraftWeightFilters] = useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [missingOnly, setMissingOnly] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, ProductDraft>>({});
@@ -221,8 +227,8 @@ export default function PriceProfileWorkspace({ products, categories, materials,
 
   const categoryOptions = useMemo(() => {
     const currentProducts = products.filter((product) => product.productType === kind);
-    const expectedCategoryKind = kind === "Trang sức" ? "Trang sức" : "Đá quý";
-    const expectedUsage = kind === "Trang sức" ? "product" : "stone";
+    const expectedCategoryKind = kind;
+    const expectedUsage = kind === "Đá quý" ? "stone" : "product";
     const configured = categories
       .filter((category) => category.kind === expectedCategoryKind && category.usage === expectedUsage && category.status === "Hoạt động" && (kind === "Trang sức" ? Number(category.level || 1) > 1 : true))
       .map((category) => [category.id, category.name, currentProducts.filter((product) => categoryDescendants.get(category.id)?.has(product.categoryId || "")).length, Number(category.sortOrder) || 0, category.parentId || ""] as [string, string, number, number, string])
@@ -246,15 +252,25 @@ export default function PriceProfileWorkspace({ products, categories, materials,
   }, [categoryOptions]);
 
   const stoneOptions = useMemo(() => {
-    if (kind !== "Trang sức") return [];
     const contextualCategories = filtersOpen ? draftCategoryFilters : categoryFilters;
     const counts = new Map<string, number>();
-    for (const stone of materials) {
-      if (!stone.active || stone.scope !== "Trang sức" || stone.kind !== "STONE") continue;
-      const count = products.filter((product) => product.productType === "Trang sức" && product.materialOptionId === stone.id && categoryFiltersMatch(product, contextualCategories, categoryDescendants)).length;
-      if (count > 0) counts.set(stone.id, count);
+    if (kind === "Trang sức") {
+      for (const stone of materials) {
+        if (!stone.active || stone.scope !== "Trang sức" || stone.kind !== "STONE") continue;
+        const count = products.filter((product) => product.productType === kind && product.materialOptionId === stone.id && categoryFiltersMatch(product, contextualCategories, categoryDescendants)).length;
+        if (count > 0) counts.set(stone.id, count);
+      }
+      return [...counts.entries()].map(([id, count]) => [id, materials.find((stone) => stone.id === id)?.name || "", count] as [string, string, number]).sort((a, b) => a[1].localeCompare(b[1], "vi"));
     }
-    return [...counts.entries()].map(([id, count]) => [id, materials.find((stone) => stone.id === id)?.name || "", count] as [string, string, number]).sort((a, b) => a[1].localeCompare(b[1], "vi"));
+    if (kind === "Vật phẩm") {
+      for (const product of products) {
+        const key = product.stoneFilterKey || product.subcategory || "";
+        if (product.productType !== kind || !key || !categoryFiltersMatch(product, contextualCategories, categoryDescendants)) continue;
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      return [...counts.entries()].map(([key, count]) => [key, products.find((product) => (product.stoneFilterKey || product.subcategory || "") === key)?.subcategory || key.replace(/^sphere:/, ""), count] as [string, string, number]).sort((a, b) => a[1].localeCompare(b[1], "vi"));
+    }
+    return [];
   }, [products, materials, kind, categoryFilters, draftCategoryFilters, filtersOpen, categoryDescendants]);
 
   const sizeOptions = useMemo(() => {
@@ -269,52 +285,102 @@ export default function PriceProfileWorkspace({ products, categories, materials,
     return [...counts.entries()].map(([size, count]) => [size, count] as [string, number]).sort((a, b) => a[0].localeCompare(b[0], "vi", { numeric: true }));
   }, [products, kind, categoryFilters, stoneFilters, draftCategoryFilters, draftStoneFilters, filtersOpen, categoryDescendants]);
 
+  const qualityOptions = useMemo(() => {
+    if (kind !== "Vật phẩm") return [];
+    const contextualCategories = filtersOpen ? draftCategoryFilters : categoryFilters;
+    const contextualStones = filtersOpen ? draftStoneFilters : stoneFilters;
+    const counts = new Map<string, number>();
+    for (const product of products) {
+      if (product.productType !== kind || !product.sphereQuality || !categoryFiltersMatch(product, contextualCategories, categoryDescendants)) continue;
+      if (contextualStones.length && !contextualStones.includes(product.stoneFilterKey || product.subcategory || "")) continue;
+      counts.set(product.sphereQuality, (counts.get(product.sphereQuality) || 0) + 1);
+    }
+    return [...counts.entries()].map(([quality, count]) => [quality, count] as [string, number]).sort((a, b) => a[0].localeCompare(b[0], "vi", { numeric: true }));
+  }, [products, kind, categoryFilters, stoneFilters, draftCategoryFilters, draftStoneFilters, filtersOpen, categoryDescendants]);
+
+  const weightOptions = useMemo(() => {
+    if (kind !== "Vật phẩm") return [];
+    const contextualCategories = filtersOpen ? draftCategoryFilters : categoryFilters;
+    const contextualStones = filtersOpen ? draftStoneFilters : stoneFilters;
+    const counts = new Map<string, number>();
+    for (const product of products) {
+      if (product.productType !== kind || !categoryFiltersMatch(product, contextualCategories, categoryDescendants)) continue;
+      if (contextualStones.length && !contextualStones.includes(product.stoneFilterKey || product.subcategory || "")) continue;
+      for (const item of product.sphereItems || []) {
+        const weight = Number(item.weightKg);
+        if (weight > 0) {
+          const key = String(Math.round(weight * 1000) / 1000);
+          counts.set(key, (counts.get(key) || 0) + 1);
+        }
+      }
+    }
+    return [...counts.entries()].map(([weight, count]) => [weight, count] as [string, number]).sort((a, b) => Number(a[0]) - Number(b[0]));
+  }, [products, kind, categoryFilters, stoneFilters, draftCategoryFilters, draftStoneFilters, filtersOpen, categoryDescendants]);
+
   const filtered = useMemo(() => products.filter((product) => {
     const matchesQuery = `${product.id} ${product.name} ${product.category || ""} ${product.subcategory || ""}`.toLocaleLowerCase("vi").includes(query.trim().toLocaleLowerCase("vi"));
     const matchesKind = product.productType === kind;
     const matchesCategory = categoryFiltersMatch(product, categoryFilters, categoryDescendants);
-    const matchesStone = kind !== "Trang sức" || !stoneFilters.length || stoneFilters.includes(product.materialOptionId || "");
+    const productStoneKey = kind === "Trang sức" ? product.materialOptionId || "" : product.stoneFilterKey || product.subcategory || "";
+    const matchesStone = !stoneFilters.length || stoneFilters.includes(productStoneKey);
     const matchesSize = !sizeFilters.length || productSizeValues(product).some((size) => sizeFilters.includes(size));
-    const prices = product.priceVariants?.length ? product.priceVariants.map((variant) => Number(variant.price) || 0) : [Number(product.price) || 0];
+    const matchesQuality = kind !== "Vật phẩm" || !qualityFilters.length || qualityFilters.includes(product.sphereQuality || "");
+    const matchesWeight = kind !== "Vật phẩm" || !weightFilters.length || (product.sphereItems || []).some((item) => weightFilters.includes(String(Math.round(Number(item.weightKg) * 1000) / 1000)));
+    const prices = product.sphereItems?.length ? product.sphereItems.map((item) => Number(item.price) || 0) : product.priceVariants?.length ? product.priceVariants.map((variant) => Number(variant.price) || 0) : [Number(product.price) || 0];
     const hasMissing = prices.some((price) => price <= 0);
-    return matchesQuery && matchesKind && matchesCategory && matchesStone && matchesSize && (!missingOnly || hasMissing);
-  }).sort((a, b) => a.id.localeCompare(b.id, "vi")), [products, query, kind, categoryFilters, stoneFilters, sizeFilters, missingOnly, categoryDescendants]);
+    return matchesQuery && matchesKind && matchesCategory && matchesStone && matchesSize && matchesQuality && matchesWeight && (!missingOnly || hasMissing);
+  }).sort((a, b) => a.id.localeCompare(b.id, "vi")), [products, query, kind, categoryFilters, stoneFilters, sizeFilters, qualityFilters, weightFilters, missingOnly, categoryDescendants]);
 
-  const activeFilterCount = categoryFilters.length + stoneFilters.length + sizeFilters.length + Number(missingOnly);
+  const activeFilterCount = categoryFilters.length + stoneFilters.length + sizeFilters.length + qualityFilters.length + weightFilters.length + Number(missingOnly);
   const toggleFilterValue = (value: string, current: string[], update: (next: string[]) => void) => update(current.includes(value) ? current.filter((item) => item !== value) : [...current, value]);
   const openFilters = () => {
     setDraftCategoryFilters(categoryFilters);
     setDraftStoneFilters(stoneFilters);
     setDraftSizeFilters(sizeFilters);
+    setDraftQualityFilters(qualityFilters);
+    setDraftWeightFilters(weightFilters);
     setFiltersOpen((open) => !open);
   };
   const applyFilters = () => {
     setCategoryFilters(draftCategoryFilters);
     setStoneFilters(draftStoneFilters);
     setSizeFilters(draftSizeFilters);
+    setQualityFilters(draftQualityFilters);
+    setWeightFilters(draftWeightFilters);
     setFiltersOpen(false);
   };
   const resetFilters = () => {
     setCategoryFilters([]);
     setStoneFilters([]);
     setSizeFilters([]);
+    setQualityFilters([]);
+    setWeightFilters([]);
     setDraftCategoryFilters([]);
     setDraftStoneFilters([]);
     setDraftSizeFilters([]);
+    setDraftQualityFilters([]);
+    setDraftWeightFilters([]);
     setMissingOnly(false);
   };
   const selectCategoryTab = (id: string) => {
     const next = id ? [id] : [];
     setCategoryFilters(next);
     setDraftCategoryFilters(next);
+    setStoneFilters([]); setDraftStoneFilters([]);
+    setSizeFilters([]); setDraftSizeFilters([]);
+    setQualityFilters([]); setDraftQualityFilters([]);
+    setWeightFilters([]); setDraftWeightFilters([]);
   };
 
   const pricedCount = products.filter((product) => product.priceVariants?.length
     ? product.priceVariants.length > 0 && product.priceVariants.every((variant) => Number(variant.price) > 0)
+    : product.sphereItems?.length
+      ? product.sphereItems.every((item) => Number(item.price) > 0)
     : Number(product.price) > 0).length;
-  const variantCount = products.reduce((sum, product) => sum + (product.priceVariants?.length || 1), 0);
+  const variantCount = products.reduce((sum, product) => sum + (product.sphereItems?.length || product.priceVariants?.length || 1), 0);
   const dirty = (product: AdminProduct, draft: ProductDraft) => {
     if (Number(draft.price) !== Number(product.price || 0) || Number(draft.originalPrice) !== Number(product.originalPrice || 0)) return true;
+    if ((product.sphereItems || []).some((item) => Number(draft.sphereItems[item.id] || 0) !== Number(item.price || 0))) return true;
     return (product.priceVariants || []).some((variant, index) => {
       const next = draft.variants[variantKey(variant, index)] || { price: "", originalPrice: "" };
       return Number(next.price) !== Number(variant.price || 0) || Number(next.originalPrice) !== Number(variant.originalPrice || 0);
@@ -359,6 +425,7 @@ export default function PriceProfileWorkspace({ products, categories, materials,
       price: priceVariants.length ? (prices.length ? Math.min(...prices) : 0) : parsePriceInput(draft.price),
       originalPrice: parsePriceInput(draft.originalPrice),
       priceVariants,
+      sphereItems: (product.sphereItems || []).map((item) => ({ ...item, price: parsePriceInput(draft.sphereItems[item.id] || "") })),
     };
     setSavingId(key);
     try {
@@ -398,7 +465,7 @@ export default function PriceProfileWorkspace({ products, categories, materials,
 
   return <section className="price-profile-workspace">
     <div className="price-profile-heading">
-      <div><span className="price-profile-eyebrow">GEME · QUẢN LÝ GIÁ</span><h1>Hồ sơ giá</h1><p>Bảng giá cố định theo SKU và biến thể. Đây là nguồn giá dùng chung cho website và POS365.</p></div>
+      <div><span className="price-profile-eyebrow">GEME · QUẢN LÝ GIÁ</span><h1>Hồ sơ giá</h1><p>Giá được quản lý theo đúng từng ngành hàng và từng phiên bản sản phẩm.</p></div>
       <div className="price-profile-actions"><button className="button button-quiet" type="button" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? "Đang tải…" : "Làm mới"}</button><button className="button button-primary" type="button" onClick={() => void syncAll()} disabled={syncing}>{syncing ? "Đang xếp hàng…" : "Đồng bộ giá POS365"}</button></div>
     </div>
 
@@ -408,12 +475,12 @@ export default function PriceProfileWorkspace({ products, categories, materials,
       <article><span>SKU / biến thể</span><strong>{variantCount}</strong><small>Giá được quản lý riêng từng lựa chọn</small></article>
     </div>
 
-    <div className="price-profile-note"><span>◇</span><p><strong>Giá bán được lưu trên hồ sơ SKU hiện tại.</strong> Chỉnh tại đây hoặc trong form sản phẩm đều cập nhật cùng một dữ liệu. Giá nhập kho chỉ cập nhật giá vốn, không tự đổi giá bán.</p></div>
+    <div className="price-profile-note"><span>◇</span><p><strong>Vật phẩm tính theo kg có giá riêng cho từng món.</strong> Mỗi giá gắn với đúng quả/đồ vật và khối lượng; không thay đổi giá chung của SKU. Giá nhập kho chỉ cập nhật giá vốn.</p></div>
 
-    <div className="price-profile-kind-tabs" role="tablist" aria-label="Loại hồ sơ giá"><button type="button" role="tab" aria-selected={kind === "Trang sức"} className={kind === "Trang sức" ? "active" : ""} onClick={() => { setKind("Trang sức"); resetFilters(); setFiltersOpen(false); }}>Trang sức <span>{products.filter((product) => product.productType === "Trang sức").length}</span></button><button type="button" role="tab" aria-selected={kind === "Đá quý"} className={kind === "Đá quý" ? "active" : ""} onClick={() => { setKind("Đá quý"); resetFilters(); setFiltersOpen(false); }}>Đá quý <span>{products.filter((product) => product.productType === "Đá quý").length}</span></button></div>
+    <div className="price-profile-kind-tabs" role="tablist" aria-label="Loại hồ sơ giá">{(["Trang sức", "Đá quý", "Vật phẩm"] as const).map((value) => <button key={value} type="button" role="tab" aria-selected={kind === value} className={kind === value ? "active" : ""} onClick={() => { setKind(value); resetFilters(); setFiltersOpen(false); }}>{value} <span>{products.filter((product) => product.productType === value).length}</span></button>)}</div>
     {categoryTabOptions.length > 0 && <div className="price-profile-category-tabs" role="group" aria-label={`Lọc theo danh mục ${kind.toLocaleLowerCase("vi")}`}><button type="button" className={!categoryFilters.length ? "active" : ""} aria-pressed={!categoryFilters.length} onClick={() => selectCategoryTab("")}>Tất cả</button>{categoryTabOptions.map(([id, name, count]) => <button type="button" key={id} className={categoryFilters.length === 1 && categoryFilters[0] === id ? "active" : ""} aria-pressed={categoryFilters.length === 1 && categoryFilters[0] === id} onClick={() => selectCategoryTab(id)}>{name}<span>{count}</span></button>)}</div>}
     <div className="price-profile-toolbar"><label className="price-profile-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm SKU, tên hoặc danh mục…"/></label><button type="button" className="price-profile-filter-toggle" aria-expanded={filtersOpen} aria-controls="price-profile-filter-panel" onClick={openFilters}>Bộ lọc{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}<span aria-hidden="true">{filtersOpen ? "−" : "+"}</span></button><label className="price-profile-missing"><input type="checkbox" checked={missingOnly} onChange={(event) => setMissingOnly(event.target.checked)}/> Chỉ xem thiếu giá</label><span>{filtered.length} / {products.filter((product) => product.productType === kind).length} hồ sơ</span>
-      {filtersOpen && <div className="price-profile-filter-panel" id="price-profile-filter-panel"><div className="price-profile-filter-heading"><h3>Bộ lọc</h3><button type="button" aria-label="Đóng bộ lọc" onClick={() => setFiltersOpen(false)}>×</button></div>{categoryOptions.length > 0 && <fieldset><legend>Danh mục</legend>{categoryOptions.map(([id, name, count, , parentId]) => <label key={id} style={{ marginInlineStart: parentId && categoryOptions.some(([candidateId]) => candidateId === parentId) ? 14 : 0 }}><input type="checkbox" checked={draftCategoryFilters.includes(id)} onChange={() => toggleFilterValue(id, draftCategoryFilters, setDraftCategoryFilters)}/>{name}<span>({count})</span></label>)}</fieldset>}{kind === "Trang sức" && stoneOptions.length > 0 && <fieldset><legend>Loại đá</legend>{stoneOptions.map(([id, name, count]) => <label key={id}><input type="checkbox" checked={draftStoneFilters.includes(id)} onChange={() => toggleFilterValue(id, draftStoneFilters, setDraftStoneFilters)}/>{name}<span>({count})</span></label>)}</fieldset>}{sizeOptions.length > 0 && <fieldset><legend>Kích thước</legend>{sizeOptions.map(([size, count]) => <label key={size}><input type="checkbox" checked={draftSizeFilters.includes(size)} onChange={() => toggleFilterValue(size, draftSizeFilters, setDraftSizeFilters)}/>{size}<span>({count})</span></label>)}</fieldset>}<div className="price-profile-filter-actions"><button type="button" className="button button-quiet" onClick={resetFilters}>Xóa bộ lọc</button><button type="button" className="button button-primary" onClick={applyFilters}>Áp dụng</button></div></div>}
+      {filtersOpen && <div className="price-profile-filter-panel" id="price-profile-filter-panel"><div className="price-profile-filter-heading"><h3>Bộ lọc · {kind}</h3><button type="button" aria-label="Đóng bộ lọc" onClick={() => setFiltersOpen(false)}>×</button></div>{categoryOptions.length > 0 && <fieldset><legend>Danh mục</legend>{categoryOptions.map(([id, name, count, , parentId]) => <label key={id} style={{ marginInlineStart: parentId && categoryOptions.some(([candidateId]) => candidateId === parentId) ? 14 : 0 }}><input type="checkbox" checked={draftCategoryFilters.includes(id)} onChange={() => toggleFilterValue(id, draftCategoryFilters, setDraftCategoryFilters)}/>{name}<span>({count})</span></label>)}</fieldset>}{stoneOptions.length > 0 && <fieldset><legend>{kind === "Vật phẩm" ? "Loại đá / nhóm vật phẩm" : "Loại đá"}</legend>{stoneOptions.map(([id, name, count]) => <label key={id}><input type="checkbox" checked={draftStoneFilters.includes(id)} onChange={() => toggleFilterValue(id, draftStoneFilters, setDraftStoneFilters)}/>{name}<span>({count})</span></label>)}</fieldset>}{kind === "Trang sức" && sizeOptions.length > 0 && <fieldset><legend>Kích thước</legend>{sizeOptions.map(([size, count]) => <label key={size}><input type="checkbox" checked={draftSizeFilters.includes(size)} onChange={() => toggleFilterValue(size, draftSizeFilters, setDraftSizeFilters)}/>{size}<span>({count})</span></label>)}</fieldset>}{kind === "Vật phẩm" && qualityOptions.length > 0 && <fieldset><legend>Chất lượng</legend>{qualityOptions.map(([quality, count]) => <label key={quality}><input type="checkbox" checked={draftQualityFilters.includes(quality)} onChange={() => toggleFilterValue(quality, draftQualityFilters, setDraftQualityFilters)}/>{quality}<span>({count})</span></label>)}</fieldset>}{kind === "Vật phẩm" && weightOptions.length > 0 && <fieldset><legend>Khối lượng từng món</legend>{weightOptions.map(([weight, count]) => <label key={weight}><input type="checkbox" checked={draftWeightFilters.includes(weight)} onChange={() => toggleFilterValue(weight, draftWeightFilters, setDraftWeightFilters)}/>{new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 3 }).format(Number(weight))} kg<span>({count})</span></label>)}</fieldset>}{<div className="price-profile-filter-actions"><button type="button" className="button button-quiet" onClick={resetFilters}>Xóa bộ lọc</button><button type="button" className="button button-primary" onClick={applyFilters}>Áp dụng</button></div>}</div>}
     </div>
 
     <div className="price-profile-list">{filtered.map((product) => {
@@ -422,12 +489,19 @@ export default function PriceProfileWorkspace({ products, categories, materials,
       const changed = dirty(product, draft);
       const status = syncLabel(product.pos365PriceSyncStatus);
       const variants = product.priceVariants || [];
+      const sphereItems = product.sphereItems || [];
+      const hasPhysicalItems = product.productType === "Vật phẩm" && sphereItems.length > 0;
       const pricePerCarat = product.productType === "Đá quý" && ["GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"].includes(String(product.categoryPricingMode || ""));
       const jewelryDetails = product.productType === "Trang sức" ? jewelryProfileDetails(product) : null;
       return <article className="price-profile-card" key={key}>
         <header className={jewelryDetails ? "price-profile-card-header-jewelry" : undefined}><div className="price-profile-product"><span className="price-profile-gem">◇</span><div><strong>{jewelryDetails?.name || product.name || "Sản phẩm chưa đặt tên"}</strong><span>{product.id} · {product.productType || "Trang sức"}{product.category ? ` · ${product.category}` : ""}</span></div></div>{jewelryDetails && <div className="price-profile-jewelry-details" aria-label="Thông tin trang sức">{jewelryDetails.attributes.map((attribute) => <div key={attribute.label}><span>{attribute.label}</span><strong className={!attribute.value ? "is-empty" : undefined}>{attribute.value || "—"}</strong></div>)}</div>}<span className={`price-profile-sync ${status.tone}`} title={product.pos365PriceSyncError || undefined}><i/>{status.text}</span></header>
-        <div className="price-profile-price-head"><span>SKU / lựa chọn</span><span>Tồn</span><span>{pricePerCarat ? "Giá bán / 1 ct" : "Giá bán"}</span><span>{pricePerCarat ? "Giá gốc / 1 ct" : "Giá gốc"}</span></div>
-        {variants.length ? variants.map((variant, index) => {
+        <div className={`price-profile-price-head${hasPhysicalItems ? " price-profile-weight-head" : ""}`}><span>{hasPhysicalItems ? "Món / chất lượng" : "SKU / lựa chọn"}</span><span>{hasPhysicalItems ? "Khối lượng" : "Tồn"}</span><span>{hasPhysicalItems ? "Giá bán riêng" : pricePerCarat ? "Giá bán / 1 ct" : "Giá bán"}</span><span>{hasPhysicalItems ? "Ảnh" : pricePerCarat ? "Giá gốc / 1 ct" : "Giá gốc"}</span></div>
+        {hasPhysicalItems ? sphereItems.map((item, index) => <div className="price-profile-price-row price-profile-weight-row" key={item.id}>
+          <div><strong>{item.label || `Món ${index + 1}`}</strong><small>{product.sphereQuality || "Chưa rõ chất lượng"} · {item.status === "AVAILABLE" ? "Còn trong kho" : item.status === "RESERVED" ? "Đang giữ cho đơn" : item.status === "SOLD" ? "Đã bán" : item.status}</small></div>
+          <span>{new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 3 }).format(Number(item.weightKg) || 0)} kg</span>
+          <label className="price-profile-input"><input aria-label={`Giá bán ${product.id} · ${item.weightKg} kg`} inputMode="numeric" value={draft.sphereItems[item.id] ?? ""} onChange={(event) => updateDraft(product, (current) => ({ ...current, sphereItems: { ...current.sphereItems, [item.id]: event.target.value } }))}/><i>₫</i></label>
+          <span className={item.imageUrls?.length ? "price-profile-media-ready" : "price-profile-media-missing"}>{item.imageUrls?.length ? "Đã có ảnh" : "Thiếu ảnh"}</span>
+        </div>) : variants.length ? variants.map((variant, index) => {
           const rowKey = variantKey(variant, index);
           const value = draft.variants[rowKey] || { price: "", originalPrice: "" };
           return <div className="price-profile-price-row" key={rowKey}>

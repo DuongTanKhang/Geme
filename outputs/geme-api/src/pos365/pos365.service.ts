@@ -68,6 +68,8 @@ const asNumber = (value: unknown) => {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 };
+const isWeightBasedProduct = (product: Pos365Record) => String(product.kind || "").toLocaleUpperCase("en") === "OTHER";
+const posStockMatches = (actual: number | null, expected: number) => actual !== null && Math.abs(actual - expected) < 0.0005;
 
 @Injectable()
 export class Pos365Service implements OnModuleInit, OnModuleDestroy {
@@ -211,7 +213,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     const costBySku = new Map<string, number>();
     for (const row of receiptCosts) if (!costBySku.has(normalizedCode(row.productSku))) costBySku.set(normalizedCode(row.productSku), Number(row.unitCost));
 
-    const linesBySku = new Map<string, { sku: string; name: string; price: number; stock: number }>();
+    const linesBySku = new Map<string, { sku: string; name: string; price: number; stock: number; unit: "Cái" | "kg" }>();
     for (const product of products) {
       const variants = product.variants || [];
       if (variants.length) {
@@ -220,12 +222,13 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
           if (!sku) throw new Error(`Sản phẩm ${product.name} có biến thể thiếu SKU riêng; chưa thể đồng bộ tồn an toàn.`);
           const key = normalizedCode(sku);
           if (linesBySku.has(key)) throw new Error(`SKU ${sku} bị lặp giữa nhiều biến thể hoặc sản phẩm; chưa thể đồng bộ tồn an toàn.`);
-          linesBySku.set(key, { sku, name: product.name, price: posVariantSellPrice(product, variant), stock: variant.stock });
+          linesBySku.set(key, { sku, name: product.name, price: posVariantSellPrice(product, variant), stock: variant.stock, unit: "Cái" });
         }
       } else {
         const key = normalizedCode(product.sku);
         if (!key || linesBySku.has(key)) throw new Error(`SKU ${product.sku || "(trống)"} bị thiếu hoặc bị lặp; chưa thể đồng bộ tồn an toàn.`);
-        linesBySku.set(key, { sku: product.sku, name: product.name, price: Number(product.price) || 0, stock: product.stock });
+        const byWeight = isWeightBasedProduct(product);
+        linesBySku.set(key, { sku: product.sku, name: product.name, price: Number(product.price) || 0, stock: byWeight ? Number(product.stockKg) || 0 : product.stock, unit: byWeight ? "kg" : "Cái" });
       }
     }
     const targetLines = [...linesBySku.values()];
@@ -236,7 +239,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     for (const line of targetLines) {
       const existing = this.findProductByCode(catalog, line.sku);
       if (existing) continue;
-      const created = await this.createProduct(config, sessionId, line.sku, line.name, line.price);
+      const created = await this.createProduct(config, sessionId, line.sku, line.name, line.price, line.unit);
       catalog.push(created);
       createdProducts.push(line.sku);
     }
@@ -266,7 +269,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     const mismatches = targetLines.flatMap((line) => {
       const remote = this.findProductByCode(verifiedCatalog, line.sku);
       const actual = asNumber(remote?.OnHand ?? remote?.TotalOnHand);
-      return actual === line.stock ? [] : [{ sku: line.sku, expected: line.stock, actual }];
+      return posStockMatches(actual, line.stock) ? [] : [{ sku: line.sku, expected: line.stock, actual }];
     });
     if (mismatches.length) throw new Error(`POS365 nhận phiếu kiểm kê ${code} nhưng còn ${mismatches.length} mã chưa khớp: ${mismatches.map((row) => row.sku).join(", ")}.`);
     await this.prisma.product.updateMany({
@@ -537,8 +540,8 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       include: { category: { select: { pricingMode: true } }, variants: { orderBy: { sortOrder: "asc" } } },
     });
     const targetLines = products.flatMap((product) => product.variants.length
-      ? product.variants.map((variant) => ({ sku: String(variant.sku || "").trim(), name: product.name, price: posVariantSellPrice(product, variant), stock: variant.stock }))
-      : [{ sku: String(product.sku || "").trim(), name: product.name, price: Number(product.price) || 0, stock: product.stock }]);
+      ? product.variants.map((variant) => ({ sku: String(variant.sku || "").trim(), name: product.name, price: posVariantSellPrice(product, variant), stock: variant.stock, unit: "Cái" as const }))
+      : [{ sku: String(product.sku || "").trim(), name: product.name, price: Number(product.price) || 0, stock: isWeightBasedProduct(product) ? Number(product.stockKg) || 0 : product.stock, unit: isWeightBasedProduct(product) ? "kg" as const : "Cái" as const }]);
     if (!targetLines.length) return;
     const seen = new Set<string>();
     for (const line of targetLines) {
@@ -551,7 +554,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     for (const line of targetLines) {
       if (this.findProductByCode(catalog, line.sku)) continue;
       const existing = await this.findRemoteProductByCode(config, sessionId, line.sku);
-      catalog.push(existing || await this.createProduct(config, sessionId, line.sku, line.name, line.price));
+      catalog.push(existing || await this.createProduct(config, sessionId, line.sku, line.name, line.price, line.unit));
     }
     const details: Pos365Record[] = [];
     for (const line of targetLines) {
@@ -561,7 +564,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       if (onHand === null) throw new Error(`Không đọc được tồn POS365 hiện tại của ${line.sku}.`);
       details.push({ ProductId: Number(remote.Id), ActualCount: line.stock, OnHand: onHand, Cost: asNumber(remote.Cost ?? remote.AverageCost) ?? 0 });
     }
-    if (details.every((detail, index) => detail.OnHand === targetLines[index].stock)) return;
+    if (details.every((detail, index) => posStockMatches(asNumber(detail.OnHand), targetLines[index].stock))) return;
     const code = `GEME-STK-BATCH-${Date.now()}`;
     await this.requestJson(new URL("/api/inventorycount", config.baseUrl), sessionId, {
       method: "POST",
@@ -572,7 +575,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     for (const line of targetLines) {
       const remote = this.findProductByCode(verifiedCatalog, line.sku);
       const actual = asNumber(remote?.OnHand ?? remote?.TotalOnHand);
-      if (actual !== line.stock) mismatches.push({ sku: line.sku, expected: line.stock, actual });
+      if (!posStockMatches(actual, line.stock)) mismatches.push({ sku: line.sku, expected: line.stock, actual });
     }
     if (mismatches.length) throw new Error(`POS365 còn tồn chưa khớp cho ${mismatches.map((line) => line.sku).join(", ")}.`);
   }
@@ -811,12 +814,25 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     for (const item of order.items || []) {
       const sku = String(item.productSku || "").trim();
       if (!sku) throw new Error(`Dòng hàng ${item.productName || "không tên"} thiếu SKU để ghép POS365.`);
+      const quantityKg = Number(item.quantityKg);
+      const isKgLine = item.quantityKg !== null && item.quantityKg !== undefined && Number.isFinite(quantityKg) && quantityKg > 0;
+      const isPricedPerPhysicalItem = Boolean(item.sphereItemId) && isKgLine;
+      const linePrice = Number(item.unitPrice) || 0;
       let remote = this.findProductByCode(catalog, sku);
       if (!remote) {
-        remote = await this.createProduct(config, sessionId, sku, String(item.productName || sku), Number(item.unitPrice) || 0);
+        remote = await this.createProduct(config, sessionId, sku, String(item.productName || sku), isPricedPerPhysicalItem ? linePrice / quantityKg : linePrice);
         catalog.push(remote);
       }
-      details.push({ ProductId: Number(remote.Id), Code: sku, Name: String(item.productName || sku), Price: Math.round(Number(item.unitPrice) || 0), Quantity: Number(item.quantity) });
+      details.push({
+        ProductId: Number(remote.Id),
+        Code: sku,
+        Name: String(item.productName || sku),
+        // POS holds weighted Vật Phẩm by kg. Storefront/admin price is the total
+        // price of the selected physical item, so convert it to a per-kg price
+        // before sending the line while preserving the order line total.
+        Price: isPricedPerPhysicalItem ? linePrice / quantityKg : Math.round(linePrice),
+        Quantity: isKgLine ? quantityKg : Number(item.quantity),
+      });
     }
     const remoteId = asNumber(existing?.Id) ?? 0;
     const status = order.status === "DELIVERED" ? 2 : 1;
@@ -980,7 +996,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
         if (!claim.count) continue;
         const receipt = await this.prisma.inventoryReceipt.findUnique({
           where: { id: row.id },
-          include: { items: { include: { product: { select: { name: true, price: true } }, variant: { select: { sku: true, quality: true, shape: true, beadSize: true, price: true } } } } },
+          include: { items: { include: { product: { select: { name: true, price: true, kind: true } }, variant: { select: { sku: true, quality: true, shape: true, beadSize: true, price: true } } } } },
         });
         if (!receipt) continue;
         try {
@@ -1281,10 +1297,11 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
           sku: String(variant.sku || (product.variants.length === 1 ? product.sku : "")).trim(),
           name: posVariantProductName(product.name || product.sku, variant),
           price: posVariantSellPrice(product, variant),
+          unit: "Cái" as const,
         }))
-      : [{ sku: String(product.sku || "").trim(), name: String(product.name || product.sku).slice(0, 180), price: Math.round(Number(product.price) || 0) }];
+      : [{ sku: String(product.sku || "").trim(), name: String(product.name || product.sku).slice(0, 180), price: Math.round(Number(product.price) || 0), unit: isWeightBasedProduct(product) ? "kg" as const : "Cái" as const }];
     for (const line of lines) line.name = line.name.slice(0, 180);
-    const uniqueLines = new Map<string, { sku: string; name: string; price: number }>();
+    const uniqueLines = new Map<string, { sku: string; name: string; price: number; unit: "Cái" | "kg" }>();
     for (const line of lines) {
       if (!line.sku) throw new Error(`Biến thể của ${product.sku} chưa có SKU riêng; chưa thể đồng bộ giá theo từng biến thể.`);
       const key = normalizedCode(line.sku);
@@ -1293,7 +1310,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       if (!current) uniqueLines.set(key, line);
     }
 
-    const changedLines: { line: { sku: string; name: string; price: number }; expectedImages: { id: string; url: string }[] | null; expectedBranchPrice: number | null; expectedCost: number | null }[] = [];
+    const changedLines: { line: { sku: string; name: string; price: number; unit: "Cái" | "kg" }; expectedImages: { id: string; url: string }[] | null; expectedBranchPrice: number | null; expectedCost: number | null }[] = [];
     for (const line of uniqueLines.values()) {
       const key = normalizedCode(line.sku);
       const cachedRows = snapshot?.byCode.get(key) || [];
@@ -1308,7 +1325,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
         if (existing && snapshot) snapshot.byCode.set(key, [existing]);
       }
       if (!existing) {
-        const created = await this.createProduct(config, sessionId, line.sku, line.name, line.price);
+        const created = await this.createProduct(config, sessionId, line.sku, line.name, line.price, line.unit);
         if (snapshot) snapshot.byCode.set(key, [created]);
         changedLines.push({ line, expectedImages: null, expectedBranchPrice: line.price > 0 ? line.price : null, expectedCost: null });
       } else {
@@ -1355,7 +1372,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
                 ProductType: asNumber(existing.ProductType) ?? 1,
                 Price: targetPrice,
                 Cost: currentCost,
-                Unit: String(existing.Unit || "Cái"),
+            Unit: line.unit,
                 CategoryId: existing.CategoryId ?? null,
                 ProductImages: currentImages,
               },
@@ -1436,9 +1453,11 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       const salePrice = Number(item.variant?.price ?? item.product?.price) || 0;
       let remote = this.findProductByCode(catalog, sku);
       if (!remote) remote = await this.findRemoteProductByCode(config, sessionId, sku);
-      if (!remote) remote = await this.createProduct(config, sessionId, sku, productName, salePrice);
+      if (!remote) remote = await this.createProduct(config, sessionId, sku, productName, salePrice, isWeightBasedProduct(item.product || {}) ? "kg" : "Cái");
       if (!this.findProductByCode(catalog, sku)) catalog.push(remote);
-      details.push({ ProductId: Number(remote.Id), Quantity: Number(item.quantity), Price: Number(item.unitCost) });
+      const quantity = isWeightBasedProduct(item.product || {}) ? Number(item.quantityKg) : Number(item.quantity);
+      if (!Number.isFinite(quantity) || quantity <= 0) throw new Error(`Dòng nhập ${sku} thiếu số lượng hoặc khối lượng kg hợp lệ.`);
+      details.push({ ProductId: Number(remote.Id), Quantity: quantity, Price: Number(item.unitCost) });
     }
 
     const code = `GEME-${receipt.receiptNo}`;
@@ -1484,10 +1503,10 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
     return matches[0] || null;
   }
 
-  private async createProduct(config: Pos365Config, sessionId: string, sku: string, name: string, price: number) {
+  private async createProduct(config: Pos365Config, sessionId: string, sku: string, name: string, price: number, unit: "Cái" | "kg" = "Cái") {
     const saved = await this.requestJson(new URL("/api/products", config.baseUrl!), sessionId, {
       method: "POST",
-      body: JSON.stringify({ Product: { Id: 0, Code: sku, Name: String(name || sku).slice(0, 180), ProductType: 1, Price: Math.max(0, Math.round(price)), Unit: "Cái", CategoryId: null }, PriceByBranch: Math.max(0, Math.round(price)) }),
+      body: JSON.stringify({ Product: { Id: 0, Code: sku, Name: String(name || sku).slice(0, 180), ProductType: 1, Price: Math.max(0, Math.round(price)), Unit: unit, CategoryId: null }, PriceByBranch: Math.max(0, Math.round(price)) }),
     }) as Pos365Record;
     const id = asNumber(saved?.Id ?? saved?.Product?.Id);
     if (!id) throw new Error(`POS365 không trả mã mặt hàng sau khi tạo SKU ${sku}.`);

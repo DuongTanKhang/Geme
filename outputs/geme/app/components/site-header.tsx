@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FocusEvent, type FormEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type FocusEvent, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { normalizeApiBaseUrl } from "../lib/api-base";
 import { useWishlist } from "./wishlist-provider";
 
@@ -190,6 +190,58 @@ function MenuCard({ id, title, children, className = "" }: { id: MenuId; title: 
   </section>;
 }
 
+function categoryRootHref(root: MenuCategory) {
+  if (root.kind === "JEWELRY") return "/san-pham";
+  if (root.kind === "GEMSTONE") return "/da-quy";
+  return `/san-pham?danh-muc=${encodeURIComponent(root.slug)}`;
+}
+
+function categoryChildHref(category: MenuCategory, root: MenuCategory, byId: Map<string, MenuCategory>) {
+  if (root.kind !== "GEMSTONE") return `/san-pham?danh-muc=${encodeURIComponent(category.slug)}`;
+
+  const parent = category.parentId ? byId.get(category.parentId) : undefined;
+  if (parent?.usage === "GEMSTONE_TYPE") {
+    return `/da-quy?loai=${encodeURIComponent(parent.slug)}&cut=${encodeURIComponent(category.slug)}`;
+  }
+  return `/da-quy?loai=${encodeURIComponent(category.slug)}`;
+}
+
+function ShopCategoryMenu({ roots, categories, compact = false, onNavigate }: { roots: MenuCategory[]; categories: MenuCategory[]; compact?: boolean; onNavigate?: () => void }) {
+  const byId = new Map(categories.map((category) => [category.id, category]));
+  const orderedRoots = [...roots].sort((left, right) => {
+    const rank = (item: MenuCategory) => item.kind === "JEWELRY" ? 0 : item.kind === "OTHER" ? 1 : item.kind === "GEMSTONE" ? 2 : 3;
+    return rank(left) - rank(right) || (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name, "vi");
+  });
+
+  return <div className={`shop-mega-grid${compact ? " is-compact" : ""}`}>
+    {orderedRoots.map((root) => {
+      // Show only the categories directly under each primary category. Nested
+      // subcategories (for example Charm đá under Charm) stay out of this menu.
+      // Gemstone/material choices remain omitted until their dedicated
+      // navigation is configured.
+      const childCategories = categories
+        .filter((category) => category.status === "ACTIVE" && category.usage === "PRODUCT_CATEGORY" && category.parentId === root.id)
+        .sort((left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name, "vi"));
+      const title = root.kind === "JEWELRY" ? "TRANG SỨC" : root.kind === "OTHER" ? "VẬT PHẨM" : root.kind === "GEMSTONE" ? "ĐÁ QUÝ" : root.name.toLocaleUpperCase("vi");
+
+      return <section className="shop-mega-section" key={root.id} aria-label={title}>
+        <a className="shop-mega-title" href={categoryRootHref(root)} onClick={onNavigate}>{title}<span aria-hidden="true">↗</span></a>
+        <div className="shop-mega-links">
+          {childCategories.map((category) => {
+            const depth = Math.max(0, category.level - root.level - 1);
+            return <a className="shop-mega-category-link" href={categoryChildHref(category, root, byId)} key={category.id} style={{ "--category-depth": Math.min(depth, 2) } as CSSProperties} onClick={onNavigate}>
+              {category.imageUrl && <img src={category.imageUrl} alt="" loading="lazy" />}
+              <span>{category.name}</span>
+            </a>;
+          })}
+          {!childCategories.length && <p className="shop-mega-empty">Danh mục sản phẩm sẽ được cập nhật.</p>}
+        </div>
+      </section>;
+    })}
+    {!orderedRoots.length && <p className="shop-mega-empty">Danh mục sản phẩm đang được cập nhật.</p>}
+  </div>;
+}
+
 function ProductSearchBox({ searchPlaceholder }: { searchPlaceholder: string }) {
   const [value, setValue] = useState("");
   const [results, setResults] = useState<ProductSearchResult[]>([]);
@@ -248,14 +300,10 @@ function ProductSearchBox({ searchPlaceholder }: { searchPlaceholder: string }) 
 export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", activePage }: { searchPlaceholder?: string; activePage?: "blog" | "new-arrivals" | "gemstone" }) {
   const { favorites } = useWishlist();
   const favoriteCount = favorites.length;
-  const [activeMenu, setActiveMenu] = useState<MenuId | null>(null);
+  const [shopMenuOpen, setShopMenuOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [jewelryStones, setJewelryStones] = useState<MenuStone[]>([]);
-  const [gemstoneStones, setGemstoneStones] = useState<MenuStone[]>([]);
   const [rootCategories, setRootCategories] = useState<MenuCategory[]>([]);
-  const [jewelryCategories, setJewelryCategories] = useState<MenuCategory[]>([]);
-  const [gemstoneTypes, setGemstoneTypes] = useState<MenuCategory[]>([]);
-  const [gemstoneCategories, setGemstoneCategories] = useState<MenuCategory[]>([]);
+  const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [cartCount, setCartCount] = useState(0);
   const [cartOpen, setCartOpen] = useState(false);
   const [cartItems, setCartItems] = useState<StoreCartLine[]>([]);
@@ -266,30 +314,13 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
 
   useEffect(() => {
     let active = true;
-    const applyMaterials = (records: ApiMaterialOption[]) => {
-      if (!active) return;
-      const stones = records.filter((item) => item.kind === "STONE" && item.active).map((item) => ({
-        id: item.id,
-        name: item.name,
-        slug: item.slug || slugifyStone(item.name),
-        imageUrl: item.imageUrl || fallbackStoneImages[item.name],
-        ...(Array.isArray(item.appliedCategoryIds) ? { appliedCategoryIds: item.appliedCategoryIds } : {}),
-        ...(Array.isArray(item.availableCategoryIds) ? { availableCategoryIds: item.availableCategoryIds } : {}),
-        sortOrder: item.sortOrder ?? 0,
-      }));
-      const order = (left: MenuStone & { sortOrder?: number }, right: MenuStone & { sortOrder?: number }) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name, "vi");
-      setJewelryStones(stones.filter((item) => records.find((record) => record.id === item.id)?.scope === "JEWELRY").sort(order));
-      setGemstoneStones(stones.filter((item) => records.find((record) => record.id === item.id)?.scope === "GEMSTONE").sort(order));
-    };
     const applyCategories = (records: MenuCategory[]) => {
       if (!active) return;
       const enabled = records.filter((item) => item.status === "ACTIVE");
+      setCategories(enabled);
       setRootCategories(enabled
         .filter((item) => item.usage === "PRODUCT_CATEGORY" && !item.parentId)
         .sort((left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name, "vi")));
-      setJewelryCategories(enabled.filter((item) => item.kind === "JEWELRY" && item.usage === "PRODUCT_CATEGORY"));
-      setGemstoneTypes(enabled.filter((item) => item.kind === "GEMSTONE" && item.level === 2 && (item.usage === "GEMSTONE_TYPE" || enabled.some((cut) => cut.kind === "GEMSTONE" && cut.level === 3 && cut.parentId === item.id))));
-      setGemstoneCategories(enabled.filter((item) => item.kind === "GEMSTONE" && item.usage === "PRODUCT_CATEGORY"));
     };
     let categoriesRequestId = 0;
     const fetchCategories = async (fresh = false) => {
@@ -303,15 +334,13 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
       } catch { /* Keep the category menu empty until the API is available. */ }
     };
     const refreshCategories = () => { void fetchCategories(true); };
-    // The materials SSE stream delivers a shared in-memory snapshot on open;
-    // avoid issuing a duplicate database read for every visitor.
     void fetchCategories(true);
     window.addEventListener("geme:categories-changed", refreshCategories);
+    // Keep the existing live catalog refresh signal for product/filter pages.
     const events = new EventSource(`${materialsApiBase}/materials/events`);
     let hasInitialMaterialSnapshot = false;
-    events.onmessage = (event) => {
+    events.onmessage = () => {
       try {
-        applyMaterials(JSON.parse(event.data) as ApiMaterialOption[]);
         if (!hasInitialMaterialSnapshot) {
           hasInitialMaterialSnapshot = true;
           return;
@@ -384,72 +413,58 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
   };
   const closeMenuSoon = () => {
     cancelMenuClose();
-    menuCloseTimer.current = setTimeout(() => setActiveMenu(null), 220);
+    menuCloseTimer.current = setTimeout(() => setShopMenuOpen(false), 220);
   };
-  const openMenu = (menu: MenuId | null) => {
+  const openMenu = (open: boolean) => {
     cancelMenuClose();
-    setActiveMenu(menu);
+    setShopMenuOpen(open);
   };
 
   const onHeaderBlur = (event: FocusEvent<HTMLElement>) => {
-    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setActiveMenu(null);
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setShopMenuOpen(false);
   };
+  const closeNavigation = () => { setShopMenuOpen(false); setMobileOpen(false); };
 
-  const navItems: { key: string; label: string; href: string; menuId?: NavMenuId; isNewArrivals?: boolean }[] = [
-    ...rootCategories.map((category) => ({
-      key: category.id,
-      label: category.name.toLocaleUpperCase("vi"),
-      href: category.kind === "JEWELRY" ? "/san-pham" : category.kind === "GEMSTONE" ? "/da-quy" : `/san-pham?danh-muc=${encodeURIComponent(category.slug)}`,
-      menuId: category.kind === "JEWELRY" ? "trang-suc" as const : category.kind === "GEMSTONE" ? "da-quy" as const : undefined,
-    })),
-    { key: "new-arrivals", label: "NEW ARRIVALS", href: "/new-arrivals", isNewArrivals: true },
-  ];
-
-  return <header className="site-header" onMouseEnter={cancelMenuClose} onMouseLeave={() => { if (!mobileOpen) closeMenuSoon(); }} onBlur={onHeaderBlur} onKeyDown={(event) => { if (event.key === "Escape") { cancelMenuClose(); setActiveMenu(null); setMobileOpen(false); } }}>
+  return <header className="site-header" onMouseEnter={cancelMenuClose} onMouseLeave={() => { if (!mobileOpen) closeMenuSoon(); }} onBlur={onHeaderBlur} onKeyDown={(event) => { if (event.key === "Escape") { cancelMenuClose(); setShopMenuOpen(false); setMobileOpen(false); } }}>
     <div className="header-main">
-      <a className="wordmark" href="/" aria-label="GEME trang chủ"><span className="sparkle">✦</span> GEME</a>
-      <nav className={`main-nav${mobileOpen ? " is-open" : ""}`} id="geme-main-nav" aria-label="Điều hướng chính">
-        {navItems.map((item) => <a
-          href={item.href}
-          className={`nav-link${item.menuId && activeMenu === item.menuId ? " is-active" : ""}${activePage === "new-arrivals" && item.isNewArrivals ? " is-current" : ""}${activePage === "gemstone" && item.menuId === "da-quy" ? " is-current" : ""}`}
-          aria-current={activePage === "new-arrivals" && item.isNewArrivals || activePage === "gemstone" && item.menuId === "da-quy" ? "page" : undefined}
-          aria-expanded={item.menuId ? activeMenu === item.menuId : undefined}
-          aria-controls={item.menuId && activeMenu === item.menuId ? (mobileOpen ? "geme-mobile-submenu" : "geme-mega-menu") : undefined}
-          key={item.key}
-          onMouseEnter={() => { if (!mobileOpen) openMenu(item.menuId || null); }}
-          onFocus={() => { if (!mobileOpen) openMenu(item.menuId || null); }}
-          onClick={(event) => {
-            if (item.menuId && window.matchMedia("(max-width: 1023px)").matches) {
-              event.preventDefault();
-              setActiveMenu((current) => current === item.menuId ? null : item.menuId || null);
-            } else {
-              openMenu(null);
-              setMobileOpen(false);
-            }
-          }}
-        >{item.label}{item.menuId && <span className="mobile-nav-indicator" aria-hidden="true">{activeMenu === item.menuId ? "−" : "+"}</span>}</a>)}
-        <a className="nav-link nav-link-page" href="/ve-geme" onMouseEnter={() => openMenu(null)} onFocus={() => openMenu(null)} onClick={() => { openMenu(null); setMobileOpen(false); }}>VỀ GEME</a>
-        <a className={`nav-link nav-link-page${activePage === "blog" ? " is-current" : ""}`} href="/blog" onMouseEnter={() => openMenu(null)} onFocus={() => openMenu(null)} onClick={() => { openMenu(null); setMobileOpen(false); }}>BLOG</a>
-        <a className="nav-link nav-link-page" href="/lien-he" onMouseEnter={() => openMenu(null)} onFocus={() => openMenu(null)} onClick={() => { openMenu(null); setMobileOpen(false); }}>LIÊN HỆ</a>
-        {mobileOpen && activeMenu && <div className="mobile-mega-submenu" id="geme-mobile-submenu" onClick={() => { setActiveMenu(null); setMobileOpen(false); }}>
-          {activeMenu === "trang-suc" && <JewelLinks stones={jewelryStones} categories={jewelryCategories} showAll />}
-          {activeMenu === "da-quy" && <GemLinks stones={gemstoneStones} types={gemstoneTypes} categories={gemstoneCategories} showAll />}
-          {activeMenu === "san-pham" && <a className="mobile-arrivals-link" href="/new-arrivals">Tất cả sản phẩm mới <span>→</span></a>}
-        </div>}
+      <button className={`mobile-menu${mobileOpen ? " is-open" : ""}`} type="button" aria-label={mobileOpen ? "Đóng menu" : "Mở menu"} aria-expanded={mobileOpen} aria-controls="geme-mobile-nav" onClick={() => { setMobileOpen((open) => !open); setShopMenuOpen(false); }}><span></span><span></span></button>
+      <nav className="header-left-nav" aria-label="Danh mục mua sắm">
+        <button className={`header-nav-link header-shop-trigger${shopMenuOpen ? " is-active" : ""}`} type="button" aria-expanded={shopMenuOpen} aria-controls="geme-shop-menu" onMouseEnter={() => openMenu(true)} onFocus={() => openMenu(true)} onClick={() => { cancelMenuClose(); setShopMenuOpen((open) => !open); }}>SHOP</button>
+        <a className={`header-nav-link${activePage === "new-arrivals" ? " is-current" : ""}`} href="/new-arrivals" aria-current={activePage === "new-arrivals" ? "page" : undefined} onMouseEnter={() => openMenu(false)} onFocus={() => openMenu(false)} onClick={closeNavigation}>NEW ARRIVALS</a>
+        <span className="header-nav-link header-nav-placeholder" aria-disabled="true" title="Sắp ra mắt">COLLECTIONS</span>
+        <span className="header-nav-link header-nav-placeholder" aria-disabled="true" title="Sắp ra mắt">FEEDBACK</span>
       </nav>
-      <div className="header-tools">
+      <a className="wordmark" href="/" aria-label="GEME trang chủ"><span className="sparkle">✦</span> GEME</a>
+      <div className="header-right">
+        <nav className="header-page-nav" aria-label="Thông tin GEME">
+          <a className="header-nav-link" href="/lien-he" onMouseEnter={() => openMenu(false)} onFocus={() => openMenu(false)} onClick={closeNavigation}>CONTACT</a>
+          <a className="header-nav-link" href="/ve-geme" onMouseEnter={() => openMenu(false)} onFocus={() => openMenu(false)} onClick={closeNavigation}>ABOUT US</a>
+          <a className={`header-nav-link${activePage === "blog" ? " is-current" : ""}`} href="/blog" onMouseEnter={() => openMenu(false)} onFocus={() => openMenu(false)} onClick={closeNavigation}>BLOG</a>
+        </nav>
+        <div className="header-tools">
         <ProductSearchBox searchPlaceholder={searchPlaceholder} />
         <a className="header-icon header-wishlist-button" href="/tai-khoan?tab=favorites" aria-label={`Sản phẩm yêu thích${favoriteCount ? `, ${favoriteCount} sản phẩm` : ""}`}><HeaderIcon name="heart" />{favoriteCount > 0 && <span className="header-wishlist-count">{favoriteCount > 99 ? "99+" : favoriteCount}</span>}</a>
         <a className="header-icon" href={accountHref} aria-label={accountName ? `Tài khoản của ${accountName}` : "Đăng nhập hoặc vào tài khoản"}>{accountAvatarUrl ? <img className="header-account-avatar" src={accountAvatarUrl} alt=""/> : <HeaderIcon name="user" />}</a>
         <button className="header-icon header-cart-button" type="button" aria-label={`Giỏ hàng${cartCount ? `, ${cartCount} sản phẩm` : ""}`} aria-haspopup="dialog" aria-expanded={cartOpen} onClick={() => { setCartItems(readStoreCart()); setCartOpen(true); }}><HeaderIcon name="bag" />{cartCount > 0 && <span className="header-cart-count">{cartCount}</span>}</button>
+        </div>
       </div>
-      <button className={`mobile-menu${mobileOpen ? " is-open" : ""}`} type="button" aria-label={mobileOpen ? "Đóng menu" : "Mở menu"} aria-expanded={mobileOpen} aria-controls="geme-main-nav" onClick={() => { setMobileOpen((open) => !open); setActiveMenu(null); }}><span></span><span></span></button>
     </div>
-    {activeMenu && !mobileOpen && <div className="mega-menu-layer">
-      <div className="mega-menu" id="geme-mega-menu" onMouseEnter={cancelMenuClose}>
-        {activeMenu === "trang-suc" && <JewelLinks stones={jewelryStones} categories={jewelryCategories} />}
-        {activeMenu === "da-quy" && <GemLinks stones={gemstoneStones} types={gemstoneTypes} categories={gemstoneCategories} />}
+    <div className={`shop-menu-layer${shopMenuOpen && !mobileOpen ? " is-open" : ""}`} aria-hidden={!(shopMenuOpen && !mobileOpen)}>
+      <div className="shop-mega-menu" id="geme-shop-menu" onMouseEnter={cancelMenuClose}>
+        <ShopCategoryMenu roots={rootCategories} categories={categories} onNavigate={closeNavigation} />
       </div>
+    </div>
+    {mobileOpen && <div className="mobile-nav-layer" id="geme-mobile-nav">
+      <nav className="mobile-nav-panel" aria-label="Điều hướng chính">
+        <button className="mobile-shop-trigger" type="button" aria-expanded={shopMenuOpen} onClick={() => setShopMenuOpen((open) => !open)}>SHOP <span aria-hidden="true">{shopMenuOpen ? "−" : "+"}</span></button>
+        {shopMenuOpen && <div className="mobile-shop-menu"><ShopCategoryMenu roots={rootCategories} categories={categories} compact onNavigate={closeNavigation} /></div>}
+        <a href="/new-arrivals" onClick={closeNavigation}>NEW ARRIVALS</a>
+        <span aria-disabled="true" title="Sắp ra mắt">COLLECTIONS <small>Sắp ra mắt</small></span>
+        <span aria-disabled="true" title="Sắp ra mắt">FEEDBACK <small>Sắp ra mắt</small></span>
+        <a href="/lien-he" onClick={closeNavigation}>CONTACT</a>
+        <a href="/ve-geme" onClick={closeNavigation}>ABOUT US</a>
+        <a href="/blog" onClick={closeNavigation}>BLOG</a>
+      </nav>
     </div>}
     {cartOpen && <div className="store-cart-layer">
       <button className="store-cart-backdrop" type="button" aria-label="Đóng giỏ hàng" onClick={() => setCartOpen(false)} />

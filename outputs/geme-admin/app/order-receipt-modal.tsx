@@ -29,6 +29,8 @@ export type OrderReceiptData = {
   status: string;
   payment: string;
   paymentStatus: string;
+  qrPaymentStartedAt?: string | null;
+  qrPaymentExpiresAt?: string | null;
   paymentCaptured?: number;
   paymentRefunded?: number;
   paymentBalance?: number;

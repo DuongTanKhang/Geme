@@ -34,6 +34,14 @@ export class CommerceController {
   @Patch("categories/:id") @admin("catalog.write") updateCategory(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.updateCategory(id, body); }
   @Delete("categories/:id") @admin("catalog.write") deleteCategory(@Param("id") id: string) { return this.commerce.deleteCategory(id); }
 
+  // The sphere hierarchy is intentionally separate from product categories:
+  // Quả cầu -> nhóm đá -> loại đá -> SKU/chất lượng.
+  @Get("sphere-stones") @admin("catalog.read") sphereStones() { return this.commerce.sphereStoneCatalogAdmin(); }
+  @Post("sphere-stones/groups") @admin("catalog.write") createSphereStoneGroup(@Body() body: Record<string, any>) { return this.commerce.saveSphereStoneGroup(body); }
+  @Patch("sphere-stones/groups/:id") @admin("catalog.write") updateSphereStoneGroup(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.saveSphereStoneGroup(body, id); }
+  @Post("sphere-stones/types") @admin("catalog.write") createSphereStoneType(@Body() body: Record<string, any>) { return this.commerce.saveSphereStoneType(body); }
+  @Patch("sphere-stones/types/:id") @admin("catalog.write") updateSphereStoneType(@Param("id") id: string, @Body() body: Record<string, any>) { return this.commerce.saveSphereStoneType(body, id); }
+
   @Get("products")
   products(@Query() query: Record<string, string>) {
     const publicQuery: Record<string, string> = {};
@@ -58,6 +66,10 @@ export class CommerceController {
   @Patch("products/:id") @admin("catalog.read") async updateProduct(@Req() request: AdminRequest, @Param("id") id: string, @Body() body: Record<string, any>) {
     const full = await this.assertProductMutation(request.adminIdentity, body);
     return full ? this.commerce.saveProduct(body, id) : this.commerce.updateProductFields(id, body, request.adminIdentity);
+  }
+  @Patch("products/:id/sphere-item-prices") @admin("catalog.price.write") updateSphereItemPrices(@Req() request: AdminRequest, @Param("id") id: string, @Body() body: Record<string, any>) {
+    if (!body || Object.keys(body).some((key) => key !== "items") || !Array.isArray(body.items)) throw new BadRequestException("Chỉ gửi danh sách items gồm sphereItemId và price để cập nhật giá từng vật phẩm.");
+    return this.commerce.updateSphereItemPrices(id, body.items, request.adminIdentity);
   }
   @Delete("products/:id") @admin("catalog.read") async deleteProduct(@Req() request: AdminRequest, @Param("id") id: string, @Body() body?: Record<string, any>) { await this.assertProductMutation(request.adminIdentity, body || {}, "delete"); return this.commerce.deleteProduct(id, body, request.adminIdentity); }
   @Patch("products/:id/unpublish") @admin("catalog.read") async unpublishProduct(@Req() request: AdminRequest, @Param("id") id: string, @Body() body: Record<string, any> = {}) { await this.assertProductMutation(request.adminIdentity, body, "publish"); return this.commerce.updateProductPublication(id, "HIDDEN", request.adminIdentity, body.reason); }
@@ -131,6 +143,7 @@ export class CommerceController {
   @Get("inventory") @admin("inventory.read") inventory() { return this.commerce.inventory(); }
   @Get("inventory/movements") @admin("inventory.read") inventoryMovements(@Query("limit") limit?: string) { return this.commerce.inventoryMovements(limit); }
   @Get("inventory/sku-rules") @admin("inventory.read") inventorySkuRules() { return this.commerce.inventorySkuRules(); }
+  @Get("inventory/spheres/catalog") @admin("inventory.read") sphereInventoryCatalog() { return this.commerce.sphereInventoryCatalog(); }
   @Patch("inventory/sku-rules") @admin("inventory.write") saveInventorySkuRules(@Body() body: Record<string, any>) { return this.commerce.saveInventorySkuRules(body); }
   @Get("inventory/sku-next") @admin("inventory.read") nextInventorySku(@Query("categoryId") categoryId?: string, @Query("materialOptionId") materialOptionId?: string, @Query("sequence") sequence?: string, @Query("bangleShape") bangleShape?: string, @Query("bangleQuality") bangleQuality?: string, @Query("bangleSizeMm") bangleSizeMm?: string) { return this.commerce.nextInventorySku(categoryId || "", materialOptionId, sequence, { bangleShape, bangleQuality, bangleSizeMm }); }
   @Get("inventory/receipts/next-number") @admin("inventory.read") nextInventoryReceiptNumber(@Query("date") date?: string) { return this.commerce.nextInventoryReceiptNumber(date); }
@@ -158,6 +171,15 @@ export class CommerceController {
   @Post("loyalty/customers/:customerId/adjustment") @admin("customers.write") adjustLoyaltyPoints(@Req() request: AdminRequest, @Param("customerId") customerId: string, @Body() body: Record<string, unknown>) { return this.loyalty.adjustCustomer(customerId, body.points, body.note, request.adminIdentity); }
 
   @Get("orders") @admin("orders.read") orders(@Query() query: Record<string, string>) { return this.commerce.orders(query); }
+  @Get("admin/orders/:id/payment-qr") @admin("orders.read")
+  @Header("Cache-Control", "private, no-store, max-age=0")
+  async adminOrderPaymentQr(@Param("id") id: string) {
+    const snapshot = await this.commerce.adminOrderPaymentQr(id);
+    const bankQr = snapshot.qrState === "READY" ? await this.sepayBankAccount.getPublicQrSettings() : null;
+    // Re-read after fetching the account: payment may have arrived in the meantime.
+    const current = bankQr ? await this.commerce.adminOrderPaymentQr(id) : snapshot;
+    return { ...current, bankQr: current.qrState === "READY" ? bankQr : null };
+  }
   @Get("shipping/delivery-map") @admin("shipping.read") shippingDeliveryMap() { return this.commerce.shippingDeliveryMap(); }
   @Get("orders/:code/payment-status")
   @Header("Cache-Control", "private, no-store, max-age=0")

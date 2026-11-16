@@ -442,6 +442,43 @@ model JewelryStoneGroup {
   @@map("jewelry_stone_groups")
 }
 
+/// Level 2 in the sphere-inventory hierarchy, e.g. "Thạch Anh".  The root
+/// category "Quả cầu" deliberately has no stored aggregate: its children are
+/// the source of truth for kg totals.
+model SphereStoneGroup {
+  id        String            @id @default(uuid()) @db.Uuid
+  name      String            @db.VarChar(120)
+  slug      String            @unique @db.VarChar(140)
+  sortOrder Int               @default(0) @map("sort_order")
+  isActive  Boolean           @default(true) @map("is_active")
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  stoneTypes SphereStoneType[]
+
+  @@index([isActive, sortOrder])
+  @@map("sphere_stone_groups")
+}
+
+/// Level 3 in the sphere-inventory hierarchy, e.g. "Thạch Anh Trắng".
+/// Product is the level-4 SKU (quality); individual physical spheres inherit
+/// their hierarchy through ProductSphereItem.product.
+model SphereStoneType {
+  id        String             @id @default(uuid()) @db.Uuid
+  groupId   String             @map("group_id") @db.Uuid
+  name      String             @db.VarChar(120)
+  slug      String             @db.VarChar(140)
+  sortOrder Int                @default(0) @map("sort_order")
+  isActive  Boolean            @default(true) @map("is_active")
+  createdAt DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  group     SphereStoneGroup   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  products  Product[]
+
+  @@unique([groupId, slug])
+  @@index([groupId, isActive, sortOrder])
+  @@map("sphere_stone_types")
+}
+
 model Product {
   id                    String                 @id @default(uuid()) @db.Uuid
   sku                   String                 @unique @db.VarChar(64)
@@ -466,11 +503,16 @@ model Product {
   firstPublishedAt             DateTime?                 @map("first_published_at") @db.Timestamptz(3)
   publicationHistoryKnown      Boolean                   @default(false) @map("publication_history_known")
   jewelryStoneGroupId          String?                   @map("jewelry_stone_group_id") @db.Uuid
+  /// Hierarchy used only for weight-managed sphere inventory. A sphere product
+  /// is one quality SKU (level 4), which belongs to a stone type (level 3).
+  sphereStoneTypeId            String?                   @map("sphere_stone_type_id") @db.Uuid
+  sphereQuality                String?                   @map("sphere_quality") @db.VarChar(60)
   isFeatured            Boolean                @default(false) @map("is_featured")
     isPremiumGemstone      Boolean                @default(false) @map("is_premium_gemstone")
   price                 Decimal?               @db.Decimal(14, 0)
   originalPrice         Decimal?               @map("original_price") @db.Decimal(14, 0)
   stock                 Int                    @default(0)
+  stockKg               Decimal                @default(0) @map("stock_kg") @db.Decimal(14, 3)
   minimumStock          Int                    @default(5) @map("minimum_stock")
     soldOutAt             DateTime?               @map("sold_out_at") @db.Timestamptz(3)
   pos365PriceSyncStatus String?                 @map("pos365_price_sync_status") @db.VarChar(20)
@@ -500,6 +542,7 @@ model Product {
   gemstoneType          Category?              @relation("GemstoneType", fields: [gemstoneTypeId], references: [id], onDelete: SetNull)
   materialOption        MaterialOption?        @relation(fields: [materialOptionId], references: [id], onDelete: SetNull)
   jewelryStoneGroup            JewelryStoneGroup?        @relation(fields: [jewelryStoneGroupId], references: [id], onDelete: SetNull)
+  sphereStoneType              SphereStoneType?          @relation(fields: [sphereStoneTypeId], references: [id], onDelete: SetNull)
   images                ProductImage[]
   pos365ImageLinks       Pos365ProductImageSync[]
   variants              ProductPriceVariant[]
@@ -509,6 +552,7 @@ model Product {
   promotionTargets      PromotionTarget[]
   inventoryMovements    InventoryMovement[]
   inventoryReceiptItems InventoryReceiptItem[]
+  sphereItems           ProductSphereItem[]
   inventoryIssueItems   InventoryIssueItem[]
   inventoryReservations InventoryReservation[]
   returnItems            OrderReturnItem[]
@@ -522,6 +566,7 @@ model Product {
   @@index([kind, status, firstPublishedAt(sort: Desc), id])
   @@index([kind, status, isNew, newUntil, firstPublishedAt(sort: Desc)])
   @@index([jewelryStoneGroupId, status, firstPublishedAt(sort: Desc)])
+  @@index([sphereStoneTypeId, status])
   @@index([categoryId, status, createdAt(sort: Desc)])
   @@index([gemstoneTypeId, status, createdAt(sort: Desc)])
   @@index([materialOptionId, status, createdAt(sort: Desc)])
@@ -595,6 +640,7 @@ model ProductPriceVariant {
   price                 Decimal                @db.Decimal(14, 0)
   originalPrice         Decimal?               @map("original_price") @db.Decimal(14, 0)
   stock                 Int                    @default(0)
+  stockKg               Decimal                @default(0) @map("stock_kg") @db.Decimal(14, 3)
   sortOrder             Int                    @default(0) @map("sort_order")
   createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -792,6 +838,7 @@ model OrderItem {
   orderId     String               @map("order_id") @db.Uuid
   productId   String?              @map("product_id") @db.Uuid
   variantId   String?              @map("variant_id") @db.Uuid
+  sphereItemId String?             @map("sphere_item_id") @db.Uuid
   productName String               @map("product_name") @db.VarChar(180)
   productSku  String               @map("product_sku") @db.VarChar(64)
   quality     String?              @db.VarChar(40)
@@ -800,17 +847,20 @@ model OrderItem {
   carat       Decimal?             @db.Decimal(8, 3)
   gemstoneQuality String?           @map("gemstone_quality") @db.VarChar(40)
   quantity    Int
+  quantityKg  Decimal?             @map("quantity_kg") @db.Decimal(14, 3)
   unitPrice   Decimal              @map("unit_price") @db.Decimal(14, 0)
   lineTotal   Decimal              @map("line_total") @db.Decimal(14, 0)
   order       Order                @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product     Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
   variant     ProductPriceVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  sphereItem  ProductSphereItem?   @relation(fields: [sphereItemId], references: [id], onDelete: SetNull)
   inventoryReservation InventoryReservation?
   returnItems OrderReturnItem[]
 
   @@index([orderId])
   @@index([productId])
   @@index([variantId])
+  @@index([sphereItemId])
   @@map("order_items")
 }
 
@@ -891,7 +941,9 @@ model InventoryReservation {
   orderItemId   String    @unique @map("order_item_id") @db.Uuid
   productId     String    @map("product_id") @db.Uuid
   variantId     String?   @map("variant_id") @db.Uuid
+  sphereItemId  String?   @map("sphere_item_id") @db.Uuid
   quantity      Int
+  quantityKg    Decimal?  @map("quantity_kg") @db.Decimal(14, 3)
   status        String    @default("ACTIVE") @db.VarChar(16)
   expiresAt     DateTime? @map("expires_at") @db.Timestamptz(3)
   committedAt   DateTime? @map("committed_at") @db.Timestamptz(3)
@@ -903,9 +955,11 @@ model InventoryReservation {
   orderItem     OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
   product       Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
   variant       ProductPriceVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  sphereItem    ProductSphereItem? @relation(fields: [sphereItemId], references: [id], onDelete: SetNull)
 
   @@index([status, expiresAt])
   @@index([productId, variantId, status])
+  @@index([sphereItemId, status])
   @@index([orderId, status])
   @@map("inventory_reservations")
 }
@@ -943,6 +997,7 @@ model OrderReturnItem {
   productName   String               @map("product_name") @db.VarChar(180)
   productSku    String               @map("product_sku") @db.VarChar(64)
   quantity      Int
+  quantityKg    Decimal?             @map("quantity_kg") @db.Decimal(14, 3)
   restock       Boolean              @default(false)
   conditionNote String?              @map("condition_note") @db.Text
   restockedAt   DateTime?            @map("restocked_at") @db.Timestamptz(3)
@@ -1129,20 +1184,26 @@ model InventoryMovement {
   id           String               @id @default(uuid()) @db.Uuid
   productId    String?              @map("product_id") @db.Uuid
   variantId    String?              @map("variant_id") @db.Uuid
+  sphereItemId String?              @map("sphere_item_id") @db.Uuid
   productName  String               @map("product_name") @db.VarChar(180)
   productSku   String               @map("product_sku") @db.VarChar(64)
   variantLabel String?              @map("variant_label") @db.VarChar(120)
   type         String               @db.VarChar(20)
   quantity     Int
+  quantityKg  Decimal?             @map("quantity_kg") @db.Decimal(14, 3)
   stockBefore  Int                  @map("stock_before")
   stockAfter   Int                  @map("stock_after")
+  stockBeforeKg Decimal?            @map("stock_before_kg") @db.Decimal(14, 3)
+  stockAfterKg  Decimal?            @map("stock_after_kg") @db.Decimal(14, 3)
   reference    String?              @db.VarChar(120)
   note         String?              @db.Text
   createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   product      Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
   variant      ProductPriceVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  sphereItem   ProductSphereItem?   @relation(fields: [sphereItemId], references: [id], onDelete: SetNull)
 
   @@index([productId, createdAt(sort: Desc)])
+  @@index([sphereItemId, createdAt(sort: Desc)])
   @@index([createdAt(sort: Desc)])
   @@map("inventory_movements")
 }
@@ -1168,6 +1229,7 @@ model InventoryReceipt {
   additionalNote  String?                @map("additional_note") @db.Text
   documentUrls    String[]               @default([]) @map("document_urls")
   totalQuantity   Int                    @default(0) @map("total_quantity")
+  totalQuantityKg Decimal                @default(0) @map("total_quantity_kg") @db.Decimal(14, 3)
   subtotalAmount  Decimal                @default(0) @map("subtotal_amount") @db.Decimal(14, 0)
   discountPercent Decimal                @default(0) @map("discount_percent") @db.Decimal(5, 2)
   discountAmount  Decimal                @default(0) @map("discount_amount") @db.Decimal(14, 0)
@@ -1177,6 +1239,7 @@ model InventoryReceipt {
   createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
   items           InventoryReceiptItem[]
+  sphereItems     ProductSphereItem[]
 
   @@index([receivedAt(sort: Desc)])
   @@index([pos365SyncStatus, pos365SyncNextAttemptAt])
@@ -1199,8 +1262,12 @@ model InventoryReceiptItem {
   gemstoneQuality String?            @map("gemstone_quality") @db.VarChar(40)
   categoryName String?              @map("category_name") @db.VarChar(120)
   stoneName    String?              @map("stone_name") @db.VarChar(120)
+  sphereStoneGroupName String?      @map("sphere_stone_group_name") @db.VarChar(120)
+  sphereStoneTypeName  String?      @map("sphere_stone_type_name") @db.VarChar(120)
+  sphereQuality         String?      @map("sphere_quality") @db.VarChar(60)
   kind         String               @db.VarChar(24)
   quantity     Int
+  quantityKg  Decimal?             @map("quantity_kg") @db.Decimal(14, 3)
   unitCost     Decimal?             @map("unit_cost") @db.Decimal(14, 0)
   lineTotal    Decimal?             @map("line_total") @db.Decimal(14, 0)
   createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -1213,6 +1280,33 @@ model InventoryReceiptItem {
   @@map("inventory_receipt_items")
 }
 
+/// Individual physical spheres received under one weight-managed sphere SKU.
+/// They do not create separate sellable SKUs; their weights must add up to the
+/// receipt line's total kg before the receipt can be saved.
+model ProductSphereItem {
+  id        String            @id @default(uuid()) @db.Uuid
+  productId String            @map("product_id") @db.Uuid
+  receiptId String?           @map("receipt_id") @db.Uuid
+  label     String?           @db.VarChar(120)
+  weightKg  Decimal           @map("weight_kg") @db.Decimal(14, 3)
+  price     Decimal?          @db.Decimal(14, 0)
+  imageUrls String[]          @default([]) @map("image_urls") @db.Text
+  status    String            @default("AVAILABLE") @db.VarChar(24)
+  sortOrder Int               @default(0) @map("sort_order")
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  product   Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  receipt   InventoryReceipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  orderItems OrderItem[]
+  reservations InventoryReservation[]
+  movements InventoryMovement[]
+  issueItems InventoryIssueItem[]
+
+  @@index([productId, status, sortOrder])
+  @@index([receiptId])
+  @@map("product_sphere_items")
+}
+
 model InventoryIssue {
   id            String               @id @default(uuid()) @db.Uuid
   issueNo       String               @unique @map("issue_no") @db.VarChar(64)
@@ -1223,6 +1317,7 @@ model InventoryIssue {
   status        String               @default("COMPLETED") @db.VarChar(24)
   note          String?              @db.Text
   totalQuantity Int                  @default(0) @map("total_quantity")
+  totalQuantityKg Decimal             @default(0) @map("total_quantity_kg") @db.Decimal(14, 3)
   totalAmount   Decimal              @default(0) @map("total_amount") @db.Decimal(14, 0)
   createdAt     DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1238,6 +1333,7 @@ model InventoryIssueItem {
   issueId      String               @map("issue_id") @db.Uuid
   productId    String?              @map("product_id") @db.Uuid
   variantId    String?              @map("variant_id") @db.Uuid
+  sphereItemId String?              @map("sphere_item_id") @db.Uuid
   productName  String               @map("product_name") @db.VarChar(180)
   productSku   String               @map("product_sku") @db.VarChar(64)
   variantLabel String?              @map("variant_label") @db.VarChar(120)
@@ -1245,15 +1341,18 @@ model InventoryIssueItem {
   stoneName    String?              @map("stone_name") @db.VarChar(120)
   kind         String               @db.VarChar(24)
   quantity     Int
+  quantityKg  Decimal?             @map("quantity_kg") @db.Decimal(14, 3)
   unitPrice    Decimal              @map("unit_price") @db.Decimal(14, 0)
   lineTotal    Decimal              @map("line_total") @db.Decimal(14, 0)
   createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
   issue        InventoryIssue       @relation(fields: [issueId], references: [id], onDelete: Cascade)
   product      Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
   variant      ProductPriceVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  sphereItem   ProductSphereItem?   @relation(fields: [sphereItemId], references: [id], onDelete: SetNull)
 
   @@index([issueId])
   @@index([productId, createdAt(sort: Desc)])
+  @@index([sphereItemId, createdAt(sort: Desc)])
   @@map("inventory_issue_items")
 }
 

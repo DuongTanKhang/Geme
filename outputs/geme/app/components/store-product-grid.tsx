@@ -15,6 +15,9 @@ type StoreCartLine = {
   key: string;
   productId: string;
   variantId: string | null;
+  sphereItemId?: string | null;
+  quantityKg?: number | null;
+  weightKg?: number | null;
   slug: string;
   name: string;
   sku: string;
@@ -65,24 +68,28 @@ export function StoreProductCard({ product, promotions, compact = false, priorit
   const photoClass = compact ? "product-photo" : "catalog-product-photo";
   const nameClass = compact ? "product-name" : "catalog-product-name";
   const availableVariants = product.variants.filter((variant) => Number(variant.stock) > 0);
-  const soldOut = product.variants.length ? availableVariants.length === 0 : product.stock <= 0;
+  const availableSphereItems = product.sphereItems || [];
+  const soldOut = product.hasWeightItems ? availableSphereItems.length === 0 : product.variants.length ? availableVariants.length === 0 : product.stock <= 0;
   const { salePrice, originalPrice, discountPercent, promotion } = getStoreProductPrice(product, promotions);
   const activePromotion = promotion;
   const hasDiscount = originalPrice > salePrice && discountPercent > 0;
   const promotionPeriod = activePromotion ? formatStorePromotionPeriod(activePromotion) : "";
   const secondaryImage = product.coverVideoUrl ? undefined : product.images[1];
   const secondaryImageSrc = storeMediaDeliveryUrl(secondaryImage?.url);
-  const addToCart = (variant?: StoreProduct["variants"][number]) => {
-    const stock = Number(variant?.stock ?? product.stock) || 0;
+  const addToCart = (variant?: StoreProduct["variants"][number], sphereItem?: NonNullable<StoreProduct["sphereItems"]>[number]) => {
+    const stock = sphereItem ? 1 : Number(variant?.stock ?? product.stock) || 0;
     if (stock <= 0 || product.isPremiumGemstone) return;
     const line: StoreCartLine = {
-      key: `${product.id}:${variant?.id || variant?.sku || "default"}`,
+      key: `${product.id}:${sphereItem?.id || variant?.id || variant?.sku || "default"}`,
       productId: product.id,
-      variantId: variant?.id || null,
+      variantId: sphereItem ? null : variant?.id || null,
+      sphereItemId: sphereItem?.id || null,
+      quantityKg: sphereItem?.weightKg ?? null,
+      weightKg: sphereItem?.weightKg ?? null,
       slug: product.slug,
       name: product.name,
       sku: variant?.sku || product.sku,
-      price: getStoreProductPrice(product, promotions, variant).salePrice,
+      price: getStoreProductPrice(sphereItem ? { ...product, price: sphereItem.price, originalPrice: null } : product, promotions, variant).salePrice,
       shape: variant?.shape || null,
       quality: variant?.quality || null,
       beadSize: variant?.beadSize || null,
@@ -96,7 +103,7 @@ export function StoreProductCard({ product, promotions, compact = false, priorit
       const saved = JSON.parse(sessionStorage.getItem(CART_STORAGE_KEY) || "[]");
       if (Array.isArray(saved)) cart = saved;
     } catch { /* Start a clean cart if its current session value is invalid. */ }
-    if (cart.some((item) => item.productId === product.id)) {
+    if (cart.some((item) => sphereItem ? item.sphereItemId === sphereItem.id : item.productId === product.id && item.variantId === (variant?.id || null))) {
       setIsInCart(true);
       setCartPickerOpen(false);
       return;
@@ -128,6 +135,11 @@ export function StoreProductCard({ product, promotions, compact = false, priorit
     } catch { /* Treat an invalid cart as empty. */ }
     if (alreadyInCart) { removeFromCart(); return; }
     if (product.isPremiumGemstone || soldOut) return;
+    if (product.hasWeightItems) {
+      if (availableSphereItems.length === 1) { addToCart(undefined, availableSphereItems[0]); return; }
+      setCartPickerOpen((open) => !open);
+      return;
+    }
     if (!product.variants.length) { addToCart(); return; }
     if (availableVariants.length === 1) { addToCart(availableVariants[0]); return; }
     setCartPickerOpen((open) => !open);
@@ -142,11 +154,15 @@ export function StoreProductCard({ product, promotions, compact = false, priorit
     }}>
       <svg viewBox="0 0 24 24" fill={isFavorite ? "currentColor" : "none"} aria-hidden="true"><path d="M20.8 8.8c0 5-8.8 10.3-8.8 10.3S3.2 13.8 3.2 8.8A4.5 4.5 0 0 1 12 6.5a4.5 4.5 0 0 1 8.8 2.3Z" /></svg>
     </button>
-    <button className={`product-cart-button${isInCart ? " is-in-cart" : ""}`} type="button" aria-label={product.isPremiumGemstone ? `Liên hệ để mua ${product.name}` : soldOut ? `${product.name} hiện hết hàng` : isInCart ? `Bỏ ${product.name} khỏi giỏ hàng` : `Thêm ${product.name} vào giỏ hàng`} title={product.isPremiumGemstone ? "Liên hệ GEME để được tư vấn" : soldOut && !isInCart ? "Sản phẩm đang hết hàng" : isInCart ? "Bỏ khỏi giỏ hàng" : "Thêm vào giỏ hàng"} aria-pressed={isInCart} aria-expanded={cartPickerOpen} aria-haspopup={product.variants.length > 1 ? "listbox" : undefined} disabled={(soldOut && !isInCart) || product.isPremiumGemstone} onClick={(event) => { event.preventDefault(); event.stopPropagation(); openCartAction(); }}>
+    <button className={`product-cart-button${isInCart ? " is-in-cart" : ""}`} type="button" aria-label={product.isPremiumGemstone ? `Liên hệ để mua ${product.name}` : soldOut ? `${product.name} hiện hết hàng` : isInCart ? `Bỏ ${product.name} khỏi giỏ hàng` : `Thêm ${product.name} vào giỏ hàng`} title={product.isPremiumGemstone ? "Liên hệ GEME để được tư vấn" : soldOut && !isInCart ? "Sản phẩm đang hết hàng" : isInCart ? "Bỏ khỏi giỏ hàng" : "Thêm vào giỏ hàng"} aria-pressed={isInCart} aria-expanded={cartPickerOpen} aria-haspopup={product.hasWeightItems || product.variants.length > 1 ? "listbox" : undefined} disabled={(soldOut && !isInCart) || product.isPremiumGemstone} onClick={(event) => { event.preventDefault(); event.stopPropagation(); openCartAction(); }}>
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4.5 8h15l1 12h-17l1-12Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>
     </button>
     {cartPickerOpen && <div className="product-card-cart-picker" role="group" aria-label={`Chọn phiên bản ${product.name}`}>
-      <strong>Chọn phiên bản</strong>
+      <strong>{product.hasWeightItems ? "Chọn quả cầu theo khối lượng" : "Chọn phiên bản"}</strong>
+      {product.hasWeightItems && availableSphereItems.map((item) => <button type="button" aria-label={`${item.weightKg} kg · ${formatStorePrice(item.price)}`} key={item.id} onClick={(event) => { event.preventDefault(); event.stopPropagation(); addToCart(undefined, item); }}>
+        <span><b>{new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 3 }).format(item.weightKg)} kg</b><small>SKU: {product.sku}</small></span>
+        <strong>{formatStorePrice(getStoreProductPrice({ ...product, price: item.price, originalPrice: null }, promotions).salePrice)}</strong>
+      </button>)}
       {availableVariants.map((variant) => <button type="button" aria-label={`${variantLabel(variant)} · SKU ${variant.sku || product.sku}`} key={variant.id || `${variant.sku}-${variant.quality}-${variant.beadSize}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); addToCart(variant); }}>
         <span><b>{variantLabel(variant)}</b><small>SKU: {variant.sku || product.sku} · Còn {variant.stock}</small></span>
         <strong>{formatStorePrice(getStoreProductPrice(product, promotions, variant).salePrice)}</strong>
@@ -165,7 +181,7 @@ export function StoreProductCard({ product, promotions, compact = false, priorit
         <a href={`/san-pham/${encodeURIComponent(product.slug)}`} className={nameClass}>{product.name}</a>
         <div className={`store-product-prices${hasDiscount ? " has-promotion" : ""}`}>
           {hasDiscount && <span className="store-product-discount">−{new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 2 }).format(discountPercent)}%</span>}
-          <strong className={compact ? "product-price" : undefined}>{salePrice ? formatStorePrice(salePrice) : "Liên hệ"}</strong>
+          <strong className={compact ? "product-price" : undefined}>{salePrice ? `${product.hasWeightItems ? "Từ " : ""}${formatStorePrice(salePrice)}` : "Liên hệ"}</strong>
           {hasDiscount && <del>{formatStorePrice(originalPrice)}</del>}
           {promotionPeriod && <small className="store-product-promotion-period">{promotionPeriod}</small>}
         </div>

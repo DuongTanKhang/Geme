@@ -1,6 +1,6 @@
 import { apiBaseUrl } from "../lib/api";
 
-export const MAX_PRODUCT_IMAGES = 10;
+export const MAX_PRODUCT_IMAGES = 100;
 export const MAX_VARIANT_MEDIA_ITEMS = 5;
 const MAX_IMAGE_DATA_URL_LENGTH = 780_000;
 const IMAGE_TARGET_BYTES = 560_000;

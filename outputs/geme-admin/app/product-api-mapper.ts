@@ -40,6 +40,12 @@ export function fromApiProduct(value: Row): AdminProduct {
       videoUrl: item.videoUrl || null,
     }))
     : [];
+  const sphereItems = Array.isArray(value.sphereItems) ? value.sphereItems.map((item: Row) => ({
+    id: String(item.id || ""), label: item.label || null, weightKg: Number(item.weightKg) || 0,
+    price: Number(item.price) || 0, imageUrls: Array.isArray(item.imageUrls) ? item.imageUrls.filter((url: unknown) => typeof url === "string") : [],
+    status: String(item.status || "AVAILABLE"), sortOrder: Number(item.sortOrder) || 0,
+  })) : [];
+  const weightItemCover = sphereItems.find((item) => item.status === "AVAILABLE" && item.imageUrls.length)?.imageUrls[0] || "";
 
   return {
     id: String(value.sku),
@@ -65,10 +71,11 @@ export function fromApiProduct(value: Row): AdminProduct {
     materialOptionId: value.materialOptionId || undefined,
     gemstoneTypeId: gemstoneTypeId || undefined,
     categoryPricingMode: value.kind === "GEMSTONE" && category?.pricingMode === "QUALITY" ? "GEMSTONE_SIZE" : category?.pricingMode || "FIXED",
-    subcategory: value.kind === "GEMSTONE" ? "" : value.materialOption?.name || "",
+    subcategory: value.kind === "GEMSTONE" ? "" : value.sphereStoneType?.name || value.materialOption?.name || "",
+    stoneFilterKey: value.sphereStoneType?.id ? `sphere:${value.sphereStoneType.id}` : value.materialOption?.id ? `material:${value.materialOption.id}` : undefined,
     description: value.description || "",
     fullDescription: value.fullDescription || "",
-    image: images[0] || "",
+    image: images[0] || weightItemCover,
     gallery: images,
     coverVideoUrl: String(value.coverVideoUrl || ""),
     technicalImage: String(value.technicalImageUrl || ""),
@@ -80,6 +87,9 @@ export function fromApiProduct(value: Row): AdminProduct {
     qualityGrades: [...new Set(variants.map((row) => row.quality))],
     beadSizes: [...new Set(variants.map((row) => row.beadSize).filter(Boolean))] as string[],
     priceVariants: variants,
+    stockKg: Number(value.stockKg) || 0,
+    sphereQuality: value.sphereQuality || null,
+    sphereItems,
     seoTitle: value.seoTitle || "",
     seoDescription: value.seoDescription || "",
     pos365PriceSyncStatus: value.pos365PriceSyncStatus || null,

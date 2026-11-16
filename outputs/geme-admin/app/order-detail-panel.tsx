@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { OrderReceiptData } from "./order-receipt-modal";
+import { OrderQrButton } from "./order-payment-qr-modal";
 
 type VtpStatus = { configured: boolean; enabled: boolean; environment: string | null; senderConfigured: boolean; webhookConfigured: boolean; missing: string[] };
 type VtpService = { code: string; name: string; price: number; deliveryTime: string; exchangeWeight: number };
@@ -17,6 +18,7 @@ type Props = {
   onRefundPreShipment: () => void;
   onRetryOrderEmail: () => Promise<void>;
   onShowBill: () => void;
+  onShowPaymentQr?: () => void;
   onCustomerHistory: () => void;
   onGetViettelPostStatus: () => Promise<VtpStatus>;
   onGetViettelPostPrintUrl: () => Promise<{ url: string }>;
@@ -58,7 +60,7 @@ function posSyncName(status?: string | null) {
   return ({ PENDING: "Đang chờ gửi", SYNCING: "Đang đồng bộ", RETRYING: "Sẽ tự thử lại", SYNCED: "Đã đồng bộ", BLOCKED: "Cần cấu hình thanh toán" } as Record<string, string>)[status || ""] || "Chưa gửi lên POS365";
 }
 
-export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch, onDelivered, onRecordPayment, onRefundPreShipment, onRetryOrderEmail, onShowBill, onCustomerHistory, onGetViettelPostStatus, onGetViettelPostPrintUrl, onQuoteViettelPost, onCreateViettelPostShipment, onRefreshOrders }: Props) {
+export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch, onDelivered, onRecordPayment, onRefundPreShipment, onRetryOrderEmail, onShowBill, onShowPaymentQr, onCustomerHistory, onGetViettelPostStatus, onGetViettelPostPrintUrl, onQuoteViettelPost, onCreateViettelPostShipment, onRefreshOrders }: Props) {
   const defaultWeight = Math.round(order.items.reduce((sum, item) => sum + (Number(item.weightGrams) || 0) * item.quantity, 0));
   const [shipmentOpen, setShipmentOpen] = useState(false);
   const [shipmentStatus, setShipmentStatus] = useState<VtpStatus | null>(null);
@@ -214,7 +216,7 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
 
     <section className="drawer-products"><div className="drawer-products-title"><h3>Sản phẩm trong đơn</h3><span>{order.items.length} sản phẩm</span></div>
       {order.items.map((item) => <div className="drawer-product-row" key={item.id}>{item.image ? <img className="product-thumb" src={item.image} alt=""/> : <span className="product-thumb" aria-hidden="true">◇</span>}<span className="drawer-product-name">{item.productName}<small>{[item.productSku, item.quality, item.beadSize].filter(Boolean).join(" · ")}</small></span><span>x{item.quantity}</span><strong>{money(item.lineTotal)}</strong></div>)}
-      <div className="drawer-total"><div><span>Tạm tính</span><strong>{money(order.subtotal)}</strong></div><div><span>Phí vận chuyển</span><strong>{money(order.shippingFee)}</strong></div><div><span>Giảm giá</span><strong>− {money(order.discountAmount)}</strong></div><strong><span>Tổng tiền</span><span>{money(order.total)}</span></strong><div className="payment-status"><span>Trạng thái thanh toán</span><span className={"status-pill "+(order.paymentStatus === "PAID" ? "green" : order.paymentStatus === "FAILED" ? "red" : "amber")}>{paymentStatusName(order.paymentStatus)}</span><button className="row-action" type="button" onClick={onShowBill}>Xem hóa đơn</button></div>
+      <div className="drawer-total"><div><span>Tạm tính</span><strong>{money(order.subtotal)}</strong></div><div><span>Phí vận chuyển</span><strong>{money(order.shippingFee)}</strong></div><div><span>Giảm giá</span><strong>− {money(order.discountAmount)}</strong></div><strong><span>Tổng tiền</span><span>{money(order.total)}</span></strong><div className="payment-status"><span>Trạng thái thanh toán</span><span className={"status-pill "+(order.paymentStatus === "PAID" ? "green" : order.paymentStatus === "FAILED" ? "red" : "amber")}>{paymentStatusName(order.paymentStatus)}</span>{onShowPaymentQr&&<OrderQrButton order={order} onClick={onShowPaymentQr}/>}<button className="row-action" type="button" onClick={onShowBill}>Xem hóa đơn</button></div>
         {(order.paymentCaptured || order.paymentRefunded || order.paymentBalance != null) && <div className="payment-collection-summary"><span>Đã thu: <strong>{money(order.paymentCaptured || 0)}</strong></span><span>Đã hoàn: <strong>{money(order.paymentRefunded || 0)}</strong></span><span>Còn phải thu: <strong>{money(order.paymentBalance || 0)}</strong></span></div>}
         {order.paymentEntries?.length ? <div className="payment-ledger-list"><strong>Các khoản thu</strong>{order.paymentEntries.map((entry)=> <div key={entry.id}><span>{entry.method} · {entry.providerRef || "Giao dịch cũ"}{entry.recordingNote ? ` · ${entry.recordingNote}` : ""}</span><b>{money(entry.amount)}</b>{entry.refundedAmount>0&&<small>Đã hoàn {money(entry.refundedAmount)}</small>}</div>)}</div> : null}
       </div>

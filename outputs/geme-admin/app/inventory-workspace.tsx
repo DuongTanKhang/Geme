@@ -7,33 +7,64 @@ import type { MaterialOption } from "./materials-workspace";
 import { compressProductImage } from "./product-images";
 import InventoryReceiptsWorkspace from "./inventory-receipts-workspace";
 
-type Variant = { id: string; sku?: string | null; shape?: string | null; quality: string; beadSize?: string | null; carat?: number | string | null; gemstoneQuality?: string | null; price?: number | string | null; stock: number; availableStock?: number; reservedStock?: number; onHandStock?: number };
+type Variant = { id: string; sku?: string | null; shape?: string | null; quality: string; beadSize?: string | null; carat?: number | string | null; gemstoneQuality?: string | null; price?: number | string | null; stock: number; stockKg?: number | string | null; availableStock?: number; availableStockKg?: number | string | null; reservedStock?: number; reservedStockKg?: number | string | null; onHandStock?: number; onHandStockKg?: number | string | null };
 type InventoryProduct = {
-  id: string; sku: string; name: string; status: string; stock: number; availableStock?: number; reservedStock?: number; onHandStock?: number; minimumStock: number; price?: number | string | null;
-  kind: "JEWELRY" | "GEMSTONE";
+  id: string; sku: string; name: string; status: string; stock: number; stockKg?: number | string | null; availableStock?: number; availableStockKg?: number | string | null; reservedStock?: number; reservedStockKg?: number | string | null; onHandStock?: number; onHandStockKg?: number | string | null; minimumStock: number; price?: number | string | null;
+  kind: "JEWELRY" | "GEMSTONE" | "OTHER";
   soldThisMonth: number; category?: { id: string; name: string } | null;
   gemstoneType?: { id: string; name: string } | null;
-  materialOption?: { id: string; name: string; kind: "STONE" | "MATERIAL"; scope: "JEWELRY" | "GEMSTONE" } | null;
+  materialOption?: { id: string; name: string; kind: "STONE" | "MATERIAL"; scope: "JEWELRY" | "GEMSTONE" | "OTHER" } | null;
+  sphereQuality?: string | null;
+  sphereStoneType?: { id: string; name: string; group?: { id: string; name: string } | null } | null;
+  sphereItems?: Array<{ id: string; label?: string | null; weightKg: number | string; price?: number | string | null; status?: string; sortOrder?: number }>;
   images?: Array<{ url: string; alt?: string | null }>;
   variants: Variant[];
 };
 type Movement = {
   id: string; productId?: string | null; productName: string; productSku: string; variantLabel?: string | null;
   type: "IN" | "OUT"; quantity: number; stockBefore: number; stockAfter: number;
+  quantityKg?: number | string | null; stockBeforeKg?: number | string | null; stockAfterKg?: number | string | null;
   reference?: string | null; note?: string | null; createdAt: string;
 };
 export type Tab = "stock" | "inbound" | "receipts" | "outbound" | "history";
 type Props = { categories: AdminCategory[]; materials: MaterialOption[]; initialTab: Tab; onNavigate: (tab: Tab) => void; onNotify: (message: string) => void; onCategoryCreated: (category: AdminCategory) => void };
 
 const money = (value: number) => new Intl.NumberFormat("vi-VN").format(value);
+const kg = (value: number | string | null | undefined) => new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 3 }).format(Number(value) || 0);
 const dateLabel = (value: string) => new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-const statusOf = (product: InventoryProduct) => product.stock <= 0 ? "Hết hàng" : product.stock <= product.minimumStock ? "Sắp hết" : "Còn hàng";
-const productKindLabel = (product: InventoryProduct) => product.kind === "GEMSTONE" ? "Đá quý" : "Trang sức";
+const stockKgOf = (product?: Pick<InventoryProduct, "stockKg"> | null) => Number(product?.stockKg || 0);
+const stockText = (product: Pick<InventoryProduct, "kind" | "stockKg" | "stock">, stock?: number | string | null) => product.kind === "OTHER" ? `${kg(stock ?? product.stockKg)} kg` : money(Number(stock ?? product.stock));
+const inventoryStockText = (
+  product: Pick<InventoryProduct, "kind" | "stock" | "stockKg">,
+  units?: number | null,
+  weightKg?: number | string | null,
+) => product.kind === "OTHER" ? stockText(product, weightKg ?? product.stockKg) : money(units ?? product.stock);
+const isSphereStockProduct = (product: InventoryProduct) => product.kind === "OTHER" && Boolean(product.sphereStoneType || product.sphereQuality || product.sphereItems?.length);
+const statusOf = (product: InventoryProduct) => product.kind === "OTHER"
+  ? product.stock <= 0 || stockKgOf(product) <= 0 ? "Hết hàng" : "Còn hàng"
+  : product.stock <= 0 ? "Hết hàng" : product.stock <= product.minimumStock ? "Sắp hết" : "Còn hàng";
+const productKindLabel = (product: InventoryProduct) => product.kind === "GEMSTONE" ? "Đá quý" : product.kind === "OTHER" ? "Vật phẩm" : "Trang sức";
 const variantLabel = (variant: Variant) => [({ ROUND: "Tròn", OVAL: "Oval", SQUARE: "Vuông" } as Record<string, string>)[String(variant.shape || "").toUpperCase()], variant.quality, variant.beadSize ? `${variant.beadSize} mm` : null, variant.carat != null ? `${variant.carat} ct` : null, variant.gemstoneQuality ? `Chất lượng ${variant.gemstoneQuality}` : null].filter(Boolean).join(" · ") || "Tiêu chuẩn";
 const stoneNameOf = (product: InventoryProduct) => product.kind === "GEMSTONE"
   ? product.gemstoneType?.name || product.materialOption?.name || ""
-  : product.materialOption?.kind === "STONE" ? product.materialOption.name : "";
+  : product.sphereStoneType?.name || (product.materialOption?.kind === "STONE" ? product.materialOption.name : "");
 const tabTitle: Record<Tab, string> = { stock: "Tồn kho sản phẩm", inbound: "Nhập hàng", receipts: "Phiếu nhập", outbound: "Xuất kho", history: "Lịch sử tồn kho" };
+
+function SphereInventoryBreakdown({ product, compact = false }: { product: InventoryProduct; compact?: boolean }) {
+  if (!isSphereStockProduct(product)) return null;
+  const items = [...(product.sphereItems || [])].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  const available = items.filter((item) => item.status === "AVAILABLE" || !item.status);
+  const unavailable = items.length - available.length;
+
+  return <details className="inventory-sphere-dropdown">
+    <summary>{compact ? `${items.length} món · ${stockText(product)}` : `Từng món · ${items.length} món · ${stockText(product)}`}</summary>
+    <div>
+      {!compact && <p><b>{product.sphereStoneType?.group?.name || "Nhóm đá chưa xác định"}</b> → <b>{product.sphereStoneType?.name || "Loại đá chưa xác định"}</b> → <b>{product.sphereQuality || "Chất lượng chưa xác định"}</b></p>}
+      {items.length ? items.map((item, index) => <span key={item.id}><b>{item.label || `Món ${index + 1}`}</b><em>{kg(item.weightKg)} kg{item.status && item.status !== "AVAILABLE" ? ` · ${item.status}` : ""}</em></span>) : <p>Chưa có dữ liệu từng món. Không thể điều chỉnh trực tiếp; hãy bổ sung qua phiếu nhập.</p>}
+      {!compact && <small>{available.length} món đang khả dụng{unavailable ? ` · ${unavailable} món đã bán/không khả dụng` : ""}</small>}
+    </div>
+  </details>;
+}
 
 function normalizeReceiptProductSearch(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").trim();
@@ -113,7 +144,7 @@ function ReceiptProductPicker({ products, selectedProduct, selectedVariant, onSe
           return <button key={`${match.product.id}:${match.variant?.id || "product"}`} type="button" role="option" aria-selected="false" onMouseDown={(event) => event.preventDefault()} onClick={() => selectMatch(match)}>
             <strong>{match.product.name}</strong>
             <small>SKU {sku}{match.variant ? ` · ${variantLabel(match.variant)}` : ""}</small>
-            <small>{[categoryForReceiptProduct(match.product), stoneNameOf(match.product), `Tồn ${money(match.variant?.stock ?? match.product.stock)}`].filter(Boolean).join(" · ")}</small>
+        <small>{[categoryForReceiptProduct(match.product), stoneNameOf(match.product), `Tồn ${stockText(match.product, match.variant?.stock ?? (match.product.kind === "OTHER" ? match.product.stockKg : match.product.stock))}`].filter(Boolean).join(" · ")}</small>
           </button>;
         })}
         {matches.length === 20 && <small className="receipt-product-picker-limit">Đang hiển thị tối đa 20 kết quả. Hãy nhập thêm ký tự để lọc chính xác hơn.</small>}
@@ -201,7 +232,7 @@ function ExistingReceiptProductDialog({ products, onClose, onSelect }: {
       <header><div><span className="inventory-eyebrow">NHẬP KHO</span><h2 id="existingReceiptProductTitle">Chọn sản phẩm có sẵn</h2><p>Lọc theo nhóm, danh mục, loại đá hoặc tìm trực tiếp bằng tên và SKU.</p></div><button type="button" onClick={onClose} aria-label="Đóng">×</button></header>
       <label className="receipt-existing-product-search"><span>Tìm theo tên hoặc SKU</span><input autoFocus type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Ví dụ: NSSREM110, nhẫn Topaz…"/></label>
       <div className="receipt-existing-product-filters">
-        <label>Nhóm sản phẩm<select value={kindFilter} onChange={(event) => { setKindFilter(event.target.value as "" | InventoryProduct["kind"]); setCategoryFilter(""); setStoneFilter(""); }}><option value="">Tất cả nhóm</option><option value="JEWELRY">Trang sức</option><option value="GEMSTONE">Đá quý</option></select></label>
+        <label>Nhóm sản phẩm<select value={kindFilter} onChange={(event) => { setKindFilter(event.target.value as "" | InventoryProduct["kind"]); setCategoryFilter(""); setStoneFilter(""); }}><option value="">Tất cả nhóm</option><option value="JEWELRY">Trang sức</option><option value="GEMSTONE">Đá quý</option><option value="OTHER">Vật phẩm</option></select></label>
         <label>Danh mục<select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setStoneFilter(""); }}><option value="">Tất cả danh mục</option>{categoryOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>
         <label>Loại đá / chất liệu<select value={stoneFilter} onChange={(event) => setStoneFilter(event.target.value)}><option value="">Tất cả loại đá / chất liệu</option>{stoneOptions.map((name) => <option key={name} value={name}>{name === "__no_stone__" ? "Chưa phân loại" : name}</option>)}</select></label>
       </div>
@@ -212,7 +243,7 @@ function ExistingReceiptProductDialog({ products, onClose, onSelect }: {
           const stock = variant?.stock ?? product.stock;
           return <button key={`${product.id}:${variant?.id || "product"}`} type="button" role="option" aria-selected="false" onClick={() => onSelect(product, variant)}>
             <span><strong>{product.name}</strong><small>{variant ? variantLabel(variant) : productKindLabel(product)} · {categoryForReceiptProduct(product)}</small></span>
-            <span><b>{sku}</b><small>{stoneNameOf(product) || product.materialOption?.name || "Chưa phân loại"} · Tồn {money(stock)}</small></span>
+        <span><b>{sku}</b><small>{stoneNameOf(product) || product.materialOption?.name || "Chưa phân loại"} · Tồn {stockText(product, product.kind === "OTHER" ? product.stockKg : stock)}</small></span>
           </button>;
         }) : <p>{normalizedSearch ? "Không tìm thấy sản phẩm hoặc SKU phù hợp với bộ lọc." : "Không có sản phẩm phù hợp với bộ lọc hiện tại."}</p>}
       </div>
@@ -222,7 +253,7 @@ function ExistingReceiptProductDialog({ products, onClose, onSelect }: {
 }
 
 function categoryForReceiptProduct(product: InventoryProduct) {
-  return product.category?.name || (product.kind === "GEMSTONE" ? "Đá quý" : "Trang sức");
+  return product.category?.name || (product.kind === "GEMSTONE" ? "Đá quý" : product.kind === "OTHER" ? "Vật phẩm" : "Trang sức");
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -364,9 +395,9 @@ export default function InventoryWorkspace({ categories, materials, initialTab, 
   const resetUnitCount = resetPreview?.totalQuantity || 0;
   const summary = {
     total: products.length,
-    available: products.filter((product) => product.stock > product.minimumStock).length,
-    low: products.filter((product) => product.stock > 0 && product.stock <= product.minimumStock).length,
-    empty: products.filter((product) => product.stock <= 0).length,
+    available: products.filter((product) => statusOf(product) === "Còn hàng" || statusOf(product) === "Sắp hết").length,
+    low: products.filter((product) => product.kind !== "OTHER" && product.stock > 0 && product.stock <= product.minimumStock).length,
+    empty: products.filter((product) => statusOf(product) === "Hết hàng").length,
   };
   const selectedMovements = movements.filter((movement) => movement.productId === selected?.id).slice(0, 5);
   const saveMinimum = async () => {
@@ -424,7 +455,16 @@ export default function InventoryWorkspace({ categories, materials, initialTab, 
 
   const exportCsv = () => {
     const quote = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
-    const rows = [["Sản phẩm", "SKU", "Danh mục", "Khả dụng", "Đang giữ", "Tồn thực", "Đã bán tháng này", "Trạng thái"], ...filtered.map((product) => [product.name, product.sku, product.category?.name || "", product.availableStock ?? product.stock, product.reservedStock ?? 0, product.onHandStock ?? product.stock, product.soldThisMonth, statusOf(product)])];
+    const rows = [["Sản phẩm", "SKU", "Danh mục", "Khả dụng", "Đang giữ", "Tồn thực", "Đã bán tháng này", "Trạng thái"], ...filtered.map((product) => [
+      product.name,
+      product.sku,
+      product.category?.name || "",
+      inventoryStockText(product, product.availableStock, product.availableStockKg),
+      inventoryStockText(product, product.reservedStock, product.reservedStockKg),
+      inventoryStockText(product, product.onHandStock, product.onHandStockKg),
+      product.kind === "OTHER" ? "—" : product.soldThisMonth,
+      statusOf(product),
+    ])];
     const blob = new Blob(["\uFEFF" + rows.map((row) => row.map(quote).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = `geme-ton-kho-${new Date().toISOString().slice(0, 10)}.csv`; anchor.click(); URL.revokeObjectURL(url);
@@ -450,17 +490,30 @@ export default function InventoryWorkspace({ categories, materials, initialTab, 
 
     {error && <div className="inventory-error" role="alert">{error}<button onClick={() => void reload()}>Thử tải lại</button></div>}
     {tab === "history" ? <section className="inventory-history-panel"><div className="inventory-panel-title"><div><h2>Lịch sử nhập / xuất kho</h2><p>Các điều chỉnh đã được ghi trong database.</p></div><button className="button button-quiet" onClick={() => void reload()}>Làm mới</button></div><MovementTable movements={movements} empty={loading ? "Đang tải lịch sử…" : "Chưa có lượt nhập hoặc xuất kho."}/></section> : tab === "receipts" ? <InventoryReceiptsWorkspace /> : tab === "inbound" ? <InboundReceiptPage products={products} categories={categories} materials={materials} onCategoryCreated={onCategoryCreated} onCancel={() => { setTab("stock"); onNavigate("stock"); }} onComplete={async () => { await reload(); setTab("stock"); onNavigate("stock"); }} onNotify={onNotify}/> : tab === "outbound" ? <OutboundIssuePage products={products} onCancel={() => { setTab("stock"); onNavigate("stock"); }} onComplete={async () => { await reload(); }} onNotify={onNotify}/> : <>
-      <div className="inventory-toolbar"><label className="inventory-search"><span>⌕</span><input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Tìm theo tên sản phẩm, mã SKU, mã vạch..."/></label><label className="inventory-filter">Nhóm sản phẩm<select value={kindFilter} onChange={(event) => { setKindFilter(event.target.value); setCategoryFilter(""); setStoneFilter(""); setPage(1); setSelectedRows([]); }}><option value="">Trang sức &amp; đá quý</option><option value="JEWELRY">Trang sức</option><option value="GEMSTONE">Đá quý</option></select></label><label className="inventory-filter">Danh mục<select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setStoneFilter(""); setPage(1); setSelectedRows([]); }}><option value="">Tất cả</option>{categories.filter((category) => !kindFilter || products.some((product) => product.kind === kindFilter && product.category?.id === category.id)).map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label><label className="inventory-filter">Loại đá<select value={stoneFilter} onChange={(event) => { setStoneFilter(event.target.value); setPage(1); setSelectedRows([]); }}><option value="">Tất cả loại đá</option>{stoneOptions.filter((stone) => products.some((product) => (!kindFilter || product.kind === kindFilter) && (!categoryFilter || product.category?.id === categoryFilter) && stoneNameOf(product) === stone)).map((stone) => <option value={stone} key={stone}>{stone}</option>)}</select></label><label className="inventory-filter">Trạng thái tồn kho<select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value); setPage(1); setSelectedRows([]); }}><option value="">Tất cả trạng thái</option><option>Còn hàng</option><option>Sắp hết</option><option>Hết hàng</option></select></label><label className="inventory-filter">Kho<select defaultValue="main"><option value="main">Kho chính</option></select></label><div className="inventory-toolbar-actions"><button className="button button-danger" onClick={openReset}>↺ Reset kho</button><button className="button button-quiet" onClick={() => { setTab("inbound"); onNavigate("inbound"); }}>＋ Nhập kho</button><button className="button button-primary" onClick={() => { setTab("outbound"); onNavigate("outbound"); }}>⇧ Xuất kho</button></div></div>
+      <div className="inventory-toolbar"><label className="inventory-search"><span>⌕</span><input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Tìm theo tên sản phẩm, mã SKU, mã vạch..."/></label><label className="inventory-filter">Nhóm sản phẩm<select value={kindFilter} onChange={(event) => { setKindFilter(event.target.value); setCategoryFilter(""); setStoneFilter(""); setPage(1); setSelectedRows([]); }}><option value="">Tất cả nhóm hàng</option><option value="JEWELRY">Trang sức</option><option value="GEMSTONE">Đá quý</option><option value="OTHER">Vật phẩm</option></select></label><label className="inventory-filter">Danh mục<select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setStoneFilter(""); setPage(1); setSelectedRows([]); }}><option value="">Tất cả</option>{categories.filter((category) => !kindFilter || products.some((product) => product.kind === kindFilter && product.category?.id === category.id)).map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label><label className="inventory-filter">Loại đá<select value={stoneFilter} onChange={(event) => { setStoneFilter(event.target.value); setPage(1); setSelectedRows([]); }}><option value="">Tất cả loại đá</option>{stoneOptions.filter((stone) => products.some((product) => (!kindFilter || product.kind === kindFilter) && (!categoryFilter || product.category?.id === categoryFilter) && stoneNameOf(product) === stone)).map((stone) => <option value={stone} key={stone}>{stone}</option>)}</select></label><label className="inventory-filter">Trạng thái tồn kho<select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value); setPage(1); setSelectedRows([]); }}><option value="">Tất cả trạng thái</option><option>Còn hàng</option><option>Sắp hết</option><option>Hết hàng</option></select></label><label className="inventory-filter">Kho<select defaultValue="main"><option value="main">Kho chính</option></select></label><div className="inventory-toolbar-actions"><button className="button button-danger" onClick={openReset}>↺ Reset kho</button><button className="button button-quiet" onClick={() => { setTab("inbound"); onNavigate("inbound"); }}>＋ Nhập kho</button><button className="button button-primary" onClick={() => { setTab("outbound"); onNavigate("outbound"); }}>⇧ Xuất kho</button></div></div>
 
       <div className="inventory-main-grid"><section className="inventory-table-panel"><div className="inventory-table-scroll"><table className="inventory-table"><thead><tr><th><input type="checkbox" aria-label="Chọn tất cả" checked={pageRows.length > 0 && pageRows.every((product) => selectedRows.includes(product.id))} onChange={toggleAll}/></th><th>Sản phẩm</th><th>Mã SKU</th><th>Danh mục</th><th>Khả dụng ↕</th><th>Đang giữ</th><th>Tồn thực</th><th>Đã bán (tháng) ↕</th><th>Trạng thái</th></tr></thead><tbody>{loading ? <tr><td colSpan={9} className="inventory-empty">Đang tải sản phẩm…</td></tr> : pageRows.length ? groupedPageRows.map((product, index) => {
         const previous = groupedPageRows[index - 1];
         const groupName = `${productKindLabel(product)} · ${stoneNameOf(product) || "Chưa gắn loại đá"}`;
         const previousGroupName = previous ? `${productKindLabel(previous)} · ${stoneNameOf(previous) || "Chưa gắn loại đá"}` : "";
-        return <Fragment key={product.id}>{groupName !== previousGroupName && <tr className="inventory-group-row"><td colSpan={9}><span>{productKindLabel(product)}</span><b>{stoneNameOf(product) || "Chưa gắn loại đá"}</b></td></tr>}<tr className={selectedId === product.id ? "selected" : ""} onClick={() => { setSelectedId(product.id); setEditingMinimum(false); }}><td onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Chọn ${product.name}`} checked={selectedRows.includes(product.id)} onChange={() => toggleRow(product.id)}/></td><td><span className="inventory-product-cell">{product.images?.[0]?.url ? <img src={product.images[0].url} alt={product.images[0].alt || product.name}/> : <span className="inventory-product-placeholder">◇</span>}<strong>{product.name}</strong></span></td><td>{product.sku}{product.variants.length > 0 && <details className="inventory-variant-dropdown"><summary>{product.variants.length} biến thể · tồn kho</summary><div>{product.variants.map((variant) => <span key={variant.id}><b>{variantLabel(variant)}</b><code>{variant.sku || "SKU chưa có"}</code><em>Khả dụng {money(variant.availableStock ?? variant.stock)} · giữ {money(variant.reservedStock ?? 0)} · thực {money(variant.onHandStock ?? variant.stock)}</em></span>)}</div></details>}</td><td>{product.category?.name || "Chưa phân loại"}</td><td className="inventory-number">{money(product.availableStock ?? product.stock)}</td><td className="inventory-number">{money(product.reservedStock ?? 0)}</td><td className="inventory-number">{money(product.onHandStock ?? product.stock)}</td><td>{money(product.soldThisMonth)}</td><td><span className={`inventory-status ${statusOf(product) === "Còn hàng" ? "ok" : statusOf(product) === "Sắp hết" ? "low" : "out"}`}>{statusOf(product)}</span></td></tr></Fragment>;
+        return <Fragment key={product.id}>
+          {groupName !== previousGroupName && <tr className="inventory-group-row"><td colSpan={9}><span>{productKindLabel(product)}</span><b>{stoneNameOf(product) || "Chưa gắn loại đá"}</b></td></tr>}
+          <tr className={selectedId === product.id ? "selected" : ""} onClick={() => { setSelectedId(product.id); setEditingMinimum(false); }}>
+            <td onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Chọn ${product.name}`} checked={selectedRows.includes(product.id)} onChange={() => toggleRow(product.id)}/></td>
+            <td><span className="inventory-product-cell">{product.images?.[0]?.url ? <img src={product.images[0].url} alt={product.images[0].alt || product.name}/> : <span className="inventory-product-placeholder">◇</span>}<strong>{product.name}</strong></span></td>
+            <td>{product.sku}{product.variants.length > 0 && <details className="inventory-variant-dropdown"><summary>{product.variants.length} biến thể · tồn kho</summary><div>{product.variants.map((variant) => <span key={variant.id}><b>{variantLabel(variant)}</b><code>{variant.sku || "SKU chưa có"}</code><em>Khả dụng {money(variant.availableStock ?? variant.stock)} · giữ {money(variant.reservedStock ?? 0)} · thực {money(variant.onHandStock ?? variant.stock)}</em></span>)}</div></details>}{isSphereStockProduct(product) && <SphereInventoryBreakdown product={product} compact/>}</td>
+            <td>{product.category?.name || "Chưa phân loại"}</td>
+            <td className="inventory-number">{inventoryStockText(product, product.availableStock, product.availableStockKg)}</td>
+            <td className="inventory-number">{inventoryStockText(product, product.reservedStock, product.reservedStockKg)}</td>
+            <td className="inventory-number">{inventoryStockText(product, product.onHandStock, product.onHandStockKg)}</td>
+            <td>{product.kind === "OTHER" ? "—" : money(product.soldThisMonth)}</td>
+            <td><span className={`inventory-status ${statusOf(product) === "Còn hàng" ? "ok" : statusOf(product) === "Sắp hết" ? "low" : "out"}`}>{statusOf(product)}</span></td>
+          </tr>
+        </Fragment>;
       }) : <tr><td colSpan={9} className="inventory-empty">{error ? "Không lấy được dữ liệu từ API." : "Không có sản phẩm phù hợp."}</td></tr>}</tbody></table></div><div className="inventory-pagination"><span>Hiển thị {filtered.length ? (page - 1) * pageSize + 1 : 0}–{Math.min(page * pageSize, filtered.length)} / {money(filtered.length)} sản phẩm</span><div><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>‹</button><strong>{page}</strong><button disabled={page >= pageCount} onClick={() => setPage((value) => value + 1)}>›</button></div></div></section>
 
-      <aside className="inventory-detail-panel">{selected ? <><div className="inventory-detail-heading"><div><h2>Chi tiết tồn kho</h2><span className={`inventory-status ${statusOf(selected) === "Còn hàng" ? "ok" : statusOf(selected) === "Sắp hết" ? "low" : "out"}`}>{statusOf(selected)}</span></div><button className="inventory-refresh" title="Làm mới" onClick={() => void reload()}>↻</button></div><div className="inventory-detail-product">{selected.images?.[0]?.url ? <img src={selected.images[0].url} alt={selected.name}/> : <span className="inventory-product-placeholder">◇</span>}<div><strong>{selected.name}</strong><small>{selected.sku}</small><small>{productKindLabel(selected)} · {selected.category?.name || "Chưa phân loại"}</small>{stoneNameOf(selected) && <small>Loại đá: {stoneNameOf(selected)}</small>}</div></div><div className="inventory-detail-metrics"><div><small>Khả dụng</small><strong>{money(selected.availableStock ?? selected.stock)}</strong></div><div><small>Đang giữ</small><strong>{money(selected.reservedStock ?? 0)}</strong></div><div><small>Tồn thực</small><strong>{money(selected.onHandStock ?? selected.stock)}</strong></div><div><small>Đã bán (tháng)</small><strong>{money(selected.soldThisMonth)}</strong></div><div className="minimum-metric"><small>Tồn kho tối thiểu</small>{editingMinimum ? <div className="minimum-edit"><input type="number" min="0" value={minimumDraft} onChange={(event) => setMinimumDraft(event.target.value)}/><button disabled={saving} onClick={() => void saveMinimum()}>Lưu</button></div> : <strong>{money(selected.minimumStock)} <button className="minimum-pencil" title="Sửa mức tồn tối thiểu" onClick={() => { setMinimumDraft(String(selected.minimumStock)); setEditingMinimum(true); }}>✎</button></strong>}</div></div>
-        <section className="inventory-variants"><div className="inventory-subheading"><h3>Theo kích thước / phân loại</h3><span>{selected.variants.length || 1}</span></div><div className="inventory-variant-head"><span>Kích thước / phân loại</span><span>Khả dụng</span><span>Đang giữ</span><span>Tồn thực</span></div>{selected.variants.length ? selected.variants.map((variant) => <div className="inventory-variant-row" key={variant.id}><span>{variantLabel(variant) || "Tiêu chuẩn"}{variant.sku && <small>{variant.sku}</small>}</span><b>{money(variant.availableStock ?? variant.stock)}</b><b>{money(variant.reservedStock ?? 0)}</b><b>{money(variant.onHandStock ?? variant.stock)}</b></div>) : <div className="inventory-variant-row"><span>Tồn kho chung</span><b>{money(selected.availableStock ?? selected.stock)}</b><b>{money(selected.reservedStock ?? 0)}</b><b>{money(selected.onHandStock ?? selected.stock)}</b></div>}</section>
+      <aside className="inventory-detail-panel">{selected ? <><div className="inventory-detail-heading"><div><h2>Chi tiết tồn kho</h2><span className={`inventory-status ${statusOf(selected) === "Còn hàng" ? "ok" : statusOf(selected) === "Sắp hết" ? "low" : "out"}`}>{statusOf(selected)}</span></div><button className="inventory-refresh" title="Làm mới" onClick={() => void reload()}>↻</button></div><div className="inventory-detail-product">{selected.images?.[0]?.url ? <img src={selected.images[0].url} alt={selected.name}/> : <span className="inventory-product-placeholder">◇</span>}<div><strong>{selected.name}</strong><small>{selected.sku}</small><small>{productKindLabel(selected)} · {selected.category?.name || "Chưa phân loại"}</small>{stoneNameOf(selected) && <small>Loại đá: {stoneNameOf(selected)}</small>}</div></div><div className="inventory-detail-metrics"><div><small>Khả dụng</small><strong>{inventoryStockText(selected, selected.availableStock, selected.availableStockKg)}</strong></div><div><small>Đang giữ</small><strong>{inventoryStockText(selected, selected.reservedStock, selected.reservedStockKg)}</strong></div><div><small>Tồn thực</small><strong>{inventoryStockText(selected, selected.onHandStock, selected.onHandStockKg)}</strong></div><div><small>Đã bán (tháng)</small><strong>{selected.kind === "OTHER" ? "—" : money(selected.soldThisMonth)}</strong></div><div className="minimum-metric"><small>Tồn kho tối thiểu</small>{selected.kind === "OTHER" ? <strong>—</strong> : editingMinimum ? <div className="minimum-edit"><input type="number" min="0" value={minimumDraft} onChange={(event) => setMinimumDraft(event.target.value)}/><button disabled={saving} onClick={() => void saveMinimum()}>Lưu</button></div> : <strong>{money(selected.minimumStock)} <button className="minimum-pencil" title="Sửa mức tồn tối thiểu" onClick={() => { setMinimumDraft(String(selected.minimumStock)); setEditingMinimum(true); }}>✎</button></strong>}</div></div>
+        {isSphereStockProduct(selected) ? <section className="inventory-variants inventory-sphere-details"><div className="inventory-subheading"><h3>Phân cấp vật phẩm</h3><span>{selected.sphereItems?.length || 0} món</span></div><SphereInventoryBreakdown product={selected}/></section> : <section className="inventory-variants"><div className="inventory-subheading"><h3>Theo kích thước / phân loại</h3><span>{selected.variants.length || 1}</span></div><div className="inventory-variant-head"><span>Kích thước / phân loại</span><span>Khả dụng</span><span>Đang giữ</span><span>Tồn thực</span></div>{selected.variants.length ? selected.variants.map((variant) => <div className="inventory-variant-row" key={variant.id}><span>{variantLabel(variant) || "Tiêu chuẩn"}{variant.sku && <small>{variant.sku}</small>}</span><b>{money(variant.availableStock ?? variant.stock)}</b><b>{money(variant.reservedStock ?? 0)}</b><b>{money(variant.onHandStock ?? variant.stock)}</b></div>) : <div className="inventory-variant-row"><span>Tồn kho chung</span><b>{inventoryStockText(selected, selected.availableStock, selected.availableStockKg)}</b><b>{inventoryStockText(selected, selected.reservedStock, selected.reservedStockKg)}</b><b>{inventoryStockText(selected, selected.onHandStock, selected.onHandStockKg)}</b></div>}</section>}
         <div className="inventory-retire-action"><button className="button button-danger button-outline" type="button" onClick={() => { setDeleteTarget(selected); setDeleteReason(""); setDeleteConfirmation(""); }}>Xóa SKU khỏi hệ thống</button><small>Xóa cứng sản phẩm này và toàn bộ SKU biến thể; lịch sử phiếu vẫn được giữ.</small></div>
         <section className="inventory-recent"><div className="inventory-subheading"><h3>Lịch sử nhập/xuất gần đây</h3><button onClick={() => { setTab("history"); onNavigate("history"); }}>Xem tất cả →</button></div>{selectedMovements.length ? selectedMovements.map((movement) => <MovementLine key={movement.id} movement={movement}/>) : <p className="inventory-no-history">Chưa có giao dịch nhập hoặc xuất kho.</p>}</section>
         {summary.low + summary.empty > 0 && <div className="inventory-alert"><strong>⚠&nbsp; Cảnh báo tồn kho</strong><span>{summary.low + summary.empty} sản phẩm sắp hết hoặc đã hết hàng.</span><button onClick={() => { setStatusFilter("Sắp hết"); setPage(1); }}>Xem danh sách →</button></div>}
@@ -483,9 +536,9 @@ function MovementTable({ movements, empty }: { movements: Movement[]; empty: str
   return <div className="inventory-history-scroll"><table className="inventory-history-table"><thead><tr><th>Thời gian</th><th>Loại</th><th>Sản phẩm</th><th>SKU / Phiên bản</th><th>Số lượng</th><th>Tồn sau giao dịch</th><th>Tham chiếu / Ghi chú</th></tr></thead><tbody>{movements.length ? movements.map((movement) => { const action = movement.note?.startsWith("[RESET]") ? "Reset kho" : movement.note?.startsWith("[DELETE]") ? "Xóa SKU" : movement.type === "IN" ? "Nhập kho" : "Xuất kho"; return <tr key={movement.id}><td>{dateLabel(movement.createdAt)}</td><td><span className={`inventory-status ${movement.type === "IN" ? "ok" : "out"}`}>{action}</span></td><td>{movement.productName}</td><td>{movement.productSku}{movement.variantLabel && <small className="history-subline">{movement.variantLabel}</small>}</td><td className={movement.type === "IN" ? "movement-in" : "movement-out"}>{movement.type === "IN" ? "+" : "−"}{money(movement.quantity)}</td><td>{money(movement.stockAfter)}</td><td>{[movement.reference, movement.note?.replace(/^\[(RESET|DELETE)\]\s*/, "")].filter(Boolean).join(" · ") || "—"}</td></tr>; }) : <tr><td colSpan={7} className="inventory-empty">{empty}</td></tr>}</tbody></table></div>;
 }
 
-type IssueItem = { id: string; productId?: string | null; variantId?: string | null; productName: string; productSku: string; variantLabel?: string | null; categoryName?: string | null; stoneName?: string | null; kind: string; quantity: number; unitPrice: number | string; lineTotal: number | string };
+type IssueItem = { id: string; productId?: string | null; variantId?: string | null; sphereItemId?: string | null; productName: string; productSku: string; variantLabel?: string | null; categoryName?: string | null; stoneName?: string | null; kind: string; quantity: number; quantityKg?: number | string | null; unitPrice: number | string; lineTotal: number | string };
 type IssueRecord = { id: string; issueNo: string; issuedAt: string; reason: "ORDER" | "CUSTOMER" | "TRANSFER" | "OTHER"; recipient?: string | null; warehouseName: string; status: string; note?: string | null; totalQuantity: number; totalAmount: number | string; items: IssueItem[] };
-type IssueDraftLine = { key: string; productId: string; variantId: string; quantity: number };
+type IssueDraftLine = { key: string; productId: string; variantId: string; sphereItemId: string; quantity: number };
 const issueReasonLabels: Record<IssueRecord["reason"], string> = { ORDER: "Đơn hàng", CUSTOMER: "Khách lẻ", TRANSFER: "Xuất chuyển kho", OTHER: "Khác" };
 const localDateValue = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const issueLineStock = (product: InventoryProduct, variantId: string) => variantId ? product.variants.find((variant) => variant.id === variantId)?.stock || 0 : product.stock;
@@ -509,7 +562,7 @@ function OutboundIssuePage({ products, onCancel, onComplete, onNotify }: {
   const [recipient, setRecipient] = useState("");
   const [warehouseName, setWarehouseName] = useState("Kho chính");
   const [note, setNote] = useState("");
-  const [lines, setLines] = useState<IssueDraftLine[]>([{ key: crypto.randomUUID(), productId: "", variantId: "", quantity: 1 }]);
+  const [lines, setLines] = useState<IssueDraftLine[]>([{ key: crypto.randomUUID(), productId: "", variantId: "", sphereItemId: "", quantity: 1 }]);
   const [saving, setSaving] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -538,22 +591,30 @@ function OutboundIssuePage({ products, onCancel, onComplete, onNotify }: {
   const totalAmount = issues.reduce((sum, issue) => sum + Number(issue.totalAmount || 0), 0);
   const reasonCounts = (["ORDER", "CUSTOMER", "TRANSFER", "OTHER"] as IssueRecord["reason"][]).map((key) => ({ key, label: issueReasonLabels[key], count: issues.filter((issue) => issue.reason === key).length }));
   const reasonTotal = Math.max(issues.length, 1);
-  const availableProducts = products.filter((product) => product.variants.length
-    ? product.variants.some((variant) => variant.stock > 0)
-    : product.stock > 0);
+  const availableProducts = products.filter((product) => isSphereStockProduct(product)
+    ? product.stock > 0 && stockKgOf(product) > 0 && (product.sphereItems || []).some((item) => item.status === "AVAILABLE" || !item.status)
+    : product.variants.length
+      ? product.variants.some((variant) => variant.stock > 0)
+      : product.stock > 0);
   const selectedLineData = (line: IssueDraftLine) => {
     const product = products.find((entry) => entry.id === line.productId);
     const variant = product?.variants.find((entry) => entry.id === line.variantId);
-    const unitPrice = product ? issueLinePrice(product, line.variantId) : 0;
+    const sphereItem = isSphereStockProduct(product || {} as InventoryProduct)
+      ? product?.sphereItems?.find((entry) => entry.id === line.sphereItemId && (entry.status === "AVAILABLE" || !entry.status))
+      : undefined;
+    const unitPrice = sphereItem ? Number(sphereItem.price) || 0 : product ? issueLinePrice(product, line.variantId) : 0;
     const quantity = Number(line.quantity) || 0;
-    return { product, variant, unitPrice, quantity, amount: unitPrice * quantity, stock: product ? issueLineStock(product, line.variantId) : 0 };
+    const stock = isSphereStockProduct(product || {} as InventoryProduct) ? sphereItem ? 1 : 0 : product ? issueLineStock(product, line.variantId) : 0;
+    return { product, variant, sphereItem, unitPrice, quantity, amount: unitPrice * quantity, stock };
   };
   const draftQuantity = lines.reduce((sum, line) => sum + (Number(line.quantity) || 0), 0);
   const draftAmount = lines.reduce((sum, line) => sum + selectedLineData(line).amount, 0);
   const draftIsValid = lines.length > 0 && lines.every((line) => {
     const selected = selectedLineData(line);
-    return !!selected.product && selected.quantity > 0 && selected.quantity <= selected.stock && (!selected.product.variants.length || !!selected.variant);
-  }) && new Set(lines.map((line) => `${line.productId}:${line.variantId}`)).size === lines.length;
+    const physical = selected.product ? isSphereStockProduct(selected.product) : false;
+    return !!selected.product && selected.quantity > 0 && selected.quantity <= selected.stock
+      && (physical ? selected.quantity === 1 && !!selected.sphereItem : !selected.product.variants.length || !!selected.variant);
+  }) && new Set(lines.map((line) => `${line.productId}:${line.variantId || line.sphereItemId}`)).size === lines.length;
 
   const exportReport = () => {
     const quote = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
@@ -569,10 +630,10 @@ function OutboundIssuePage({ products, onCancel, onComplete, onNotify }: {
     if (!draftIsValid || saving) return;
     setSaving(true);
     try {
-      const saved = await request<IssueRecord>("inventory/issues", { method: "POST", body: JSON.stringify({ issuedAt, reason, recipient, warehouseName, note, items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId || undefined, quantity: Number(line.quantity) })) }) });
+      const saved = await request<IssueRecord>("inventory/issues", { method: "POST", body: JSON.stringify({ issuedAt, reason, recipient, warehouseName, note, items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId || undefined, sphereItemId: line.sphereItemId || undefined, quantity: Number(line.quantity) })) }) });
       onNotify(`Đã lưu phiếu xuất ${saved.issueNo}, ${money(saved.totalQuantity)} sản phẩm vào database.`);
       setCreating(false);
-      setLines([{ key: crypto.randomUUID(), productId: "", variantId: "", quantity: 1 }]);
+      setLines([{ key: crypto.randomUUID(), productId: "", variantId: "", sphereItemId: "", quantity: 1 }]);
       setNote("");
       setReloadKey((value) => value + 1);
       await onComplete();
@@ -585,9 +646,10 @@ function OutboundIssuePage({ products, onCancel, onComplete, onNotify }: {
     <form id="outbound-issue-form" className="outbound-create-grid" onSubmit={(event) => void createIssue(event)}>
       <main className="outbound-create-main">
         <section className="outbound-card"><h3>Thông tin phiếu xuất</h3><div className="outbound-fields"><label>Ngày xuất <b>*</b><input required type="date" value={issuedAt} onChange={(event) => setIssuedAt(event.target.value)}/></label><label>Lý do xuất kho <b>*</b><select value={reason} onChange={(event) => setReason(event.target.value as IssueRecord["reason"])}><option value="ORDER">Đơn hàng</option><option value="CUSTOMER">Khách lẻ</option><option value="TRANSFER">Xuất chuyển kho</option><option value="OTHER">Khác</option></select></label><label>Khách hàng / mã đơn<input value={recipient} onChange={(event) => setRecipient(event.target.value)} maxLength={180} placeholder="Ví dụ: Nguyễn Thị Lan · SO-20261003"/></label><label>Kho xuất<select value={warehouseName} onChange={(event) => setWarehouseName(event.target.value)}><option>Kho chính</option></select></label></div><label className="outbound-note">Ghi chú<textarea rows={3} maxLength={4000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Thông tin bổ sung cho phiếu xuất"/></label></section>
-        <section className="outbound-card outbound-lines-card"><div className="outbound-card-heading"><div><h3>Danh sách sản phẩm xuất</h3><p>Chỉ chọn sản phẩm và phiên bản còn tồn trong kho.</p></div><button type="button" className="button button-quiet" onClick={() => setLines((current) => [...current, { key: crypto.randomUUID(), productId: "", variantId: "", quantity: 1 }])}>＋ Thêm sản phẩm</button></div><div className="outbound-lines-scroll"><table className="outbound-lines-table"><thead><tr><th>#</th><th>Sản phẩm</th><th>SKU / Phiên bản</th><th>Tồn</th><th>Số lượng</th><th>Đơn giá</th><th>Thành tiền</th><th></th></tr></thead><tbody>{lines.map((line, index) => {
+        <section className="outbound-card outbound-lines-card"><div className="outbound-card-heading"><div><h3>Danh sách sản phẩm xuất</h3><p>Với Vật Phẩm tính theo kg, hãy chọn đúng từng món để trừ đồng thời một món và đúng số kg.</p></div><button type="button" className="button button-quiet" onClick={() => setLines((current) => [...current, { key: crypto.randomUUID(), productId: "", variantId: "", sphereItemId: "", quantity: 1 }])}>＋ Thêm sản phẩm</button></div><div className="outbound-lines-scroll"><table className="outbound-lines-table"><thead><tr><th>#</th><th>Sản phẩm</th><th>SKU / Món</th><th>Tồn</th><th>Số lượng</th><th>Đơn giá</th><th>Thành tiền</th><th></th></tr></thead><tbody>{lines.map((line, index) => {
           const selected = selectedLineData(line);
-          return <tr key={line.key}><td>{index + 1}</td><td><select aria-label={`Sản phẩm dòng ${index + 1}`} required value={line.productId} onChange={(event) => { const product = products.find((entry) => entry.id === event.target.value); const variant = product?.variants.find((entry) => entry.stock > 0); setLines((current) => current.map((entry) => entry.key === line.key ? { ...entry, productId: product?.id || "", variantId: variant?.id || "" } : entry)); }}><option value="">Chọn sản phẩm</option>{availableProducts.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></td><td>{selected.product?.variants.length ? <select aria-label={`Phiên bản dòng ${index + 1}`} required value={line.variantId} onChange={(event) => setLines((current) => current.map((entry) => entry.key === line.key ? { ...entry, variantId: event.target.value } : entry))}><option value="">Chọn mã phiên bản</option>{selected.product.variants.filter((variant) => variant.stock > 0).map((variant) => <option key={variant.id} value={variant.id}>{variant.sku || variantLabel(variant)} · tồn {variant.stock}</option>)}</select> : <span>{selected.product?.sku || "—"}</span>}</td><td>{selected.product ? money(selected.stock) : "—"}</td><td><input aria-label={`Số lượng dòng ${index + 1}`} type="number" min="1" max={Math.max(1, selected.stock)} value={line.quantity} onChange={(event) => setLines((current) => current.map((entry) => entry.key === line.key ? { ...entry, quantity: Number(event.target.value) } : entry))}/></td><td>{money(selected.unitPrice)} ₫</td><td>{money(selected.amount)} ₫</td><td><button type="button" className="outbound-remove-line" aria-label={`Xóa dòng ${index + 1}`} onClick={() => setLines((current) => current.length === 1 ? [{ ...current[0], productId: "", variantId: "", quantity: 1 }] : current.filter((entry) => entry.key !== line.key))}>×</button></td></tr>;
+          const physical = selected.product ? isSphereStockProduct(selected.product) : false;
+          return <tr key={line.key}><td>{index + 1}</td><td><select aria-label={`Sản phẩm dòng ${index + 1}`} required value={line.productId} onChange={(event) => { const product = products.find((entry) => entry.id === event.target.value); const variant = product?.variants.find((entry) => entry.stock > 0); const sphereItem = product?.sphereItems?.find((entry) => entry.status === "AVAILABLE" || !entry.status); setLines((current) => current.map((entry) => entry.key === line.key ? { ...entry, productId: product?.id || "", variantId: variant?.id || "", sphereItemId: isSphereStockProduct(product || {} as InventoryProduct) ? sphereItem?.id || "" : "" } : entry)); }}><option value="">Chọn sản phẩm</option>{availableProducts.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></td><td>{physical ? <select aria-label={`Món vật phẩm dòng ${index + 1}`} required value={line.sphereItemId} onChange={(event) => setLines((current) => current.map((entry) => entry.key === line.key ? { ...entry, sphereItemId: event.target.value, quantity: 1 } : entry))}><option value="">Chọn món theo kg</option>{selected.product?.sphereItems?.filter((item) => item.status === "AVAILABLE" || !item.status).map((item, itemIndex) => <option key={item.id} value={item.id}>{item.label || `Món ${itemIndex + 1}`} · {kg(item.weightKg)} kg · {money(Number(item.price) || 0)} ₫</option>)}</select> : selected.product?.variants.length ? <select aria-label={`Phiên bản dòng ${index + 1}`} required value={line.variantId} onChange={(event) => setLines((current) => current.map((entry) => entry.key === line.key ? { ...entry, variantId: event.target.value } : entry))}><option value="">Chọn mã phiên bản</option>{selected.product.variants.filter((variant) => variant.stock > 0).map((variant) => <option key={variant.id} value={variant.id}>{variant.sku || variantLabel(variant)} · tồn {variant.stock}</option>)}</select> : <span>{selected.product?.sku || "—"}</span>}</td><td>{selected.product ? money(selected.stock) : "—"}</td><td><input aria-label={`Số lượng dòng ${index + 1}`} type="number" min="1" max={Math.max(1, selected.stock)} value={line.quantity} disabled={physical} onChange={(event) => setLines((current) => current.map((entry) => entry.key === line.key ? { ...entry, quantity: Number(event.target.value) } : entry))}/>{physical && selected.sphereItem && <small>{kg(selected.sphereItem.weightKg)} kg</small>}</td><td>{money(selected.unitPrice)} ₫</td><td>{money(selected.amount)} ₫</td><td><button type="button" className="outbound-remove-line" aria-label={`Xóa dòng ${index + 1}`} onClick={() => setLines((current) => current.length === 1 ? [{ ...current[0], productId: "", variantId: "", sphereItemId: "", quantity: 1 }] : current.filter((entry) => entry.key !== line.key))}>×</button></td></tr>;
         })}</tbody></table></div></section>
       </main>
       <aside className="outbound-create-aside"><section className="outbound-card"><h3>Tóm tắt phiếu xuất</h3><div><span>Tổng số mặt hàng</span><b>{lines.filter((line) => line.productId).length}</b></div><div><span>Tổng số lượng</span><b>{money(draftQuantity)}</b></div><div className="outbound-total"><span>Tổng giá trị</span><b>{money(draftAmount)} ₫</b></div><small>Giá trị tính theo giá bán hiện tại của từng mặt hàng.</small></section><section className="outbound-card"><h3>Kiểm tra tồn kho</h3><p>Phiếu chỉ được lưu khi số lượng xuất không vượt tồn hiện có. Tồn kho và lịch sử xuất được cập nhật cùng lúc.</p></section></aside>
@@ -612,7 +674,10 @@ function OutboundIssuePage({ products, onCancel, onComplete, onNotify }: {
 
 type SkuRule = { categoryId: string; prefix: string; skuFormat?: "SEQUENTIAL" | "BANGLE_SHAPE_QUALITY_SIZE"; materialOptionIds?: string[]; materialPrefixes: Array<{ materialOptionId: string; prefix: string }> };
 type ReceiptVariantDraft = { shape?: string; quality: string; beadSize: string; carat?: string; gemstoneQuality?: string; cutCategoryId?: string; quantity: number; unitCost: number; skuSuffix: string; sku?: string };
-type ReceiptLine = { key: string; productId?: string; variantId?: string; quantity: number; unitCost: number | null; newProduct?: { name: string; categoryId: string; kind?: "JEWELRY" | "GEMSTONE"; gemstoneTypeId?: string; materialOptionId?: string; skuSequence?: string; bangleShape?: string; bangleQuality?: string; bangleSizeMm?: string; sku: string; legacySku?: string; allowLegacySku?: boolean; standalonePremiumGemstone?: boolean; isPremiumGemstone?: boolean; price?: number | null; lengthCm?: number | null; widthCm?: number | null; variants?: ReceiptVariantDraft[] } };
+type ReceiptSphereItem = { key: string; weightKg: number | null };
+type SphereHierarchy = { groupName: string; typeName: string; quality: string };
+type SphereCatalogGroup = { id: string; name: string; stoneTypes: Array<{ id: string; name: string }> };
+type ReceiptLine = { key: string; productId?: string; variantId?: string; quantity: number; quantityKg?: number | null; sphereItems?: ReceiptSphereItem[]; sphereHierarchy?: SphereHierarchy; unitCost: number | null; newProduct?: { name: string; categoryId: string; kind?: "JEWELRY" | "GEMSTONE"; gemstoneTypeId?: string; materialOptionId?: string; skuSequence?: string; bangleShape?: string; bangleQuality?: string; bangleSizeMm?: string; sku: string; legacySku?: string; allowLegacySku?: boolean; standalonePremiumGemstone?: boolean; isPremiumGemstone?: boolean; price?: number | null; lengthCm?: number | null; widthCm?: number | null; variants?: ReceiptVariantDraft[] } };
 type ReceiptDocument = { name: string; url: string; mimeType: string };
 type ReceiptRecord = { receiptNo: string; supplierName?: string | null };
 type NewProductVariantMode = "SIZE" | "QUALITY" | "QUALITY_AND_BEAD_SIZE" | "BANGLE_SHAPE_QUALITY_SIZE" | "GEMSTONE_SIZE" | "GEMSTONE_CARAT" | "GEMSTONE_CARAT_AND_QUALITY" | null;
@@ -720,6 +785,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const [addingRuleMaterial, setAddingRuleMaterial] = useState(false);
   const [savingRuleMaterial, setSavingRuleMaterial] = useState(false);
   const [ruleMaterialName, setRuleMaterialName] = useState("");
+  const [sphereCatalog, setSphereCatalog] = useState<SphereCatalogGroup[]>([]);
   const [newProductModal, setNewProductModal] = useState(false);
   const [newProductKind, setNewProductKind] = useState<"Trang sức" | "Đá quý">("Trang sức");
   const [newProductCategoryId, setNewProductCategoryId] = useState("");
@@ -789,14 +855,53 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
       return `${prefix ? `${prefix} ` : ""}(${materialName})`;
     }).join(" · "),
   }));
-  const totalQuantity = lines.reduce((total, line) => total + (line.newProduct?.variants?.length ? line.newProduct.variants.reduce((sum, variant) => sum + variant.quantity, 0) : Number(line.quantity) || 0), 0);
-  const subtotalAmount = lines.reduce((total, line) => total + (line.newProduct?.variants?.length ? line.newProduct.variants.reduce((sum, variant) => sum + variant.quantity * variant.unitCost, 0) : line.unitCost == null ? 0 : (Number(line.quantity) || 0) * line.unitCost), 0);
+  const productForReceiptLine = (line: ReceiptLine) => products.find((product) => product.id === line.productId);
+  const isWeightReceiptLine = (line: ReceiptLine) => productForReceiptLine(line)?.kind === "OTHER";
+  const isSphereReceiptProduct = (product?: InventoryProduct) => {
+    if (!product) return false;
+    if (product.sphereStoneType || product.sphereQuality || product.sphereItems?.length) return true;
+    const normalized = `${product.name} ${product.category?.name || ""}`
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[đĐ]/g, "d")
+      .toLocaleLowerCase("vi");
+    return /^(?:CAU|TRU)(?:[-\s]|$)/.test(product.sku.trim().toLocaleUpperCase("en")) || normalized.includes("qua cau") || /^tru(?:\s|$)/.test(normalized) || product.category?.name.trim().toLocaleLowerCase("vi") === "trụ";
+  };
+  const isSphereReceiptLine = (line: ReceiptLine) => isWeightReceiptLine(line) && isSphereReceiptProduct(productForReceiptLine(line));
+  const sphereWeightTotal = (line: ReceiptLine) => Math.round((line.sphereItems || []).reduce((sum, sphere) => sum + (Number(sphere.weightKg) || 0), 0) * 1000) / 1000;
+  const sphereHierarchyForProduct = (product?: InventoryProduct): SphereHierarchy => ({
+    groupName: product?.sphereStoneType?.group?.name || "",
+    typeName: product?.sphereStoneType?.name || "",
+    quality: product?.sphereQuality || "",
+  });
+  const sphereHierarchyComplete = (line: ReceiptLine) => Boolean(
+    line.sphereHierarchy?.groupName.trim()
+    && line.sphereHierarchy?.typeName.trim()
+    && line.sphereHierarchy?.quality.trim(),
+  );
+  const sphereWeightsMatch = (line: ReceiptLine) => {
+    const spheres = line.sphereItems || [];
+    const declaredKg = Number(line.quantityKg);
+    return spheres.length > 0
+      && Number.isFinite(declaredKg)
+      && declaredKg > 0
+      && spheres.every((sphere) => Number.isFinite(Number(sphere.weightKg)) && Number(sphere.weightKg) > 0 && Math.abs(Math.round(Number(sphere.weightKg) * 1000) - Number(sphere.weightKg) * 1000) < 1e-8)
+      && sphereWeightTotal(line) === Math.round(declaredKg * 1000) / 1000;
+  };
+  const receiptLineAmount = (line: ReceiptLine) => line.newProduct?.variants?.length
+    ? line.newProduct.variants.reduce((sum, variant) => sum + variant.quantity * variant.unitCost, 0)
+    : line.unitCost == null ? 0 : (isWeightReceiptLine(line) ? Number(line.quantityKg) || 0 : Number(line.quantity) || 0) * line.unitCost;
+  const totalQuantity = lines.reduce((total, line) => total + (line.newProduct?.variants?.length ? line.newProduct.variants.reduce((sum, variant) => sum + variant.quantity, 0) : isWeightReceiptLine(line) ? 0 : Number(line.quantity) || 0), 0);
+  const totalQuantityKg = lines.reduce((total, line) => total + (isWeightReceiptLine(line) ? Number(line.quantityKg) || 0 : 0), 0);
+  const subtotalAmount = lines.reduce((total, line) => total + receiptLineAmount(line), 0);
   const discountRate = Math.min(100, Math.max(0, Number(discountPercent) || 0));
   const vatRate = Math.min(100, Math.max(0, Number(vatPercent) || 0));
   const discountAmount = Math.round(subtotalAmount * discountRate / 100);
   const vatAmount = Math.round((subtotalAmount - discountAmount) * vatRate / 100);
   const totalAmount = subtotalAmount - discountAmount + vatAmount;
-  const completeLines = lines.filter((line) => (line.productId || line.newProduct) && line.quantity > 0);
+  const completeLines = lines.filter((line) => (line.productId || line.newProduct)
+    && (isWeightReceiptLine(line) ? Number(line.quantityKg) > 0 : line.quantity > 0)
+    && (!isSphereReceiptLine(line) || (sphereHierarchyComplete(line) && sphereWeightsMatch(line))));
   const suppliers = [...new Set(supplierOptions.filter(Boolean))];
 
   useEffect(() => { setCategoryOptions(categories); }, [categories]);
@@ -810,11 +915,13 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
     void Promise.all([
       request<{ rules: SkuRule[] }>("inventory/sku-rules"),
       request<ReceiptRecord[]>("inventory/receipts?limit=200"),
-    ]).then(([ruleData, receiptData]) => {
+      request<SphereCatalogGroup[]>("inventory/spheres/catalog"),
+    ]).then(([ruleData, receiptData, hierarchyData]) => {
       if (!alive) return;
       const loadedRules = ruleData.rules || [];
       setSkuRules(loadedRules);
       setSupplierOptions([...new Set(receiptData.map((receipt) => receipt.supplierName || "").filter(Boolean))]);
+      setSphereCatalog(hierarchyData || []);
     }).catch((cause) => onNotify(cause instanceof Error ? cause.message : "Không tải được thông tin phiếu nhập."));
     return () => { alive = false; };
   }, []);
@@ -866,8 +973,33 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const updateLine = (key: string, update: Partial<ReceiptLine>) => setLines((current) => current.map((line) => line.key === key ? { ...line, ...update } : line));
   const addEmptyLine = () => setLines((current) => [...current, { key: crypto.randomUUID(), quantity: 1, unitCost: 0 }]);
   const addExistingProductLine = (product: InventoryProduct, variant?: Variant) => {
-    setLines((current) => [...current, { key: crypto.randomUUID(), productId: product.id, variantId: variant?.id, quantity: 1, unitCost: 0 }]);
+    const isSphere = isSphereReceiptProduct(product);
+    setLines((current) => [...current, {
+      key: crypto.randomUUID(),
+      productId: product.id,
+      variantId: variant?.id,
+      quantity: product.kind === "OTHER" ? 0 : 1,
+      quantityKg: product.kind === "OTHER" ? null : undefined,
+      sphereItems: isSphere ? [] : undefined,
+      sphereHierarchy: isSphere ? sphereHierarchyForProduct(product) : undefined,
+      unitCost: 0,
+    }]);
     setExistingProductPickerOpen(false);
+  };
+  const addSphereItem = (lineKey: string) => {
+    setLines((current) => current.map((line) => line.key === lineKey
+      ? { ...line, sphereItems: [...(line.sphereItems || []), { key: crypto.randomUUID(), weightKg: null }] }
+      : line));
+  };
+  const updateSphereItemWeight = (lineKey: string, sphereKey: string, weightKg: number | null) => {
+    setLines((current) => current.map((line) => line.key === lineKey
+      ? { ...line, sphereItems: (line.sphereItems || []).map((sphere) => sphere.key === sphereKey ? { ...sphere, weightKg } : sphere) }
+      : line));
+  };
+  const removeSphereItem = (lineKey: string, sphereKey: string) => {
+    setLines((current) => current.map((line) => line.key === lineKey
+      ? { ...line, sphereItems: (line.sphereItems || []).filter((sphere) => sphere.key !== sphereKey) }
+      : line));
   };
   const createInventoryCategory = async () => {
     const name = newCategoryName.trim();
@@ -884,7 +1016,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
       const toAdminCategory = (record: Record<string, any>): AdminCategory => ({
         id: String(record.id), name: String(record.name), slug: String(record.slug || ""), products: 0,
         status: record.status === "INACTIVE" ? "Đã ẩn" : "Hoạt động", kind: record.kind === "GEMSTONE" ? "Đá quý" : "Trang sức",
-        usage: record.usage === "GEMSTONE_TYPE" ? "stone" : "product", level: Number(record.level || 2) as 1 | 2 | 3,
+        usage: record.usage === "GEMSTONE_TYPE" ? "stone" : "product", level: Number(record.level || 2),
         parentId: record.parentId || undefined, pricingMode: record.pricingMode || "FIXED", sortOrder: String(record.sortOrder ?? 0),
       });
       if (newCategoryLevel === 2 && !parentCategory) {
@@ -1111,12 +1243,37 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const saveReceipt = async () => {
     if (receiptSubmitLock.current || saving || documentBusy) return;
     if (!supplierName.trim()) { onNotify("Chọn hoặc nhập nhà cung cấp trước khi lưu phiếu."); return; }
+    const incompleteSphereHierarchy = lines.find((line) => isSphereReceiptLine(line) && !sphereHierarchyComplete(line));
+    if (incompleteSphereHierarchy) {
+      const product = productForReceiptLine(incompleteSphereHierarchy);
+      onNotify(`${product?.sku || "SKU vật phẩm"}: chọn đủ Nhóm đá → Loại đá → Chất lượng trước khi nhập từng món.`);
+      return;
+    }
+    const invalidSphere = lines.find((line) => isSphereReceiptLine(line) && !sphereWeightsMatch(line));
+    if (invalidSphere) {
+      const product = productForReceiptLine(invalidSphere);
+      onNotify(`${product?.sku || "SKU vật phẩm"}: tổng kg của từng món (${kg(sphereWeightTotal(invalidSphere))} kg) phải đúng bằng tổng kg SKU (${kg(invalidSphere.quantityKg)} kg). Hãy thêm hoặc chỉnh lại từng món.`);
+      return;
+    }
     if (!lines.length || completeLines.length !== lines.length) { onNotify("Mỗi dòng cần chọn sản phẩm và có số lượng hợp lệ."); return; }
     if (lines.some((line) => { const product = products.find((item) => item.id === line.productId); return Boolean(product?.variants.length && !line.variantId); })) { onNotify("Chọn đúng biến thể tồn kho cho từng dòng sản phẩm có phân loại."); return; }
     receiptSubmitLock.current = true;
     setSaving(true);
     try {
-      const saved = await request<{ receiptNo: string; pos365SyncStatus?: string | null; pos365SyncError?: string | null }>("inventory/receipts", { method: "POST", body: JSON.stringify({ receivedAt, supplierName, receiver, warehouseName, paymentMethod, discountPercent: discountRate, vatPercent: vatRate, note, additionalNote, documentUrls: documents.map((document) => document.url), items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId, quantity: Number(line.quantity), unitCost: line.unitCost, newProduct: line.newProduct })) }) });
+      const saved = await request<{ receiptNo: string; pos365SyncStatus?: string | null; pos365SyncError?: string | null }>("inventory/receipts", { method: "POST", body: JSON.stringify({ receivedAt, supplierName, receiver, warehouseName, paymentMethod, discountPercent: discountRate, vatPercent: vatRate, note, additionalNote, documentUrls: documents.map((document) => document.url), items: lines.map((line) => ({
+        productId: line.productId,
+        variantId: line.variantId,
+        quantity: Number(line.quantity),
+        ...(isWeightReceiptLine(line) ? { quantityKg: Number(line.quantityKg) } : {}),
+        ...(isSphereReceiptLine(line) ? {
+          sphereStoneGroupName: line.sphereHierarchy?.groupName.trim(),
+          sphereStoneTypeName: line.sphereHierarchy?.typeName.trim(),
+          sphereQuality: line.sphereHierarchy?.quality.trim(),
+          sphereItems: (line.sphereItems || []).map((sphere) => ({ weightKg: Number(sphere.weightKg) })),
+        } : {}),
+        unitCost: line.unitCost,
+        newProduct: line.newProduct,
+      })) }) });
       const posMessage = saved.pos365SyncStatus === "SYNCED" ? " POS365 đã nhận phiếu." : saved.pos365SyncStatus ? " Phiếu đang chờ POS365; hệ thống sẽ tự thử lại." : " POS365 chưa bật đồng bộ.";
       onNotify(`Đã lưu phiếu nhập ${saved.receiptNo} vào GEME.${posMessage}${saved.pos365SyncError ? ` ${saved.pos365SyncError}` : ""}`);
       await onComplete();
@@ -1127,9 +1284,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
   const categoryLabel = (category: AdminCategory) => categoryPath(category, categoryOptions);
   const categoryForProduct = (product: InventoryProduct) => product.category?.name || "Chưa phân loại";
   const materialForProduct = (product: InventoryProduct) => stoneNameOf(product) || "—";
-  const amountForLine = (line: ReceiptLine) => line.newProduct?.variants?.length
-    ? line.newProduct.variants.reduce((sum, variant) => sum + variant.quantity * variant.unitCost, 0)
-    : line.unitCost == null ? 0 : (Number(line.quantity) || 0) * line.unitCost;
+  const amountForLine = receiptLineAmount;
 
   const importReceiptCsv = async (file: File) => {
     if (lines.length) throw new Error("Phiếu đã có dòng hàng. Hãy lưu hoặc xóa các dòng hiện tại trước khi nhập CSV Emerald.");
@@ -1168,7 +1323,7 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
         parentId: emeraldRoot.id, pricingMode: "GEMSTONE_CARAT", status: "ACTIVE",
         sortOrder: categoryOptions.filter((category) => category.parentId === emeraldRoot.id).reduce((max, category) => Math.max(max, Number(category.sortOrder) || 0), 0) + 1,
       }) });
-      emerald = { id: String(record.id), name: String(record.name), slug: String(record.slug || "emerald"), products: 0, status: record.status === "INACTIVE" ? "Đã ẩn" : "Hoạt động", kind: "Đá quý", usage: record.usage === "GEMSTONE_TYPE" ? "stone" : "product", level: Number(record.level || 2) as 1 | 2 | 3, parentId: String(record.parentId || emeraldRoot.id), pricingMode: record.pricingMode || "GEMSTONE_CARAT", sortOrder: String(record.sortOrder ?? 0) };
+      emerald = { id: String(record.id), name: String(record.name), slug: String(record.slug || "emerald"), products: 0, status: record.status === "INACTIVE" ? "Đã ẩn" : "Hoạt động", kind: "Đá quý", usage: record.usage === "GEMSTONE_TYPE" ? "stone" : "product", level: Number(record.level || 2), parentId: String(record.parentId || emeraldRoot.id), pricingMode: record.pricingMode || "GEMSTONE_CARAT", sortOrder: String(record.sortOrder ?? 0) };
       setCategoryOptions((current) => current.some((item) => item.id === emerald!.id) ? current : [...current, emerald!]);
       onCategoryCreated(emerald);
     } else if (emerald.usage !== "stone" || emerald.parentId !== emeraldRoot.id || emerald.pricingMode !== "GEMSTONE_CARAT") {
@@ -1234,21 +1389,57 @@ function InboundReceiptPage({ products, categories, materials, onCategoryCreated
             const file = event.target.files?.[0]; event.currentTarget.value = ""; if (!file) return;
             void importReceiptCsv(file).catch((cause) => onNotify(cause instanceof Error ? cause.message : "Không thể đọc file CSV."));
           }}/></label></div></div>
-          <div className="receipt-table-wrap"><table className="receipt-table"><thead><tr><th>#</th><th>Sản phẩm</th><th>Mã SKU</th><th>Phân loại</th><th>Số lượng *</th><th>Đơn giá nhập *</th><th>Thành tiền</th><th></th></tr></thead><tbody>{lines.length ? lines.map((line, index) => {
+          <div className="receipt-table-wrap"><table className="receipt-table"><thead><tr><th>#</th><th>Sản phẩm</th><th>Mã SKU</th><th>Phân loại</th><th>Số lượng / kg *</th><th>Đơn giá nhập *</th><th>Thành tiền</th><th></th></tr></thead><tbody>{lines.length ? lines.map((line, index) => {
             const product = products.find((item) => item.id === line.productId);
             const variant = product?.variants.find((item) => item.id === line.variantId);
             const productName = line.newProduct?.name || product?.name || "";
             const productSku = variant?.sku || product?.sku || line.newProduct?.sku || "—";
             const classification = line.newProduct ? `${categoryOptions.find((item) => item.id === line.newProduct?.categoryId)?.name || "—"} · ${line.newProduct.materialOptionId ? materialOptions.find((material) => material.id === line.newProduct?.materialOptionId)?.name || "Loại đá" : "—"}` : product ? `${categoryForProduct(product)} · ${materialForProduct(product)}` : "—";
             const newVariants = line.newProduct?.variants || [];
-            return <tr key={line.key}><td>{index + 1}</td><td>{line.newProduct ? <span className="receipt-new-item"><strong>{productName}</strong><small>{line.newProduct.standalonePremiumGemstone ? `SKU đã đối chiếu · ${line.newProduct.lengthCm} × ${line.newProduct.widthCm} cm` : "Mã do người nhập chọn"}</small>{newVariants.length > 0 && <details className="receipt-variant-summary"><summary>{newVariants.length} biến thể · xem số lượng và SKU</summary>{newVariants.map((item) => <span key={`${item.quality}:${item.beadSize}`}><b>{[item.quality !== "Kích thước" ? item.quality : "", item.beadSize].filter(Boolean).join(" · ")}</b><small>{money(item.quantity)} cái · SKU {item.sku || "Mã sẽ được tạo khi lưu"} · Đơn giá nhập {money(item.unitCost)} ₫/cái</small></span>)}</details>}</span> : <ReceiptProductPicker products={products} selectedProduct={product} selectedVariant={variant} label={`Tìm sản phẩm hoặc SKU cho dòng ${index + 1}`} onSelect={(selected, selectedVariant) => updateLine(line.key, { productId: selected.id, variantId: selectedVariant?.id || selected.variants[0]?.id })}/>}</td><td><strong className="receipt-sku">{productSku}</strong></td><td>{classification}{product?.variants.length ? <select aria-label={`Phiên bản dòng ${index + 1}`} value={line.variantId || ""} onChange={(event) => updateLine(line.key, { variantId: event.target.value || undefined })}><option value="">Chọn biến thể</option>{product.variants.map((item) => <option key={item.id} value={item.id}>{variantLabel(item)} · {item.sku || "Không có mã riêng"}</option>)}</select> : null}{newVariants.length > 0 && <small className="receipt-variant-kind">{line.newProduct?.variants?.length} biến thể</small>}</td><td>{newVariants.length > 0 ? money(line.quantity) : <input type="number" min="1" max="100000" value={line.quantity} onChange={(event) => updateLine(line.key, { quantity: Number(event.target.value) })}/>}</td><td>{newVariants.length > 0 ? <small>Theo từng biến thể</small> : <input type="text" inputMode="numeric" pattern="[0-9]*" aria-label={`Đơn giá nhập dòng ${index + 1}; để trống nếu chưa có dữ liệu`} value={line.unitCost ?? ""} onFocus={(event) => event.currentTarget.select()} onChange={(event) => { const raw = event.target.value.replace(/\D/g, ""); updateLine(line.key, { unitCost: raw ? Number(raw) : null }); }}/>}</td><td>{line.unitCost == null ? <small>Chưa có giá</small> : money(amountForLine(line))}</td><td><button className="receipt-remove-line" aria-label={`Xóa dòng ${index + 1}`} onClick={() => setLines((current) => current.filter((item) => item.key !== line.key))}>×</button></td></tr>;
+            const isWeight = isWeightReceiptLine(line);
+            const isSphere = isSphereReceiptLine(line);
+            const sphereItems = line.sphereItems || [];
+            const sphereTotal = sphereWeightTotal(line);
+            const sphereMatches = sphereWeightsMatch(line);
+            const selectedSphereGroup = sphereCatalog.find((group) => group.name.localeCompare(line.sphereHierarchy?.groupName || "", "vi", { sensitivity: "accent" }) === 0);
+            const sphereTypeOptions = selectedSphereGroup?.stoneTypes || [];
+            const sphereHierarchyLocked = Boolean(product?.sphereStoneType && product?.sphereQuality);
+            return <Fragment key={line.key}>
+              <tr>
+                <td>{index + 1}</td>
+                <td>{line.newProduct ? <span className="receipt-new-item"><strong>{productName}</strong><small>{line.newProduct.standalonePremiumGemstone ? `SKU đã đối chiếu · ${line.newProduct.lengthCm} × ${line.newProduct.widthCm} cm` : "Mã do người nhập chọn"}</small>{newVariants.length > 0 && <details className="receipt-variant-summary"><summary>{newVariants.length} biến thể · xem số lượng và SKU</summary>{newVariants.map((item) => <span key={`${item.quality}:${item.beadSize}`}><b>{[item.quality !== "Kích thước" ? item.quality : "", item.beadSize].filter(Boolean).join(" · ")}</b><small>{money(item.quantity)} cái · SKU {item.sku || "Mã sẽ được tạo khi lưu"} · Đơn giá nhập {money(item.unitCost)} ₫/cái</small></span>)}</details>}</span> : <ReceiptProductPicker products={products} selectedProduct={product} selectedVariant={variant} label={`Tìm sản phẩm hoặc SKU cho dòng ${index + 1}`} onSelect={(selected, selectedVariant) => updateLine(line.key, {
+                  productId: selected.id,
+                  variantId: selected.kind === "OTHER" ? undefined : selectedVariant?.id || selected.variants[0]?.id,
+                  quantity: selected.kind === "OTHER" ? 0 : Math.max(1, line.quantity),
+                  quantityKg: selected.kind === "OTHER" ? null : undefined,
+                  sphereItems: isSphereReceiptProduct(selected) ? [] : undefined,
+                  sphereHierarchy: isSphereReceiptProduct(selected) ? sphereHierarchyForProduct(selected) : undefined,
+                })}/>}</td>
+                <td><strong className="receipt-sku">{productSku}</strong></td>
+                <td>{classification}{product?.variants.length ? <select aria-label={`Phiên bản dòng ${index + 1}`} value={line.variantId || ""} onChange={(event) => updateLine(line.key, { variantId: event.target.value || undefined })}><option value="">Chọn biến thể</option>{product.variants.map((item) => <option key={item.id} value={item.id}>{variantLabel(item)} · {item.sku || "Không có mã riêng"}</option>)}</select> : null}{newVariants.length > 0 && <small className="receipt-variant-kind">{line.newProduct?.variants?.length} biến thể</small>}</td>
+                <td>{newVariants.length > 0 ? money(line.quantity) : isWeight ? <div className="receipt-weight-input"><input type="text" inputMode="decimal" aria-label={`Khối lượng kg dòng ${index + 1}`} placeholder="Ví dụ: 20,35" value={line.quantityKg ?? ""} onChange={(event) => { const normalized = event.target.value.replace(",", "."); updateLine(line.key, { quantityKg: normalized === "" ? null : Number(normalized) }); }}/><small>kg · tối đa 3 số lẻ</small></div> : <input type="number" min="1" max="100000" value={line.quantity} onChange={(event) => updateLine(line.key, { quantity: Number(event.target.value) })}/>}</td>
+                <td>{newVariants.length > 0 ? <small>Theo từng biến thể</small> : <input type="text" inputMode="numeric" pattern="[0-9]*" aria-label={`Đơn giá nhập dòng ${index + 1}; để trống nếu chưa có dữ liệu`} value={line.unitCost ?? ""} onFocus={(event) => event.currentTarget.select()} onChange={(event) => { const raw = event.target.value.replace(/\D/g, ""); updateLine(line.key, { unitCost: raw ? Number(raw) : null }); }}/>}</td>
+                <td>{line.unitCost == null ? <small>Chưa có giá</small> : money(amountForLine(line))}</td>
+                <td><button type="button" className="receipt-remove-line" aria-label={`Xóa dòng ${index + 1}`} onClick={() => setLines((current) => current.filter((item) => item.key !== line.key))}>×</button></td>
+              </tr>
+              {isSphere && <tr className="receipt-sphere-detail-row"><td colSpan={8}><section className="receipt-sphere-items">
+                <div className="receipt-sphere-hierarchy"><div><strong>Phân cấp tồn kho theo kg <b>*</b></strong><small>Quả cầu/Trụ chỉ là danh mục gốc, không cộng kg. Tổng kg được tính từ từng món lên Chất lượng → Loại đá → Nhóm đá.</small></div><div className="receipt-sphere-hierarchy-fields">
+                  <label>Nhóm đá <b>*</b><input list={`sphere-group-options-${line.key}`} disabled={sphereHierarchyLocked} value={line.sphereHierarchy?.groupName || ""} onChange={(event) => updateLine(line.key, { sphereHierarchy: { groupName: event.target.value, typeName: "", quality: line.sphereHierarchy?.quality || "" } })} placeholder="Ví dụ: Thạch Anh"/><datalist id={`sphere-group-options-${line.key}`}>{sphereCatalog.map((group) => <option key={group.id} value={group.name}/>)}</datalist></label>
+                  <label>Loại đá <b>*</b><input list={`sphere-type-options-${line.key}`} disabled={sphereHierarchyLocked || !(line.sphereHierarchy?.groupName || "").trim()} value={line.sphereHierarchy?.typeName || ""} onChange={(event) => updateLine(line.key, { sphereHierarchy: { groupName: line.sphereHierarchy?.groupName || "", typeName: event.target.value, quality: line.sphereHierarchy?.quality || "" } })} placeholder="Ví dụ: Thạch Anh Trắng"/><datalist id={`sphere-type-options-${line.key}`}>{sphereTypeOptions.map((type) => <option key={type.id} value={type.name}/>)}</datalist></label>
+                  <label>Chất lượng <b>*</b><input disabled={sphereHierarchyLocked} value={line.sphereHierarchy?.quality || ""} onChange={(event) => updateLine(line.key, { sphereHierarchy: { groupName: line.sphereHierarchy?.groupName || "", typeName: line.sphereHierarchy?.typeName || "", quality: event.target.value } })} placeholder="Ví dụ: 4A"/></label>
+                </div>{sphereHierarchyLocked && <small className="receipt-sphere-hierarchy-locked">Phân cấp của SKU này đã được xác nhận ở lần nhập trước; không thể đổi tại phiếu nhập.</small>}</div>
+                <div className="receipt-sphere-items-heading"><div><strong>Nhập chi tiết từng món <b>*</b></strong><small>Chỉ nhập số kg của mỗi món. Không cần ảnh hoặc video khi nhập kho.</small></div><button type="button" className="button button-quiet" onClick={() => addSphereItem(line.key)}>＋ Thêm món</button></div>
+                {sphereItems.length ? <div className="receipt-sphere-items-list">{sphereItems.map((sphere, sphereIndex) => <div key={sphere.key} className="receipt-sphere-item"><span>Món {sphereIndex + 1}</span><label><input type="text" inputMode="decimal" aria-label={`Khối lượng món ${sphereIndex + 1}`} placeholder="kg" value={sphere.weightKg ?? ""} onChange={(event) => { const normalized = event.target.value.replace(",", "."); updateSphereItemWeight(line.key, sphere.key, normalized === "" ? null : Number(normalized)); }}/><small>kg</small></label><button type="button" aria-label={`Xóa món ${sphereIndex + 1}`} onClick={() => removeSphereItem(line.key, sphere.key)}>×</button></div>)}</div> : <p className="receipt-sphere-empty">Chưa có món nào. Bấm “Thêm món” để nhập kg của từng món.</p>}
+                <p className={`receipt-sphere-total ${sphereMatches ? "is-valid" : "is-invalid"}`}>Tổng từng món: <b>{kg(sphereTotal)} kg</b> / Tổng SKU: <b>{kg(line.quantityKg)} kg</b>{sphereMatches ? " · Đã khớp" : " · Chưa khớp, chưa thể lưu phiếu"}</p>
+              </section></td></tr>}
+            </Fragment>;
           }) : <tr><td className="receipt-empty" colSpan={8}>Chưa có mặt hàng. Hãy thêm sản phẩm hoặc tạo mã hàng mới.</td></tr>}</tbody></table></div>
           <div className="receipt-table-footer"><button className="button button-quiet" onClick={addEmptyLine}>＋ Thêm dòng</button><div><span>Tiền hàng trước điều chỉnh</span><strong>{money(subtotalAmount)} VND</strong></div></div>
         </section>
       </main>
 
       <aside className="receipt-sidebar">
-        <section className="receipt-card receipt-summary"><h2>Tóm tắt phiếu nhập</h2><div><span>▦&nbsp; Tổng mặt hàng</span><strong>{completeLines.length}</strong></div><div><span>▥&nbsp; Tổng số lượng</span><strong>{money(totalQuantity)}</strong></div><div><span>Tiền hàng</span><strong>{money(subtotalAmount)} VND</strong></div><label className="receipt-percent-field">Chiết khấu (%)<input type="number" min="0" max="100" step="0.01" value={discountPercent} onChange={(event) => setDiscountPercent(event.target.value)}/></label><div className="receipt-calculation-line"><span>Tiền chiết khấu</span><strong>− {money(discountAmount)} VND</strong></div><label className="receipt-percent-field">VAT (%)<input type="number" min="0" max="100" step="0.01" value={vatPercent} onChange={(event) => setVatPercent(event.target.value)}/></label><div className="receipt-calculation-line"><span>Tiền VAT</span><strong>+ {money(vatAmount)} VND</strong></div><div className="receipt-grand-total"><span>Thành tiền</span><strong>{money(totalAmount)} VND</strong></div><small>VAT tính trên tiền hàng sau khi trừ chiết khấu.</small></section>
+        <section className="receipt-card receipt-summary"><h2>Tóm tắt phiếu nhập</h2><div><span>▦&nbsp; Tổng mặt hàng</span><strong>{completeLines.length}</strong></div>{totalQuantity > 0 && <div><span>▥&nbsp; Tổng số lượng</span><strong>{money(totalQuantity)} cái</strong></div>}{totalQuantityKg > 0 && <div><span>⚖&nbsp; Tổng khối lượng</span><strong>{new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 3 }).format(totalQuantityKg)} kg</strong></div>}<div><span>Tiền hàng</span><strong>{money(subtotalAmount)} VND</strong></div><label className="receipt-percent-field">Chiết khấu (%)<input type="number" min="0" max="100" step="0.01" value={discountPercent} onChange={(event) => setDiscountPercent(event.target.value)}/></label><div className="receipt-calculation-line"><span>Tiền chiết khấu</span><strong>− {money(discountAmount)} VND</strong></div><label className="receipt-percent-field">VAT (%)<input type="number" min="0" max="100" step="0.01" value={vatPercent} onChange={(event) => setVatPercent(event.target.value)}/></label><div className="receipt-calculation-line"><span>Tiền VAT</span><strong>+ {money(vatAmount)} VND</strong></div><div className="receipt-grand-total"><span>Thành tiền</span><strong>{money(totalAmount)} VND</strong></div><small>VAT tính trên tiền hàng sau khi trừ chiết khấu.</small></section>
         <section className="receipt-card"><div className="receipt-card-heading"><h2>Nhà cung cấp</h2>{supplierIsNew && <button className="receipt-text-button" onClick={() => { setSupplierIsNew(false); setSupplierName(""); }}>Chọn đã có</button>}</div>{supplierIsNew ? <label className="receipt-side-field">Tên nhà cung cấp<input value={supplierName} onChange={(event) => setSupplierName(event.target.value)} placeholder="Ví dụ: Đá Quý Việt"/></label> : <><select className="receipt-side-select" value={supplierName} onChange={(event) => { if (event.target.value === "__new") { setSupplierIsNew(true); setSupplierName(""); } else setSupplierName(event.target.value); }}><option value="">Chọn nhà cung cấp</option>{suppliers.map((supplier) => <option key={supplier} value={supplier}>{supplier}</option>)}<option value="__new">＋ Thêm mới</option></select>{supplierName && <div className="receipt-supplier-card"><span>{supplierName.slice(0, 2).toLocaleUpperCase("vi")}</span><strong>{supplierName}</strong><small>Nhà cung cấp được lưu cùng phiếu nhập</small></div>}</>}</section>
         <section className="receipt-card"><h2>Hình ảnh chứng từ</h2><label className="receipt-upload-box"><input type="file" accept="image/*,.pdf,application/pdf" multiple disabled={documentBusy || documents.length >= 10} onChange={(event) => void uploadDocuments(event.target.files)}/><span>{documentBusy ? "Đang tải lên database…" : "⇧"}</span><strong>Kéo thả ảnh vào đây hoặc chọn file</strong><small>Hỗ trợ JPG, PNG, PDF · tối đa 8 MB/tệp</small></label>{documents.length > 0 && <div className="receipt-documents">{documents.map((document, index) => <div key={`${document.url}-${index}`}>{document.mimeType.startsWith("image/") ? <img src={`${apiBaseUrl}${document.url}`} alt={document.name}/> : <span className="receipt-pdf-icon">PDF</span>}<a href={`${apiBaseUrl}${document.url}`} target="_blank" rel="noreferrer">{document.name}</a><button aria-label={`Xóa ${document.name}`} onClick={() => setDocuments((current) => current.filter((_, itemIndex) => itemIndex !== index))}>×</button></div>)}</div>}</section>
         <section className="receipt-card"><h2>Ghi chú thêm</h2><textarea className="receipt-extra-note" rows={4} maxLength={500} value={additionalNote} onChange={(event) => setAdditionalNote(event.target.value)} placeholder="Thêm thông tin khác cho phiếu nhập..."/><small className="receipt-note-count">{additionalNote.length}/500</small></section>

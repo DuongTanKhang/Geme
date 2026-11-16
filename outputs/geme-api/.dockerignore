@@ -6,5 +6,13 @@ dist
 .env.*
 !.env.example
 src/generated
+import-data
+scripts
+*.log
+api-local.*
+api.*
+tmp
+coverage
+*.tsbuildinfo
 *.tsbuildinfo
 *.log

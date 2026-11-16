@@ -36,7 +36,7 @@ export default function PromotionCreateWorkspace({ existingCodes, products, cate
   const [selectedProduct, setSelectedProduct] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const promotionCategories = categories.filter((item) => item.status === "Hoạt động" && item.kind !== "Khác");
+  const promotionCategories = categories.filter((item) => item.status === "Hoạt động");
   const selectedCategory = promotionCategories.find((item) => item.id === draft.category);
   const applicableCategoryIds = useMemo(() => {
     if (!selectedCategory) return new Set<string>();

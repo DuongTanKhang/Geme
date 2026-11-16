@@ -1,23 +1,27 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { getVietQrImageUrl, type BankQrSettings } from "./bank-qr";
 import type { AdminProduct, ProductPriceVariant } from "./products-workspace";
 
 type Customer = Record<string, any>;
 type Line = { product: AdminProduct; variant?: ProductPriceVariant; quantity: number };
+type CreatedOrder = Record<string, unknown>;
+type SubmitMode = "cash" | "bank-transfer-qr" | "pending";
 type Props = {
   products: AdminProduct[];
   customers: Customer[];
   onBack: () => void;
   onCreateCustomer: (customer: { name: string; phone: string }) => Promise<Customer>;
-  onCreateOrder: (order: Record<string, unknown>) => Promise<void>;
+  onCreateOrder: (order: Record<string, unknown>) => Promise<CreatedOrder>;
+  onLoadBankQr: () => Promise<BankQrSettings>;
 };
 
 const money = (value: number) => `${new Intl.NumberFormat("vi-VN").format(value || 0)} ₫`;
 const phoneDigits = (value: string) => value.replace(/\D/g, "");
 const customerId = (customer: Customer) => String(customer.apiId || customer.id || "");
 
-export default function OrderCreateWorkspace({ products, customers, onBack, onCreateCustomer, onCreateOrder }: Props) {
+export default function OrderCreateWorkspace({ products, customers, onBack, onCreateCustomer, onCreateOrder, onLoadBankQr }: Props) {
   const [customerMode, setCustomerMode] = useState<"guest" | "existing" | "new">("guest");
   const [customerSearch, setCustomerSearch] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
@@ -32,6 +36,7 @@ export default function OrderCreateWorkspace({ products, customers, onBack, onCr
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const submitting = useRef(false);
 
   const availableProducts = useMemo(() => products.filter((product) => {
     const hasStock = product.priceVariants?.length
@@ -93,21 +98,28 @@ export default function OrderCreateWorkspace({ products, customers, onBack, onCr
     setLines((current) => current.map((item) => item === line ? { ...item, variant, quantity: Math.min(item.quantity, variant.stock) } : item));
   }
 
-  async function submit(paid: boolean) {
+  async function submit(mode: SubmitMode) {
+    if (submitting.current) return;
     setError("");
     if (!lines.length) { setError("Chọn ít nhất một sản phẩm để tạo đơn."); return; }
     if (customerMode === "new" && duplicatePhoneCustomer) { setError("Số điện thoại này đã có trong Khách hàng. Hãy chọn khách hàng hiện có."); return; }
     if (customerMode === "new" && (!newCustomer.name.trim() || phoneDigits(newCustomer.phone).length < 8)) { setError("Nhập họ tên và số điện thoại hợp lệ để lưu hồ sơ khách hàng."); return; }
     if (customerMode === "existing" && !selectedCustomer) { setError("Chọn khách hàng đã có trong hệ thống."); return; }
+    submitting.current = true;
     setBusy(true);
     try {
+      const qrSettings = mode === "bank-transfer-qr" ? await onLoadBankQr() : null;
+      if (mode === "bank-transfer-qr" && (!qrSettings?.enabled || !getVietQrImageUrl(qrSettings, 1, "GEME"))) {
+        throw new Error("Chưa lấy được tài khoản nhận tiền từ SePay. Kiểm tra cấu hình SePay rồi thử lại.");
+      }
       let linkedCustomer: Customer | undefined = customerMode === "existing" ? selectedCustomer : undefined;
       if (customerMode === "new") linkedCustomer = await onCreateCustomer({ name: newCustomer.name.trim(), phone: newCustomer.phone.trim() });
       const name = customerMode === "new" ? newCustomer.name.trim() : customerMode === "existing" ? String(linkedCustomer?.name || "") : guest.name.trim();
       const phone = customerMode === "new" ? newCustomer.phone.trim() : customerMode === "existing" ? String(linkedCustomer?.phone || "") : guest.phone.trim();
       await onCreateOrder({
         salesChannel: "STORE",
-        paid: paid || paymentMethod === "COD",
+        paid: mode === "cash",
+        qrPayment: mode === "bank-transfer-qr",
         customerId: linkedCustomer ? customerId(linkedCustomer) : undefined,
         customerName: name,
         phone,
@@ -118,9 +130,15 @@ export default function OrderCreateWorkspace({ products, customers, onBack, onCr
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Không thể lưu đơn hàng.");
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
+
+  const primaryMode: SubmitMode = paymentMethod === "COD" ? "cash" : paymentMethod === "BANK_TRANSFER" ? "bank-transfer-qr" : "pending";
+  const primaryLabel = paymentMethod === "COD"
+    ? "Nhận tiền mặt & hoàn tất"
+    : paymentMethod === "BANK_TRANSFER" ? "Tạo mã QR chuyển khoản" : "Lưu đơn chờ thanh toán";
 
   return <main className="pos-order-page">
     <header className="pos-order-heading">
@@ -171,8 +189,8 @@ export default function OrderCreateWorkspace({ products, customers, onBack, onCr
       <aside className="pos-order-sidebar">
         <section className="pos-panel"><h2>Thông tin đơn hàng</h2><label>Mã đơn hàng<input value="Tự tạo khi lưu đơn" readOnly /></label><label>Ngày tạo<input value={new Intl.DateTimeFormat("vi-VN", { dateStyle: "short", timeStyle: "short" }).format(new Date())} readOnly /></label><label>Hình thức bán<select value="STORE" disabled><option value="STORE">Bán trực tiếp tại cửa hàng</option></select></label><label>Ghi chú đơn hàng<textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Nhập ghi chú (nếu có)..." maxLength={500} /></label></section>
         <section className="pos-panel pos-payment-panel"><h2>Phương thức thanh toán</h2>{[["COD", "Tiền mặt", "▣"], ["BANK_TRANSFER", "Chuyển khoản", "▤"], ["CREDIT_CARD", "Thẻ ngân hàng", "▱"], ["MOMO", "Ví điện tử (Momo, ZaloPay...) ", "◉"]].map(([value, label, icon]) => <label key={value}><input type="radio" name="payment" value={value} checked={paymentMethod === value} onChange={() => setPaymentMethod(value)} /><span aria-hidden="true">{icon}</span>{label}</label>)}</section>
-        <section className="pos-panel pos-total-panel"><h2>Tóm tắt thanh toán</h2><div><span>Tổng tiền hàng</span><strong>{money(subtotal)}</strong></div><div><span>Giảm giá</span><strong>0 ₫</strong></div><div><span>Phí giao hàng</span><strong>0 ₫</strong></div><div className="pos-grand-total"><span>Tổng thanh toán</span><strong>{money(subtotal)}</strong></div>{error && <p className="pos-order-error" role="alert">{error}</p>}<button type="button" className="pos-pay-button" disabled={busy} onClick={() => void submit(true)}>{busy ? "ĐANG LƯU..." : paymentMethod === "COD" ? "Nhận tiền mặt & Hoàn tất" : "Thanh toán & Hoàn tất"}</button>{paymentMethod !== "COD" && <button type="button" className="pos-save-pending" disabled={busy} onClick={() => void submit(false)}>Lưu đơn hàng (chưa thanh toán)</button>}</section>
-        <p className="pos-stock-note">Đơn thanh toán hoàn tất sẽ tự cập nhật tồn kho và lịch sử xuất hàng.</p>
+        <section className="pos-panel pos-total-panel"><h2>Tóm tắt thanh toán</h2><div><span>Tổng tiền hàng</span><strong>{money(subtotal)}</strong></div><div><span>Giảm giá</span><strong>0 ₫</strong></div><div><span>Phí giao hàng</span><strong>0 ₫</strong></div><div className="pos-grand-total"><span>Tổng thanh toán</span><strong>{money(subtotal)}</strong></div>{error && <p className="pos-order-error" role="alert">{error}</p>}<button type="button" className="pos-pay-button" disabled={busy} onClick={() => void submit(primaryMode)}>{busy ? "ĐANG LƯU..." : primaryLabel}</button>{paymentMethod === "BANK_TRANSFER" && <p className="pos-payment-qr-note">Mã QR có thời hạn 15 phút. SePay chỉ tự xác nhận khi nhận đủ tổng tiền của đơn.</p>}</section>
+        <p className="pos-stock-note">Đơn QR được giữ hàng 15 phút. Đơn tiền mặt hoàn tất sẽ cập nhật tồn kho và lịch sử xuất hàng.</p>
       </aside>
     </div>
   </main>;

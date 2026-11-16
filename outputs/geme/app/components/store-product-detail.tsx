@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { SyntheticEvent } from "react";
 import Image from "next/image";
 import type { StoreCategory, StoreProduct, StorePromotion } from "../lib/store-api";
 import { isStoreMediaProxyUrl, storeMediaDeliveryUrl } from "../lib/store-media";
@@ -27,10 +28,10 @@ function DetailAssuranceIcon({ name }: { name: "product" | "variants" | "consult
   </svg>;
 }
 
-function ProductPhoto({ url, alt, className = "", loading = "lazy", sizes = "(max-width: 760px) 100vw, 50vw" }: { url?: string; alt: string; className?: string; loading?: "eager" | "lazy"; sizes?: string }) {
+function ProductPhoto({ url, alt, className = "", loading = "lazy", sizes = "(max-width: 760px) 100vw, 50vw", onLoad }: { url?: string; alt: string; className?: string; loading?: "eager" | "lazy"; sizes?: string; onLoad?: (event: SyntheticEvent<HTMLImageElement>) => void }) {
   const imageUrl = storeMediaDeliveryUrl(url);
   return url
-    ? <Image className={className} src={imageUrl || url} alt={alt} width={1200} height={1200} sizes={sizes} quality={80} loading={loading} fetchPriority={loading === "eager" ? "high" : undefined} unoptimized={isStoreMediaProxyUrl(imageUrl || url)} />
+    ? <Image className={className} src={imageUrl || url} alt={alt} width={1200} height={1200} sizes={sizes} quality={80} loading={loading} fetchPriority={loading === "eager" ? "high" : undefined} unoptimized={isStoreMediaProxyUrl(imageUrl || url)} onLoad={onLoad} />
     : <div className={`${className} detail-photo-empty`} role="img" aria-label={`${alt} — chưa có ảnh`}>Chưa có ảnh</div>;
 }
 
@@ -67,12 +68,20 @@ export function StoreProductDetail({
     () => productVariants.filter((variant) => variant.stock > 0),
     [productVariants],
   );
+  const availableSphereItems = useMemo(
+    () => (product.sphereItems || []).filter((item) => item.status === "AVAILABLE" && item.price > 0 && item.imageUrls.length > 0),
+    [product.sphereItems],
+  );
   const [activeImage, setActiveImage] = useState(0);
+  const detailGalleryRef = useRef<HTMLDivElement>(null);
+  const detailMainImageRef = useRef<HTMLDivElement>(null);
+  const [detailImageRatio, setDetailImageRatio] = useState(1.067);
   const [activeTab, setActiveTab] = useState<DetailTab>("description");
   const [selectedVariantKey, setSelectedVariantKey] = useState(() => {
     const first = availableVariants[0];
     return first ? variantKey(first) : "";
   });
+  const [selectedSphereItemId, setSelectedSphereItemId] = useState(() => availableSphereItems[0]?.id || "");
   const [quantity, setQuantity] = useState(1);
   const { favoriteIds, toggleFavorite } = useWishlist();
   const isSaved = favoriteIds.has(product.id);
@@ -95,6 +104,7 @@ export function StoreProductDetail({
   const selectedVariant = availableVariants.find(
     (variant) => variantKey(variant) === selectedVariantKey,
   ) ?? availableVariants[0];
+  const selectedSphereItem = availableSphereItems.find((item) => item.id === selectedSphereItemId) ?? availableSphereItems[0];
   const normalizedCategoryPath = [...categoryTrail.map((category) => category.name), product.category?.name || ""].join(" ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi");
   const normalizedProductName = product.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi");
   const bangleProduct = normalizedCategoryPath.includes("vong kieng") || normalizedProductName.includes("kieng");
@@ -111,20 +121,48 @@ export function StoreProductDetail({
   const selectedGemstoneQuality = selectedVariant?.gemstoneQuality || gemstoneQualities[0];
   const sizesForQuality = variantsForShape.filter((variant) => variant.quality === selectedQuality && variant.beadSize);
   const caratsForSelection = availableVariants.filter((variant) => variant.quality === selectedQuality && (!gemstoneCaratQualityPricing || variant.gemstoneQuality === selectedGemstoneQuality) && variant.carat != null);
-  const priceDetails = getStoreProductPrice(product, promotions, selectedVariant);
+  const priceProduct = selectedSphereItem ? { ...product, price: selectedSphereItem.price, originalPrice: null } : product;
+  const priceDetails = getStoreProductPrice(priceProduct, promotions, selectedVariant);
   const { salePrice: price, originalPrice, promotion: activePromotion } = priceDetails;
   const promotionPeriod = activePromotion ? formatStorePromotionPeriod(activePromotion) : "";
-  const stock = selectedVariant ? selectedVariant.stock : product.stock;
+  const stock = product.hasWeightItems ? (selectedSphereItem ? 1 : 0) : selectedVariant ? selectedVariant.stock : product.stockKg && product.stockKg > 0 ? product.stockKg : product.stock;
   const material = product.materialOption?.name || product.gemstoneType?.name;
   const variantImages = (selectedVariant?.imageUrls || []).map((url, index) => ({ url, alt: [product.name, bangleShapeName(selectedVariant?.shape), selectedVariant?.quality, selectedVariant?.beadSize].filter(Boolean).join(" · "), sortOrder: index, isPrimary: index === 0 }));
+  const sphereImages = (selectedSphereItem?.imageUrls || []).map((url, index) => ({ url, alt: `${product.name} · ${new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 3 }).format(selectedSphereItem?.weightKg || 0)} kg`, sortOrder: index, isPrimary: index === 0 }));
   const fallbackImages = bangleProduct ? images.slice(0, 1) : images;
-  const displayImages = (variantImages.length ? variantImages : fallbackImages).slice(0, bangleProduct ? 1 : 10);
+  const displayImages = (product.hasWeightItems ? sphereImages : variantImages.length ? variantImages : fallbackImages).slice(0, bangleProduct ? 1 : 10);
   const galleryMedia = [
     ...displayImages.map((image) => ({ kind: "image" as const, image })),
     ...(selectedVariant?.videoUrl ? [{ kind: "variant-video" as const, url: selectedVariant.videoUrl }] : []),
   ];
   const activeImageIndex = Math.min(activeImage, Math.max(galleryMedia.length - 1, 0));
   const activeMedia = galleryMedia[activeImageIndex];
+  useEffect(() => {
+    const gallery = detailGalleryRef.current;
+    const frame = detailMainImageRef.current;
+    if (!gallery || !frame) return;
+
+    const fitImageFrame = () => {
+      const thumbnails = gallery.querySelector<HTMLElement>(".detail-thumbnails");
+      const gap = Number.parseFloat(window.getComputedStyle(gallery).columnGap) || 0;
+      const mobile = window.matchMedia("(max-width: 650px)").matches;
+      const sideThumbnailWidth = thumbnails && !mobile ? thumbnails.getBoundingClientRect().width + gap : 0;
+      const availableWidth = Math.max(0, gallery.clientWidth - sideThumbnailWidth);
+      const maxHeight = Math.max(200, Math.min(mobile ? 680 : 740, window.innerHeight - (mobile ? 190 : 180)));
+      const width = Math.min(availableWidth, maxHeight * detailImageRatio);
+      frame.style.width = `${width}px`;
+      frame.style.height = `${width / detailImageRatio}px`;
+    };
+
+    fitImageFrame();
+    window.addEventListener("resize", fitImageFrame);
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(fitImageFrame) : null;
+    observer?.observe(gallery);
+    return () => {
+      window.removeEventListener("resize", fitImageFrame);
+      observer?.disconnect();
+    };
+  }, [detailImageRatio, activeImageIndex]);
   const reviewCount = product.reviews?.length ?? 0;
   const averageRating = reviewCount
     ? (product.reviews!.reduce((total, review) => total + review.rating, 0) / reviewCount).toFixed(1)
@@ -174,19 +212,26 @@ export function StoreProductDetail({
     const next = caratsForSelection.find((variant) => Number(variant.carat) === carat);
     if (next) { setSelectedVariantKey(variantKey(next)); setQuantity(1); setActiveImage(0); }
   };
+  const setSphereItem = (sphereItemId: string) => {
+    const next = availableSphereItems.find((item) => item.id === sphereItemId);
+    if (next) { setSelectedSphereItemId(next.id); setQuantity(1); setActiveImage(0); }
+  };
 
   const categoryName = categoryTrail[categoryTrail.length - 1]?.name || product.category?.name;
 
   const makeCartLine = () => ({
-      key: `${product.id}:${selectedVariant?.id || selectedVariantKey}`,
+      key: `${product.id}:${selectedSphereItem?.id || selectedVariant?.id || selectedVariantKey}`,
       productId: product.id,
-      variantId: selectedVariant?.id || null,
+      variantId: selectedSphereItem ? null : selectedVariant?.id || null,
+      sphereItemId: selectedSphereItem?.id || null,
+      quantityKg: selectedSphereItem?.weightKg ?? null,
+      weightKg: selectedSphereItem?.weightKg ?? null,
       slug: product.slug,
       name: product.name,
       sku: selectedVariant?.sku || product.sku,
       price,
       shape: selectedVariant?.shape || null,
-      quality: sizeOnlyVariants ? null : selectedVariant?.quality || null,
+      quality: sizeOnlyVariants ? null : selectedVariant?.quality || product.sphereQuality || null,
       beadSize: selectedVariant?.beadSize || null,
       carat: selectedVariant?.carat ?? null,
       gemstoneQuality: selectedVariant?.gemstoneQuality || null,
@@ -229,16 +274,16 @@ export function StoreProductDetail({
 
     <main className="product-detail-page">
       <section className="detail-top">
-        <div className={"detail-gallery" + (galleryMedia.length > 1 ? " has-thumbnails" : "")}>
+        <div ref={detailGalleryRef} className={"detail-gallery" + (galleryMedia.length > 1 ? " has-thumbnails" : "")}>
           {galleryMedia.length > 1 && <div className="detail-thumbnails" aria-label="Ảnh và video sản phẩm">
             {galleryMedia.map((media, index) => <button type="button" key={media.kind + index} className={activeImageIndex === index ? "is-active" : ""} onClick={() => setActiveImage(index)} aria-label={media.kind === "variant-video" ? "Xem video biến thể" : "Xem ảnh " + (index + 1)}>
               {media.kind === "image" ? <ProductPhoto url={media.image.url} alt={media.image.alt || product.name} loading="lazy" sizes="66px" /> : <span className="detail-video-thumbnail" aria-hidden="true">▶</span>}
             </button>)}
           </div>}
-          <div className="detail-main-image">
+          <div ref={detailMainImageRef} className="detail-main-image">
             {activeMedia?.kind === "variant-video"
-              ? <video className="detail-variant-video" src={activeMedia.url} controls playsInline preload="metadata" aria-label={"Video " + (selectedVariant?.sku || product.name)} />
-              : <ProductPhoto url={activeMedia?.kind === "image" ? activeMedia.image.url : undefined} alt={activeMedia?.kind === "image" ? activeMedia.image.alt || product.name : product.name} loading="eager" />}
+              ? <video className="detail-variant-video" src={activeMedia.url} controls playsInline preload="metadata" aria-label={"Video " + (selectedVariant?.sku || product.name)} onLoadedMetadata={(event) => { const video = event.currentTarget; if (video.videoWidth && video.videoHeight) setDetailImageRatio(video.videoWidth / video.videoHeight); }} />
+              : <ProductPhoto url={activeMedia?.kind === "image" ? activeMedia.image.url : undefined} alt={activeMedia?.kind === "image" ? activeMedia.image.alt || product.name : product.name} loading="eager" onLoad={(event) => { const image = event.currentTarget; if (image.naturalWidth && image.naturalHeight) setDetailImageRatio(image.naturalWidth / image.naturalHeight); }} />}
             <button className={`detail-image-heart${isSaved ? " is-saved" : ""}`} type="button" aria-label={isSaved ? "Bỏ khỏi danh sách yêu thích" : "Thêm vào danh sách yêu thích"} aria-pressed={isSaved} aria-busy={wishlistPending} disabled={wishlistPending} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void handleFavorite(); }}><HeartIcon filled={isSaved} /></button>
             {galleryMedia.length > 1 && <>
               <button className="detail-image-arrow is-prev" type="button" onClick={() => setActiveImage((activeImageIndex + galleryMedia.length - 1) % galleryMedia.length)} aria-label="Ảnh trước">‹</button>
@@ -283,6 +328,12 @@ export function StoreProductDetail({
             <legend>Chất lượng đá: <strong>{selectedGemstoneQuality}</strong></legend>
             <div className="store-detail-quality-list">{gemstoneQualities.map((quality) => <button type="button" key={quality} className={selectedGemstoneQuality === quality ? "is-selected" : ""} onClick={() => setGemstoneQuality(quality)}>{quality}</button>)}</div>
           </fieldset>}
+      {product.hasWeightItems && <fieldset className="detail-size-picker">
+        <div className="store-detail-quality-list store-weight-item-options">{availableSphereItems.map((item) => {
+          const weight = new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 3 }).format(item.weightKg);
+          return <button type="button" key={item.id} className={selectedSphereItem?.id === item.id ? "is-selected" : ""} onClick={() => setSphereItem(item.id)} aria-label={`${weight} kg`}><span>{weight} kg</span></button>;
+        })}</div>
+      </fieldset>}
           {gemstoneCaratPricing && caratsForSelection.length > 0 && <fieldset className="detail-size-picker">
             <legend>Trọng lượng: <strong>{selectedVariant?.carat} ct</strong></legend>
             <div className="store-detail-quality-list">{caratsForSelection.map((variant) => <button type="button" key={variantKey(variant)} className={Number(selectedVariant?.carat) === Number(variant.carat) ? "is-selected" : ""} onClick={() => setCarat(Number(variant.carat))}>{variant.carat} ct</button>)}</div>
@@ -294,15 +345,15 @@ export function StoreProductDetail({
             </button>)}</div>
           </fieldset>}
 
-          <div className="detail-stock-status" role="status">{product.isPremiumGemstone ? "Liên hệ để được tư vấn và kiểm tra tình trạng hàng" : stock > 0 ? "Còn hàng" : "Tạm hết hàng"}</div>
+          <div className="detail-stock-status" role="status">{product.isPremiumGemstone ? "Liên hệ để được tư vấn và kiểm tra tình trạng hàng" : product.hasWeightItems ? selectedSphereItem ? "Còn hàng" : "Các món đang chờ cập nhật ảnh hoặc giá" : stock > 0 ? "Còn hàng" : "Tạm hết hàng"}</div>
           {product.isPremiumGemstone
             ? <div className="detail-contact-only"><a href="/lien-he">LIÊN HỆ GEME ĐỂ ĐƯỢC TƯ VẤN</a></div>
             : <div className="detail-buy-row">
-            <div className="detail-quantity" aria-label="Số lượng">
+            {!product.hasWeightItems && <div className="detail-quantity" aria-label="Số lượng">
               <button type="button" onClick={() => setQuantity((value) => Math.max(1, value - 1))} aria-label="Giảm số lượng">−</button>
               <span>{quantity}</span>
               <button type="button" onClick={() => setQuantity((value) => Math.min(Math.max(stock, 1), value + 1))} aria-label="Tăng số lượng" disabled={stock === 0 || quantity >= stock}>+</button>
-            </div>
+            </div>}
             <button className="detail-buy-now" type="button" onClick={buyNow} disabled={stock === 0}>MUA NGAY</button>
             <button className="detail-add-cart" type="button" onClick={addToCart} disabled={stock === 0}>{stock > 0 ? "BỎ VÀO GIỎ HÀNG" : "TẠM HẾT HÀNG"}</button>
           </div>}
@@ -313,12 +364,12 @@ export function StoreProductDetail({
         </div>
       </section>
 
-      <section className="detail-assurance-strip" aria-label="Thông tin dịch vụ">
+      {!product.hasWeightItems && <section className="detail-assurance-strip" aria-label="Thông tin dịch vụ">
         <div><DetailAssuranceIcon name="product" /><span><strong>Dữ liệu sản phẩm rõ ràng</strong><small>Thông tin lấy từ GEME</small></span></div>
         <div><DetailAssuranceIcon name="variants" /><span><strong>Biến thể theo sản phẩm</strong><small>Giá và tồn kho theo lựa chọn</small></span></div>
         <div><DetailAssuranceIcon name="consulting" /><span><strong>Tư vấn riêng</strong><small>Hỗ trợ trước khi đặt hàng</small></span></div>
         <div><DetailAssuranceIcon name="support" /><span><strong>Hỗ trợ sau mua</strong><small>Liên hệ đội ngũ GEME</small></span></div>
-      </section>
+      </section>}
 
       <section className="detail-content">
         <div className="detail-tabs" role="tablist" aria-label="Thông tin chi tiết">

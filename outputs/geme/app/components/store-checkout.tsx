@@ -12,6 +12,9 @@ type CheckoutLine = {
   key: string;
   productId: string;
   variantId: string | null;
+  sphereItemId?: string | null;
+  quantityKg?: number | null;
+  weightKg?: number | null;
   slug: string;
   name: string;
   sku: string;
@@ -28,6 +31,8 @@ type CheckoutLine = {
 type CheckoutQuoteItem = {
   productId: string;
   variantId: string | null;
+  sphereItemId?: string | null;
+  quantityKg?: number | null;
   productName: string;
   productSku: string;
   quantity: number;
@@ -134,7 +139,7 @@ export function StoreCheckout() {
     return () => { alive = false; };
   }, []);
 
-  const cartSignature = useMemo(() => JSON.stringify(lines.map((line) => ({ productId: line.productId, variantId: line.variantId, sku: line.sku, quantity: line.quantity }))), [lines]);
+  const cartSignature = useMemo(() => JSON.stringify(lines.map((line) => ({ productId: line.productId, variantId: line.variantId, sphereItemId: line.sphereItemId || null, quantityKg: line.quantityKg ?? line.weightKg ?? null, sku: line.sku, quantity: line.quantity }))), [lines]);
   const quoteSignature = `${cartSignature}:${accountSignedIn === null ? "pending" : accountSignedIn ? "member" : "guest"}:${pointsToRedeem}`;
   const activeQuote = quote?.signature === quoteSignature ? quote.value : null;
   const total = activeQuote?.totalAmount ?? 0;
@@ -157,7 +162,7 @@ export function StoreCheckout() {
     void fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId, sku: line.sku, quantity: line.quantity })), loyaltyPointsToRedeem: authenticatedQuote ? pointsToRedeem : 0 }),
+      body: JSON.stringify({ items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId, sphereItemId: line.sphereItemId || null, quantityKg: line.quantityKg ?? line.weightKg ?? null, sku: line.sku, quantity: line.quantity })), loyaltyPointsToRedeem: authenticatedQuote ? pointsToRedeem : 0 }),
       signal: controller.signal,
     }).then(async (response) => {
       const result = await response.json();
@@ -207,7 +212,7 @@ export function StoreCheckout() {
         expectedTotalAmount: activeQuote.totalAmount,
         loyaltyPointsToRedeem: authenticated ? pointsToRedeem : 0,
         marketingSessionId: marketingTracked ? getMarketingSessionId() || null : null,
-        items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId, sku: line.sku, quantity: line.quantity })),
+        items: lines.map((line) => ({ productId: line.productId, variantId: line.variantId, sphereItemId: line.sphereItemId || null, quantityKg: line.quantityKg ?? line.weightKg ?? null, sku: line.sku, quantity: line.quantity })),
       };
       const fingerprintBytes = new TextEncoder().encode(JSON.stringify(payload));
       const fingerprintDigest = await crypto.subtle.digest("SHA-256", fingerprintBytes);
@@ -299,10 +304,10 @@ export function StoreCheckout() {
     {lines.length ? <div className="checkout-layout">
       <section className="checkout-products" aria-label="Sản phẩm đặt hàng">
         {lines.map((line) => {
-          const quoted = activeQuote?.items.find((item) => item.productId === line.productId && item.variantId === line.variantId);
+          const quoted = activeQuote?.items.find((item) => item.productId === line.productId && item.variantId === line.variantId && (item.sphereItemId || null) === (line.sphereItemId || null));
           return <article className="checkout-line" key={line.key}>
-            <div className="checkout-line-copy"><a href={`/san-pham/${encodeURIComponent(line.slug)}`}>{line.name}</a><small>SKU {line.sku}{line.shape ? ` · ${{ ROUND: "Tròn", OVAL: "Oval", SQUARE: "Vuông" }[line.shape] || line.shape}` : ""}{line.quality ? ` · ${line.quality}` : ""}{line.beadSize ? ` · ${line.beadSize}` : ""}{line.carat != null ? ` · ${line.carat} ct` : ""}{line.gemstoneQuality ? ` · Chất lượng ${line.gemstoneQuality}` : ""}</small>{quoted ? <><strong>{formatStorePrice(quoted.saleUnitPrice)}</strong>{quoted.saleUnitPrice < quoted.unitPrice && <del>{formatStorePrice(quoted.unitPrice)}</del>}</> : <small>{quoteLoading ? "Đang xác nhận giá…" : "Chưa xác nhận giá"}</small>}</div>
-            <div className="checkout-line-quantity"><button type="button" onClick={() => changeQuantity(line.key, -1)} aria-label={`Giảm số lượng ${line.name}`}>−</button><span>{line.quantity}</span><button type="button" onClick={() => changeQuantity(line.key, 1)} disabled={line.quantity >= line.stock} aria-label={`Tăng số lượng ${line.name}`}>+</button></div>
+            <div className="checkout-line-copy"><a href={`/san-pham/${encodeURIComponent(line.slug)}`}>{line.name}</a><small>SKU {line.sku}{line.shape ? ` · ${{ ROUND: "Tròn", OVAL: "Oval", SQUARE: "Vuông" }[line.shape] || line.shape}` : ""}{line.quality ? ` · ${line.quality}` : ""}{line.beadSize ? ` · ${line.beadSize}` : ""}{line.carat != null ? ` · ${line.carat} ct` : ""}{line.gemstoneQuality ? ` · Chất lượng ${line.gemstoneQuality}` : ""}{line.sphereItemId && line.weightKg != null ? ` · ${new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 3 }).format(line.weightKg)} kg` : ""}</small>{quoted ? <><strong>{formatStorePrice(quoted.saleUnitPrice)}</strong>{quoted.saleUnitPrice < quoted.unitPrice && <del>{formatStorePrice(quoted.unitPrice)}</del>}</> : <small>{quoteLoading ? "Đang xác nhận giá…" : "Chưa xác nhận giá"}</small>}</div>
+            {line.sphereItemId ? <div className="checkout-line-quantity"><span>1 quả</span></div> : <div className="checkout-line-quantity"><button type="button" onClick={() => changeQuantity(line.key, -1)} aria-label={`Giảm số lượng ${line.name}`}>−</button><span>{line.quantity}</span><button type="button" onClick={() => changeQuantity(line.key, 1)} disabled={line.quantity >= line.stock} aria-label={`Tăng số lượng ${line.name}`}>+</button></div>}
           </article>;
         })}
         {quoteError && <p className="checkout-error" role="alert">{quoteError} <button type="button" onClick={() => setQuoteRefreshVersion((version) => version + 1)}>Kiểm tra lại</button></p>}

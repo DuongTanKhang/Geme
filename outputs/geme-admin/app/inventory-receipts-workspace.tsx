@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { apiBaseUrl } from "../lib/api";
 
 type ReceiptSummary = {
@@ -11,6 +11,7 @@ type ReceiptSummary = {
   receiver?: string | null;
   warehouseName: string;
   totalQuantity: number;
+  totalQuantityKg?: number | string | null;
   totalAmount: number | string;
   status: string;
   pos365SyncStatus?: "PENDING" | "SYNCING" | "RETRYING" | "SYNCED" | "DELETED" | null;
@@ -21,6 +22,7 @@ type ReceiptSummary = {
 
 type ReceiptItem = {
   id: string;
+  productId?: string | null;
   productName: string;
   productSku: string;
   quality?: string | null;
@@ -31,9 +33,18 @@ type ReceiptItem = {
   stoneName?: string | null;
   kind: string;
   quantity: number;
-    unitCost: number | string | null;
-    lineTotal: number | string | null;
+  quantityKg?: number | string | null;
+  unitCost: number | string | null;
+  lineTotal: number | string | null;
   variant?: { sku?: string | null; quality?: string | null; beadSize?: string | null; carat?: number | string | null; gemstoneQuality?: string | null } | null;
+};
+
+type ReceiptSphereItem = {
+  id: string;
+  productId: string;
+  label?: string | null;
+  weightKg: number | string;
+  sortOrder: number;
 };
 
 type ReceiptDetail = ReceiptSummary & {
@@ -47,12 +58,14 @@ type ReceiptDetail = ReceiptSummary & {
   vatPercent: number | string;
   vatAmount: number | string;
   items: ReceiptItem[];
+  sphereItems?: ReceiptSphereItem[];
 };
 
 const amount = (value: number | string | null | undefined) => new Intl.NumberFormat("vi-VN").format(Number(value) || 0);
+const kg = (value: number | string | null | undefined) => new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 3 }).format(Number(value) || 0);
 const dateTime = (value: string) => new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 const dateOnly = (value: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(new Date(value));
-const kindName = (value: string) => value === "GEMSTONE" ? "Đá quý" : "Trang sức";
+const kindName = (value: string) => value === "GEMSTONE" ? "Đá quý" : value === "OTHER" ? "Vật phẩm" : "Trang sức";
 const pos365SyncLabel = (status?: ReceiptSummary["pos365SyncStatus"]) => status === "SYNCED" ? "Đã nhận" : status === "SYNCING" ? "Đang gửi" : status === "RETRYING" ? "Đang thử lại" : status === "PENDING" ? "Đang chờ" : status === "DELETED" ? "Đã xóa trên POS365" : "Chưa đồng bộ";
 const receiptVariantLabel = (item: ReceiptItem) => {
   const variant = item.variant;
@@ -121,6 +134,7 @@ export default function InventoryReceiptsWorkspace() {
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
   const totalQuantity = filtered.reduce((sum, receipt) => sum + (receipt.status === "CANCELLED" ? 0 : Number(receipt.totalQuantity) || 0), 0);
+  const totalQuantityKg = filtered.reduce((sum, receipt) => sum + (receipt.status === "CANCELLED" ? 0 : Number(receipt.totalQuantityKg) || 0), 0);
   const totalAmount = filtered.reduce((sum, receipt) => sum + (receipt.status === "CANCELLED" ? 0 : Number(receipt.totalAmount) || 0), 0);
 
   const reconcileCurrentPage = async () => {
@@ -160,7 +174,7 @@ export default function InventoryReceiptsWorkspace() {
   return <section className="inventory-history-panel inventory-receipts-panel">
     <div className="inventory-panel-title"><div><h2>Danh sách phiếu nhập</h2><p>Đối soát các phiếu ở trang hiện tại với POS365; phiếu đã xóa sẽ được ẩn khỏi danh sách thường và đối trừ tồn.</p></div><div className="inventory-receipt-heading-actions"><button className="button button-quiet" type="button" onClick={() => void reconcileCurrentPage()} disabled={loading || syncingPos}>{syncingPos ? "Đang đối soát…" : "Đối soát POS365"}</button><button className="button button-quiet" onClick={() => void reload()} disabled={loading || syncingPos}>{loading ? "Đang tải…" : "↻ Làm mới"}</button></div></div>
 
-    <div className="inventory-receipt-stats"><article><small>Số phiếu đang lọc</small><strong>{loading ? "—" : amount(filtered.length)}</strong></article><article><small>Tổng số lượng nhập</small><strong>{loading ? "—" : amount(totalQuantity)}</strong></article><article><small>Tổng tiền nhập</small><strong>{loading ? "—" : `${amount(totalAmount)} ₫`}</strong></article></div>
+    <div className="inventory-receipt-stats"><article><small>Số phiếu đang lọc</small><strong>{loading ? "—" : amount(filtered.length)}</strong></article><article><small>Tổng số lượng nhập</small><strong>{loading ? "—" : amount(totalQuantity)}</strong></article>{totalQuantityKg > 0 && <article><small>Tổng khối lượng nhập</small><strong>{loading ? "—" : `${kg(totalQuantityKg)} kg`}</strong></article>}<article><small>Tổng tiền nhập</small><strong>{loading ? "—" : `${amount(totalAmount)} ₫`}</strong></article></div>
 
     <div className="inventory-receipt-filters"><label className="inventory-search"><span>⌕</span><input type="search" value={search} onChange={(event) => updateSearch(event.target.value)} placeholder="Tìm mã phiếu, nhà cung cấp, người nhập, kho…"/></label><label>Từ ngày<input type="date" value={from} onChange={(event) => updateDate(setFrom)(event.target.value)}/></label><label>Đến ngày<input type="date" value={to} onChange={(event) => updateDate(setTo)(event.target.value)}/></label><label className="inventory-receipt-canceled-toggle"><input type="checkbox" checked={showCanceled} onChange={(event) => { setShowCanceled(event.target.checked); setPage(1); }}/> Hiện phiếu đã xóa trên POS365</label><button className="button button-quiet" type="button" onClick={() => { setFrom(""); setTo(""); updateSearch(""); }}>Xóa lọc</button></div>
     {syncNotice && <div className="inventory-receipt-sync-notice" role="status">{syncNotice}</div>}
@@ -168,7 +182,7 @@ export default function InventoryReceiptsWorkspace() {
 
     <div className="inventory-receipt-table-wrap"><table className="inventory-receipt-table"><thead><tr><th>Mã phiếu nhập</th><th>Ngày nhập</th><th>Nhà cung cấp</th><th>Người nhập</th><th>Kho</th><th>Số lượng</th><th>Tổng tiền</th><th>POS365</th><th></th></tr></thead><tbody>
       {loading ? <tr><td colSpan={9} className="inventory-empty">Đang tải phiếu nhập…</td></tr> : pageRows.length ? pageRows.map((receipt) => <tr key={receipt.id} onClick={() => void openReceipt(receipt)} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openReceipt(receipt); } }}>
-        <td><button type="button" className="inventory-receipt-number" onClick={() => void openReceipt(receipt)}>{receipt.receiptNo}</button>{receipt.status === "CANCELLED" && <small className="inventory-receipt-canceled-label">Đã hủy · tồn đã đối trừ</small>}</td><td>{dateTime(receipt.receivedAt)}</td><td>{receipt.supplierName || "—"}</td><td>{receipt.receiver || "—"}</td><td>{receipt.warehouseName || "Kho chính"}</td><td>{amount(receipt.totalQuantity)}</td><td className="inventory-receipt-money">{amount(Number(receipt.totalAmount))} ₫</td><td><span className={`inventory-pos365-status ${receipt.pos365SyncStatus === "SYNCED" ? "is-synced" : receipt.pos365SyncStatus === "DELETED" ? "is-deleted" : receipt.pos365SyncStatus ? "is-pending" : "is-off"}`} title={receipt.pos365SyncError || receipt.pos365SyncCode || undefined}>{pos365SyncLabel(receipt.pos365SyncStatus)}</span></td><td><button type="button" className="inventory-receipt-view" aria-label={`Xem phiếu ${receipt.receiptNo}`} onClick={() => void openReceipt(receipt)}>Xem chi tiết →</button></td>
+        <td><button type="button" className="inventory-receipt-number" onClick={() => void openReceipt(receipt)}>{receipt.receiptNo}</button>{receipt.status === "CANCELLED" && <small className="inventory-receipt-canceled-label">Đã hủy · tồn đã đối trừ</small>}</td><td>{dateTime(receipt.receivedAt)}</td><td>{receipt.supplierName || "—"}</td><td>{receipt.receiver || "—"}</td><td>{receipt.warehouseName || "Kho chính"}</td><td>{amount(receipt.totalQuantity)}{Number(receipt.totalQuantityKg) > 0 && <small className="history-subline">{kg(receipt.totalQuantityKg)} kg</small>}</td><td className="inventory-receipt-money">{amount(Number(receipt.totalAmount))} ₫</td><td><span className={`inventory-pos365-status ${receipt.pos365SyncStatus === "SYNCED" ? "is-synced" : receipt.pos365SyncStatus === "DELETED" ? "is-deleted" : receipt.pos365SyncStatus ? "is-pending" : "is-off"}`} title={receipt.pos365SyncError || receipt.pos365SyncCode || undefined}>{pos365SyncLabel(receipt.pos365SyncStatus)}</span></td><td><button type="button" className="inventory-receipt-view" aria-label={`Xem phiếu ${receipt.receiptNo}`} onClick={() => void openReceipt(receipt)}>Xem chi tiết →</button></td>
       </tr>) : <tr><td colSpan={9} className="inventory-empty">{error ? "Không lấy được danh sách phiếu nhập." : "Không tìm thấy phiếu nhập phù hợp."}</td></tr>}
     </tbody></table></div>
     <div className="inventory-pagination"><span>Hiển thị {filtered.length ? (page - 1) * pageSize + 1 : 0}–{Math.min(page * pageSize, filtered.length)} / {amount(filtered.length)} phiếu nhập</span><div><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>‹</button><strong>{page}</strong><button disabled={page >= pageCount} onClick={() => setPage((value) => value + 1)}>›</button></div></div>
@@ -180,8 +194,16 @@ export default function InventoryReceiptsWorkspace() {
           <div className="inventory-receipt-paper">
           <div className="inventory-receipt-paper-title"><div><strong>GEME</strong><span>PHIẾU NHẬP KHO</span></div><div><b>{detail.receiptNo}</b><small>Ngày nhập: {dateTime(detail.receivedAt)}</small><small>Trạng thái: {detail.status === "COMPLETED" ? "Hoàn thành" : detail.status === "CANCELLED" ? "Đã xóa trên POS365 · tồn đã đối trừ" : detail.status}</small></div></div>
             <div className="inventory-receipt-parties"><div><small>NHÀ CUNG CẤP</small><strong>{detail.supplierName || "Không ghi nhận"}</strong></div><div><small>NGƯỜI NHẬP</small><strong>{detail.receiver || "Không ghi nhận"}</strong></div><div><small>KHO NHẬP</small><strong>{detail.warehouseName || "Kho chính"}</strong></div><div><small>THANH TOÁN</small><strong>{detail.paymentMethod || "Không ghi nhận"}</strong></div></div>
-            <div className="inventory-receipt-paper-table-wrap"><table className="inventory-receipt-paper-table"><thead><tr><th>#</th><th>Sản phẩm / SKU</th><th>Phân loại / biến thể</th><th>Nhóm hàng</th><th>Số lượng</th><th>Đơn giá nhập</th><th>Thành tiền</th></tr></thead><tbody>{detail.items.map((item, index) => <tr key={item.id}><td>{index + 1}</td><td><strong>{item.productName}</strong><small>{item.productSku}</small></td><td>{receiptVariantLabel(item)}</td><td>{[kindName(item.kind), item.categoryName, item.stoneName].filter(Boolean).join(" · ")}</td><td>{amount(item.quantity)}</td><td>{item.unitCost == null ? "Chưa có dữ liệu" : `${amount(Number(item.unitCost))} ₫`}</td><td>{item.lineTotal == null ? "Chưa có dữ liệu" : `${amount(Number(item.lineTotal))} ₫`}</td></tr>)}</tbody></table></div>
-            <div className="inventory-receipt-calculation"><div><span>Tổng số lượng</span><strong>{amount(detail.totalQuantity)} món</strong></div><div><span>Tiền hàng</span><strong>{amount(Number(detail.subtotalAmount))} ₫</strong></div><div><span>Chiết khấu ({amount(Number(detail.discountPercent))}%)</span><strong>− {amount(Number(detail.discountAmount))} ₫</strong></div><div><span>VAT ({amount(Number(detail.vatPercent))}%)</span><strong>+ {amount(Number(detail.vatAmount))} ₫</strong></div><div className="grand"><span>Tổng thanh toán</span><strong>{amount(Number(detail.totalAmount))} ₫</strong></div></div>
+            <div className="inventory-receipt-paper-table-wrap"><table className="inventory-receipt-paper-table"><thead><tr><th>#</th><th>Sản phẩm / SKU</th><th>Phân loại / biến thể</th><th>Nhóm hàng</th><th>Số lượng / kg</th><th>Đơn giá nhập</th><th>Thành tiền</th></tr></thead><tbody>{detail.items.map((item, index) => {
+              const spheres = detail.sphereItems?.filter((sphere) => sphere.productId === item.productId) || [];
+              const totalSphereKg = spheres.reduce((total, sphere) => total + Number(sphere.weightKg || 0), 0);
+              const physicalItemLabel = /trụ/i.test(`${item.categoryName || ""} ${item.productName}`) ? "trụ" : "quả cầu";
+              return <Fragment key={item.id}>
+                <tr><td>{index + 1}</td><td><strong>{item.productName}</strong><small>{item.productSku}</small></td><td>{receiptVariantLabel(item)}</td><td>{[kindName(item.kind), item.categoryName, item.stoneName].filter(Boolean).join(" · ")}</td><td>{Number(item.quantityKg) > 0 ? `${kg(item.quantityKg)} kg` : amount(item.quantity)}</td><td>{item.unitCost == null ? "Chưa có dữ liệu" : `${amount(Number(item.unitCost))} ₫`}</td><td>{item.lineTotal == null ? "Chưa có dữ liệu" : `${amount(Number(item.lineTotal))} ₫`}</td></tr>
+                {spheres.length > 0 && <tr className="inventory-receipt-sphere-detail-row"><td colSpan={7}><details><summary>{spheres.length} {physicalItemLabel} · tổng {kg(totalSphereKg)} kg</summary><ol>{spheres.map((sphere, sphereIndex) => <li key={sphere.id}>{sphere.label || `${physicalItemLabel} ${sphereIndex + 1}`}: <strong>{kg(sphere.weightKg)} kg</strong></li>)}</ol></details></td></tr>}
+              </Fragment>;
+            })}</tbody></table></div>
+            <div className="inventory-receipt-calculation"><div><span>Tổng số lượng</span><strong>{amount(detail.totalQuantity)} món</strong></div>{Number(detail.totalQuantityKg) > 0 && <div><span>Tổng khối lượng</span><strong>{kg(detail.totalQuantityKg)} kg</strong></div>}<div><span>Tiền hàng</span><strong>{amount(Number(detail.subtotalAmount))} ₫</strong></div><div><span>Chiết khấu ({amount(Number(detail.discountPercent))}%)</span><strong>− {amount(Number(detail.discountAmount))} ₫</strong></div><div><span>VAT ({amount(Number(detail.vatPercent))}%)</span><strong>+ {amount(Number(detail.vatAmount))} ₫</strong></div><div className="grand"><span>Tổng thanh toán</span><strong>{amount(Number(detail.totalAmount))} ₫</strong></div></div>
             {(detail.note || detail.additionalNote) && <div className="inventory-receipt-notes"><strong>Ghi chú</strong>{detail.note && <p>{detail.note}</p>}{detail.additionalNote && <p>{detail.additionalNote}</p>}</div>}
             {detail.documentUrls?.length > 0 && <div className="inventory-receipt-documents"><strong>Chứng từ đính kèm</strong><div>{detail.documentUrls.map((url, index) => <a key={`${url}-${index}`} href={`${apiBaseUrl}${url}`} target="_blank" rel="noreferrer">{url.toLocaleLowerCase("vi").endsWith(".pdf") ? "PDF" : "Ảnh"} chứng từ {index + 1} · Mở</a>)}</div></div>}
             <footer className="inventory-receipt-signatures"><div>Người lập phiếu<span>{detail.receiver || ""}</span></div><div>Người giao hàng<span>{detail.supplierName || ""}</span></div><div>Người nhận hàng<span>{detail.receiver || ""}</span></div></footer>

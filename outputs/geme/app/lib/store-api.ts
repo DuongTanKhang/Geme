@@ -5,7 +5,7 @@ export type StoreCategory = {
   id: string;
   name: string;
   slug: string;
-  kind: "JEWELRY" | "GEMSTONE";
+  kind: "JEWELRY" | "GEMSTONE" | "OTHER";
   usage: "PRODUCT_CATEGORY" | "GEMSTONE_TYPE";
   level: number;
   parentId: string | null;
@@ -45,6 +45,16 @@ export type StoreVariant = {
   videoUrl?: string | null;
 };
 
+export type StoreSphereItem = {
+  id: string;
+  label?: string | null;
+  weightKg: number;
+  price: number;
+  imageUrls: string[];
+  status: string;
+  sortOrder: number;
+};
+
 export type StoreReview = {
   rating: number;
   title?: string | null;
@@ -58,7 +68,7 @@ export type StoreProduct = {
   sku: string;
   name: string;
   slug: string;
-  kind: "JEWELRY" | "GEMSTONE";
+  kind: "JEWELRY" | "GEMSTONE" | "OTHER";
   categoryId?: string | null;
   gemstoneTypeId?: string | null;
   materialOptionId?: string | null;
@@ -85,6 +95,11 @@ export type StoreProduct = {
   price: number;
   originalPrice?: number | null;
   stock: number;
+  stockKg?: number;
+  hasWeightItems?: boolean;
+  sphereQuality?: string | null;
+  sphereStoneType?: { id: string; name: string; slug: string; group?: { id: string; name: string; slug?: string } | null } | null;
+  sphereItems?: StoreSphereItem[];
   category?: StoreCategory | null;
   gemstoneType?: Pick<StoreCategory, "id" | "name" | "slug"> | null;
   materialOption?: StoreMaterial | null;
@@ -375,6 +390,26 @@ function asStoreProduct(value: any): StoreProduct {
         sortOrder: Number(variant.sortOrder ?? index) || 0,
       }))
     : [];
+  const hasWeightItems = Number(value._count?.sphereItems) > 0 || (Array.isArray(value.sphereItems) && value.sphereItems.length > 0);
+  const availableSphereRows = Array.isArray(value.sphereItems) ? value.sphereItems.filter((item: any) => String(item.status || "AVAILABLE") === "AVAILABLE") : [];
+  const availableSphereKg = Math.round(availableSphereRows.reduce((sum: number, item: any) => sum + (Number(item.weightKg) || 0), 0) * 1000) / 1000;
+  const aggregateSphereKg = Math.round((Number(value.stockKg) || 0) * 1000) / 1000;
+  const aggregateSphereCount = Number(value.stock) || 0;
+  const physicalInventoryLinked = hasWeightItems
+    && aggregateSphereCount === availableSphereRows.length
+    && Math.abs(aggregateSphereKg - availableSphereKg) < 0.0005;
+  const sphereItems: StoreSphereItem[] = physicalInventoryLinked
+    ? availableSphereRows.map((item: any, index: number) => ({
+        id: String(item.id || ""),
+        label: item.label ?? null,
+        weightKg: Number(item.weightKg) || 0,
+        price: Number(item.price) || 0,
+        imageUrls: Array.isArray(item.imageUrls) ? item.imageUrls.filter((url: unknown) => typeof url === "string" && url.trim()) : [],
+        status: String(item.status || "AVAILABLE"),
+        sortOrder: Number(item.sortOrder ?? index) || 0,
+      })).filter((item: StoreSphereItem) => item.id && item.weightKg > 0 && item.price > 0 && item.imageUrls.length > 0 && item.status === "AVAILABLE")
+    : [];
+  const saleableSphereKg = Math.round(sphereItems.reduce((sum, item) => sum + item.weightKg, 0) * 1000) / 1000;
   const categoryPricingMode = String(value.category?.pricingMode || "");
   const variantPrices = variants.map((variant) => variant.price * (value.kind === "GEMSTONE" && ["GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"].includes(categoryPricingMode) ? Number(variant.carat || 0) : 1)).filter((price) => price > 0);
   const variantOriginalPrices = variants.map((variant) => Number(variant.originalPrice || 0) * (value.kind === "GEMSTONE" && ["GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"].includes(categoryPricingMode) ? Number(variant.carat || 0) : 1)).filter((price) => price > 0);
@@ -383,7 +418,7 @@ function asStoreProduct(value: any): StoreProduct {
     sku: String(value.sku || ""),
     name: String(value.name || ""),
     slug: String(value.slug || ""),
-    kind: value.kind === "GEMSTONE" ? "GEMSTONE" : "JEWELRY",
+    kind: value.kind === "GEMSTONE" ? "GEMSTONE" : value.kind === "OTHER" ? "OTHER" : "JEWELRY",
     categoryId: value.categoryId ?? null,
     gemstoneTypeId: value.gemstoneTypeId ?? null,
     materialOptionId: value.materialOptionId ?? null,
@@ -407,9 +442,13 @@ function asStoreProduct(value: any): StoreProduct {
     jewelryStoneGroup: value.jewelryStoneGroup ? { id: String(value.jewelryStoneGroup.id), slug: String(value.jewelryStoneGroup.slug), name: String(value.jewelryStoneGroup.name), pinnedOrder: value.jewelryStoneGroup.pinnedOrder ?? null, sortOrder: Number(value.jewelryStoneGroup.sortOrder) || 0 } : null,
     isFeatured: Boolean(value.isFeatured),
     isPremiumGemstone,
-    price: isPremiumGemstone ? 0 : variants.length && variantPrices.length ? Math.min(...variantPrices) : Number(value.price) || 0,
-    originalPrice: isPremiumGemstone ? null : variants.length && variantOriginalPrices.length ? Math.min(...variantOriginalPrices) : value.originalPrice == null ? null : Number(value.originalPrice),
-    stock: Number(value.stock) || 0,
+    price: isPremiumGemstone ? 0 : hasWeightItems ? sphereItems.length ? Math.min(...sphereItems.map((item) => item.price)) : 0 : variants.length && variantPrices.length ? Math.min(...variantPrices) : Number(value.price) || 0,
+    originalPrice: isPremiumGemstone || hasWeightItems ? null : variants.length && variantOriginalPrices.length ? Math.min(...variantOriginalPrices) : value.originalPrice == null ? null : Number(value.originalPrice),
+    stock: hasWeightItems ? sphereItems.length : Number(value.stock) || 0,
+    stockKg: hasWeightItems ? saleableSphereKg : Number(value.stockKg) || 0,
+    hasWeightItems,
+    sphereQuality: typeof value.sphereQuality === "string" ? value.sphereQuality : null,
+    sphereStoneType: value.sphereStoneType ? { id: String(value.sphereStoneType.id), name: String(value.sphereStoneType.name), slug: String(value.sphereStoneType.slug || value.sphereStoneType.name), group: value.sphereStoneType.group ? { id: String(value.sphereStoneType.group.id), name: String(value.sphereStoneType.group.name), slug: value.sphereStoneType.group.slug } : null } : null,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     category: value.category ? { id: value.category.id, name: value.category.name, slug: value.category.slug, kind: value.category.kind, usage: value.category.usage, level: Number(value.category.level) || 1, parentId: value.category.parentId ?? null, status: value.category.status, sortOrder: Number(value.category.sortOrder) || 0, pricingMode: value.category.pricingMode } : null,
@@ -417,6 +456,7 @@ function asStoreProduct(value: any): StoreProduct {
     materialOption: value.materialOption ? { id: value.materialOption.id, name: value.materialOption.name, slug: value.materialOption.slug, scope: value.materialOption.scope, kind: value.materialOption.kind, active: Boolean(value.materialOption.active), sortOrder: Number(value.materialOption.sortOrder) || 0 } : null,
     images,
     variants,
+    sphereItems,
     reviews: Array.isArray(value.reviews) ? value.reviews.map((review: any) => ({
       rating: Number(review.rating) || 0,
       title: review.title ?? null,

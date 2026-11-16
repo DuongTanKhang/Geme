@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
+import { usesPhysicalItemInventory } from "./physical-item-inventory.js";
 import { Observable, Subject, interval, merge, map } from "rxjs";
 import { PrismaService } from "../prisma/prisma.service.js";
 import type { Prisma } from "../generated/prisma/client.js";
@@ -9,6 +10,8 @@ import { ensureCustomerForPaidOrder } from "./customer-profile.js";
 import { sanitizeBlogHtml } from "./blog-html.js";
 import { calculateCheckoutPrice, getCheckoutPromotionValue, loadActiveStorePromotions, type CheckoutPromotion } from "./checkout-pricing.js";
 import { canTransitionOrder } from "./order-state.js";
+import { getOrderPaymentFlags } from "./order-payment-mode.js";
+import { adminOrderQrSnapshot } from "./admin-order-qr.js";
 import { getInventoryReservationExpiry, getQrPaymentWindow } from "./reservation-expiry.js";
 import { assertBangleQualityImages, normalizeBangleQuality, synchronizeBangleVariantMedia } from "./bangle-variant-media.js";
 import { isNewLabelActive } from "./new-arrivals.rules.js";
@@ -96,6 +99,72 @@ const gemstoneSkuSuffix = (cut: string, pricingMode: string, size: string, carat
   return `${base}S${gemstoneSizeSkuToken(size)}`;
 };
 const isCaratPricing = (pricingMode: string) => pricingMode === "GEMSTONE_CARAT" || pricingMode === "GEMSTONE_CARAT_AND_QUALITY";
+const inventoryKgScale = 1000;
+const isWeightBasedProduct = (product: { kind?: unknown; sku?: unknown; name?: unknown; category?: { name?: unknown } | null }) =>
+  String(product.kind || "").toLocaleUpperCase("en") === "OTHER" && usesPhysicalItemInventory(product);
+const normalizeInventoryKg = (value: unknown, label = "Khối lượng") => {
+  const normalized = typeof value === "string" ? value.trim().replace(",", ".") : value;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1_000_000 || Math.abs(Math.round(parsed * inventoryKgScale) - parsed * inventoryKgScale) > 1e-8) {
+    throw new BadRequestException(`${label} phải lớn hơn 0, tối đa 1.000.000 kg và có tối đa 3 chữ số thập phân.`);
+  }
+  return Math.round(parsed * inventoryKgScale) / inventoryKgScale;
+};
+const normalizeCatalogText = (value: unknown) => String(value || "")
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .replace(/[đĐ]/g, "d")
+  .toLocaleLowerCase("vi");
+const sphereHierarchySlug = (value: string) => normalizeCatalogText(value)
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+|-+$/g, "")
+  .slice(0, 140);
+const normalizeSphereHierarchy = (value: unknown) => {
+  const raw = value && typeof value === "object" ? value as Input : {};
+  const groupName = String(raw.sphereStoneGroupName || raw.groupName || "").trim().slice(0, 120);
+  const typeName = String(raw.sphereStoneTypeName || raw.typeName || "").trim().slice(0, 120);
+  const quality = String(raw.sphereQuality || raw.quality || "").trim().slice(0, 60);
+  return { groupName, typeName, quality };
+};
+const hasSphereHierarchy = (value: { groupName?: string; typeName?: string; quality?: string }) => Boolean(value.groupName && value.typeName && value.quality);
+// Keep the existing storage contract; Quả cầu and Trụ share this hierarchy.
+const isSphereInventoryProduct = usesPhysicalItemInventory;
+const sumSphereWeights = (items: Array<{ weightKg: number }>) => Math.round(items.reduce((sum, item) => sum + item.weightKg, 0) * inventoryKgScale) / inventoryKgScale;
+const availableSphereWeight = (items: Array<{ weightKg: unknown }>) => Math.round(items.reduce((sum, item) => sum + (Number(item.weightKg) || 0), 0) * inventoryKgScale) / inventoryKgScale;
+const physicalSphereInventoryMatches = (product: { stock?: unknown; stockKg?: unknown; sphereItems?: Array<{ weightKg: unknown }> }) =>
+  Number(product.stock) === (product.sphereItems || []).length
+  && Math.abs((Number(product.stockKg) || 0) - availableSphereWeight(product.sphereItems || [])) < 0.0005;
+const weightedProductPublicationIssue = (product: {
+  stock?: unknown;
+  stockKg?: unknown;
+  sphereItems?: Array<{ label?: string | null; weightKg: unknown; price: unknown; imageUrls?: string[]; status?: unknown }>;
+}) => {
+  const available = (product.sphereItems || []).filter((item) => String(item.status || "AVAILABLE") === "AVAILABLE");
+  if (!available.length) return "chưa có món nào còn hàng.";
+  const inventoryKg = availableSphereWeight(available);
+  if (Number(product.stock) !== available.length || Math.abs((Number(product.stockKg) || 0) - inventoryKg) >= 0.0005) {
+    return "tồn số lượng hoặc tổng kg chưa khớp danh sách từng món.";
+  }
+  const missingWeight = available.filter((item) => !(Number(item.weightKg) > 0));
+  if (missingWeight.length) return `${missingWeight.length} món chưa có khối lượng hợp lệ.`;
+  const missingPrice = available.filter((item) => !(Number(item.price) > 0));
+  if (missingPrice.length) return `${missingPrice.length} món chưa có giá bán.`;
+  const missingImage = available.filter((item) => !Array.isArray(item.imageUrls) || item.imageUrls.length === 0);
+  if (missingImage.length) return `${missingImage.length} món chưa có ảnh.`;
+  return null;
+};
+const normalizeSphereItems = (value: unknown) => {
+  if (value == null) return [] as Array<{ label: string | null; weightKg: number }>;
+  if (!Array.isArray(value)) throw new BadRequestException("Danh sách món không hợp lệ.");
+  if (value.length > 1000) throw new BadRequestException("Mỗi SKU món được nhập tối đa 1.000 món trong một phiếu.");
+  return value.map((item, index) => {
+    const draft = item && typeof item === "object" ? item as Input : {};
+    return {
+      label: String(draft.label || "").trim().slice(0, 120) || null,
+      weightKg: normalizeInventoryKg(draft.weightKg, `Khối lượng món ${index + 1}`),
+    };
+  });
+};
 const variantSellPrice = (product: Input, variant: Input | null | undefined) => {
   const base = Number(variant?.price ?? product.price ?? 0);
   const mode = product.category?.pricingMode;
@@ -158,11 +227,14 @@ const requiredJewelryCategories = [
 const requiredJewelryCategorySlugs = new Set<string>(requiredJewelryCategories.map((category) => category.slug));
 const isRequiredJewelryRoot = (category: { slug: string; kind: string; level: number }) => category.slug === "trang-suc" && category.kind === "JEWELRY" && category.level === 1;
 const isRequiredJewelryChild = (category: { slug: string; kind: string; level: number; parentId?: string | null }, rootId: string) => category.kind === "JEWELRY" && category.level === 2 && category.parentId === rootId && requiredJewelryCategorySlugs.has(category.slug);
-const includeProduct = { category: true, gemstoneType: true, materialOption: true, jewelryStoneGroup: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { orderBy: { sortOrder: "asc" as const } } };
+const includeProduct = { category: true, gemstoneType: true, materialOption: true, jewelryStoneGroup: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { orderBy: { sortOrder: "asc" as const } }, sphereItems: { orderBy: { sortOrder: "asc" as const }, select: { id: true, label: true, weightKg: true, price: true, imageUrls: true, status: true, sortOrder: true } } } satisfies Prisma.ProductInclude;
 const selectAdminProductSummary = {
   id: true, sku: true, name: true, kind: true, categoryId: true, gemstoneTypeId: true, materialOptionId: true,
-  jewelryStoneGroupId: true, status: true, isNew: true, newUntil: true, firstPublishedAt: true, publicationHistoryKnown: true, isPremiumGemstone: true, price: true, originalPrice: true, stock: true,
+  jewelryStoneGroupId: true, status: true, isNew: true, newUntil: true, firstPublishedAt: true, publicationHistoryKnown: true, isPremiumGemstone: true, price: true, originalPrice: true, stock: true, stockKg: true,
   pos365PriceSyncStatus: true, pos365PriceSyncError: true, pos365PriceSyncedAt: true,
+  sphereQuality: true,
+  sphereItems: { orderBy: { sortOrder: "asc" as const }, select: { id: true, label: true, weightKg: true, price: true, imageUrls: true, status: true, sortOrder: true } },
+  sphereStoneType: { select: { id: true, name: true, group: { select: { id: true, name: true } } } },
   category: { select: { id: true, name: true, kind: true, level: true, parentId: true, pricingMode: true } },
   gemstoneType: { select: { id: true, name: true } },
   materialOption: { select: { id: true, name: true } },
@@ -171,14 +243,20 @@ const selectAdminProductSummary = {
 } satisfies Prisma.ProductSelect;
 // Product list rows do not need the full variant graph; product details are
 // loaded on demand, while price/order workflows keep using admin-summary.
-const { variants: _adminSummaryVariants, ...selectAdminProductList } = selectAdminProductSummary;
+const { variants: _adminSummaryVariants, sphereItems: adminSummarySphereItems, ...adminProductListBase } = selectAdminProductSummary;
+// Keep physical-item rows in the admin product list. Price profiles and
+// inventory need per-piece price, kg, status, and media even when the full
+// variant graph is intentionally omitted from the list endpoint.
+const selectAdminProductList = { ...adminProductListBase, sphereItems: adminSummarySphereItems };
 const includeStorefrontProduct = {
   category: { select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true, status: true, sortOrder: true, pricingMode: true } },
   gemstoneType: { select: { id: true, name: true, slug: true } },
   materialOption: { select: { id: true, name: true, slug: true, scope: true, kind: true, active: true } },
   images: { orderBy: { sortOrder: "asc" as const }, take: 2, select: { url: true, alt: true, sortOrder: true, isPrimary: true } },
   variants: { orderBy: { sortOrder: "asc" as const }, select: { id: true, sku: true, quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, originalPrice: true, stock: true, imageUrls: true, videoUrl: true, sortOrder: true } },
-};
+  sphereItems: { where: { status: "AVAILABLE" }, orderBy: { sortOrder: "asc" as const }, select: { id: true, label: true, weightKg: true, price: true, imageUrls: true, status: true, sortOrder: true } },
+  _count: { select: { sphereItems: true } },
+} satisfies Prisma.ProductInclude;
 const selectStorefrontListing = {
   id: true,
   sku: true,
@@ -205,6 +283,9 @@ const selectStorefrontListing = {
   heightCm: true,
   coverVideoUrl: true,
   stock: true,
+  stockKg: true,
+  sphereQuality: true,
+  sphereStoneType: { select: { id: true, name: true, slug: true, group: { select: { id: true, name: true, slug: true } } } },
   createdAt: true,
   updatedAt: true,
   category: { select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true, status: true, sortOrder: true, pricingMode: true } },
@@ -213,6 +294,8 @@ const selectStorefrontListing = {
   jewelryStoneGroup: { select: { id: true, name: true, slug: true, active: true, sortOrder: true, pinnedOrder: true } },
   images: { orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }], take: 2, select: { url: true, alt: true, sortOrder: true, isPrimary: true } },
   variants: { select: { quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true, price: true } },
+  sphereItems: { where: { status: "AVAILABLE" }, orderBy: { sortOrder: "asc" }, select: { id: true, label: true, weightKg: true, price: true, imageUrls: true, status: true, sortOrder: true } },
+  _count: { select: { sphereItems: true } },
 } satisfies Prisma.ProductSelect;
 const includeStorefrontProductDetail = {
   category: { select: { id: true, name: true, slug: true, kind: true, usage: true, level: true, parentId: true, status: true, sortOrder: true, pricingMode: true } },
@@ -220,8 +303,10 @@ const includeStorefrontProductDetail = {
   materialOption: { select: { id: true, name: true, slug: true, scope: true, kind: true, active: true } },
   images: { orderBy: { sortOrder: "asc" as const }, select: { url: true, alt: true, sortOrder: true, isPrimary: true } },
   variants: { orderBy: { sortOrder: "asc" as const }, select: { id: true, sku: true, quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, originalPrice: true, stock: true, imageUrls: true, videoUrl: true, sortOrder: true } },
+  sphereItems: { where: { status: "AVAILABLE" }, orderBy: { sortOrder: "asc" as const }, select: { id: true, label: true, weightKg: true, price: true, imageUrls: true, status: true, sortOrder: true } },
+  _count: { select: { sphereItems: true } },
   reviews: { where: { status: "APPROVED" as const }, orderBy: { createdAt: "desc" as const }, take: 30, select: { rating: true, title: true, content: true, createdAt: true, customer: { select: { name: true } } } },
-};
+} satisfies Prisma.ProductInclude;
 const withoutPublicPriceForPremiumGemstone = (product: any) => product?.kind === "GEMSTONE" && product?.isPremiumGemstone
   ? {
       ...product,
@@ -246,6 +331,7 @@ const selectAdminOrder = {
   carrierStatusName: true, carrierStatusAt: true, carrierLocation: true, carrierFee: true,
   subtotal: true, discountAmount: true, loyaltyPointsRedeemed: true, loyaltyDiscountAmount: true, shippingFee: true, totalAmount: true, note: true,
   pos365SyncStatus: true, pos365SyncError: true, placedAt: true,
+  qrPaymentStartedAt: true, qrPaymentExpiresAt: true,
   customer: { select: { name: true, phone: true, email: true } },
   items: {
     select: {
@@ -624,12 +710,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   private categoryData(input: Input) {
     const name = String(input.name || "").trim();
     if (!name) throw new BadRequestException("Tên danh mục không được để trống.");
+    const kind = enumValue(input.kind, ["JEWELRY", "OTHER", "GEMSTONE"], "JEWELRY") as any;
     return {
       name,
       slug: slugify(input.slug || name),
-      kind: enumValue(input.kind, ["JEWELRY", "OTHER", "GEMSTONE"], "JEWELRY") as any,
+      kind,
       usage: enumValue(input.usage, ["PRODUCT_CATEGORY", "GEMSTONE_TYPE"], "PRODUCT_CATEGORY") as any,
-      level: Math.max(1, Math.min(3, Number(input.level) || (input.parentId ? 2 : 1))),
+      level: Math.max(1, Math.min(kind === "OTHER" ? 4 : 3, Number(input.level) || (input.parentId ? 2 : 1))),
   pricingMode: enumValue(input.pricingMode, ["FIXED", "QUALITY", "QUALITY_AND_BEAD_SIZE", "GEMSTONE_SIZE", "GEMSTONE_CARAT", "GEMSTONE_CARAT_AND_QUALITY"], "FIXED") as any,
       parentId: input.parentId || null,
       description: input.description || null,
@@ -710,6 +797,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async validateCategoryHierarchy(data: Input, currentId?: string, allowInactiveParent = false) {
+    const maximumLevel = data.kind === "OTHER" ? 4 : 3;
+    if (data.level < 1 || data.level > maximumLevel) {
+      throw new BadRequestException(`Nhóm ${data.kind} chỉ hỗ trợ tối đa ${maximumLevel} cấp danh mục.`);
+    }
     if (data.usage === "GEMSTONE_TYPE" && (data.kind !== "GEMSTONE" || data.level !== 2)) {
       throw new BadRequestException("Loại đá phải là danh mục đá quý cấp 2.");
     }
@@ -893,8 +984,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     }
     let gallery: string[] | undefined;
     if (Object.hasOwn(input, "gallery")) {
-      if (!Array.isArray(input.gallery) || input.gallery.length > 10 || input.gallery.some((value: unknown) => typeof value !== "string" || value.trim().length > 2000)) {
-        throw new BadRequestException("Thư viện ảnh cần tối đa 10 đường dẫn hợp lệ, mỗi đường dẫn tối đa 2.000 ký tự.");
+      if (!Array.isArray(input.gallery) || input.gallery.length > 100 || input.gallery.some((value: unknown) => typeof value !== "string" || value.trim().length > 2000)) {
+        throw new BadRequestException("Thư viện ảnh cần tối đa 100 đường dẫn hợp lệ, mỗi đường dẫn tối đa 2.000 ký tự.");
       }
       gallery = input.gallery.map((value: string) => value.trim()).filter(Boolean);
     }
@@ -1034,6 +1125,42 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return this.updateProductFields(product.id, input, actor);
   }
 
+  async updateSphereItemPrices(idInput: string, rowsInput: unknown, actor: { id: string; correlationId?: string }) {
+    const productId = String(idInput || "").trim();
+    if (!productId) throw new BadRequestException("Thiếu mã sản phẩm.");
+    if (!Array.isArray(rowsInput) || rowsInput.length < 1 || rowsInput.length > 2000) throw new BadRequestException("Danh sách giá vật phẩm không hợp lệ.");
+    const rows = rowsInput.map((row: Input) => {
+      if (!row || Object.keys(row).some((key) => !["sphereItemId", "price"].includes(key))) throw new BadRequestException("Mỗi dòng chỉ gồm sphereItemId và price.");
+      const sphereItemId = String(row.sphereItemId || "").trim();
+      if (!sphereItemId) throw new BadRequestException("Thiếu mã món vật phẩm trong danh sách giá.");
+      const rawPrice = row.price == null || String(row.price).trim() === "" ? 0 : Number(row.price);
+      if (!Number.isSafeInteger(rawPrice) || rawPrice < 0 || rawPrice > 1_000_000_000_000) throw new BadRequestException(`Giá của món ${sphereItemId} phải là số nguyên từ 0 đến 1.000.000.000.000 ₫.`);
+      return { sphereItemId, price: rawPrice > 0 ? rawPrice : null };
+    });
+    if (new Set(rows.map((row) => row.sphereItemId)).size !== rows.length) throw new BadRequestException("Mỗi món vật phẩm chỉ được xuất hiện một lần trong danh sách giá.");
+
+    await this.prisma.$transaction(async (tx) => {
+      const product = await tx.product.findUnique({ where: { id: productId }, include: { category: true, sphereItems: { select: { id: true, price: true } } } });
+      if (!product) throw new NotFoundException("Không tìm thấy sản phẩm.");
+      if (product.kind !== "OTHER" || !usesPhysicalItemInventory(product)) throw new BadRequestException("Chỉ sản phẩm Vật Phẩm quản lý tồn theo từng món/kg mới có giá từng món.");
+      const existing = new Map(product.sphereItems.map((item) => [item.id, item]));
+      for (const row of rows) if (!existing.has(row.sphereItemId)) throw new BadRequestException("Có món không thuộc SKU vật phẩm đang chọn. Tải lại hồ sơ giá rồi thử lại.");
+      const before = rows.map((row) => ({ sphereItemId: row.sphereItemId, price: existing.get(row.sphereItemId)?.price?.toString() || null }));
+      for (const row of rows) await tx.productSphereItem.update({ where: { id: row.sphereItemId }, data: { price: row.price } });
+      await tx.auditLog.create({ data: {
+        adminId: actor.id || null,
+        correlationId: actor.correlationId,
+        action: "WEIGHT_ITEM_PRICES_UPDATED",
+        entityType: "PRODUCT",
+        entityId: productId,
+        before: { sku: product.sku, items: before },
+        after: { sku: product.sku, items: rows.map((row) => ({ sphereItemId: row.sphereItemId, price: row.price })) },
+      } });
+    }, { isolationLevel: "Serializable", maxWait: 10_000, timeout: 60_000 });
+    this.publishCatalogChange("product", "updated", productId);
+    return this.adminProduct(productId);
+  }
+
   async updateProductPublication(id: string, statusInput: unknown, actor: { id: string; correlationId?: string }, reasonInput?: unknown) {
     const status = enumValue(statusInput, ["ACTIVE", "HIDDEN"], "");
     const reason = typeof reasonInput === "string" ? reasonInput.trim().slice(0, 1000) : "";
@@ -1041,7 +1168,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     try {
       const product = await this.prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "products" WHERE "id" = ${id}::uuid FOR UPDATE`;
-        const current = await tx.product.findUnique({ where: { id }, include: { category: { select: { slug: true } }, images: { select: { url: true } }, variants: { select: { sku: true, shape: true, quality: true, beadSize: true, stock: true, price: true, imageUrls: true, videoUrl: true } } } });
+        const current = await tx.product.findUnique({ where: { id }, include: { category: { select: { slug: true, name: true } }, images: { select: { url: true } }, variants: { select: { sku: true, shape: true, quality: true, beadSize: true, stock: true, price: true, imageUrls: true, videoUrl: true } }, sphereItems: { select: { label: true, weightKg: true, price: true, imageUrls: true, status: true } } } });
         if (!current) throw new NotFoundException("Không tìm thấy sản phẩm.");
         if (status === "ACTIVE") {
           if (current.kind === "JEWELRY" && current.category?.slug === "vong-kieng") {
@@ -1050,12 +1177,17 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             if (invalidVariants.length) throw new BadRequestException(`Không thể đăng bán Kiềng: ${invalidVariants.join(" ")}`);
             assertBangleQualityImages(current.sku, current.variants, undefined, current.images.map((image) => image.url));
           }
-          const availableStock = current.variants.length ? current.variants.reduce((sum, row) => sum + row.stock, 0) : current.stock;
-          if (availableStock <= 0) throw new BadRequestException(`Không thể đăng bán SKU ${current.sku}: tồn kho bằng 0. Hãy nhập kho trong Quản lý tồn kho.`);
-          if (!(current.kind === "GEMSTONE" && current.isPremiumGemstone)) {
-            const missingPriceSkus = current.variants.filter((row) => Number(row.price) <= 0).map((row) => row.sku || current.sku);
-            if (current.variants.length && missingPriceSkus.length) throw new BadRequestException(`Không thể đăng bán: SKU ${missingPriceSkus.join(", ")} chưa có giá bán hợp lệ. Cập nhật tại Hồ sơ giá.`);
-            if (!current.variants.length && Number(current.price || 0) <= 0) throw new BadRequestException(`Không thể đăng bán SKU ${current.sku}: chưa có giá bán hợp lệ. Cập nhật tại Hồ sơ giá.`);
+          if (isWeightBasedProduct(current)) {
+            const issue = weightedProductPublicationIssue(current);
+            if (issue) throw new BadRequestException(`Không thể đăng bán SKU ${current.sku}: ${issue} Cập nhật tồn kho, ảnh và giá riêng từng món trong Hồ sơ giá.`);
+          } else {
+            const availableStock = current.variants.length ? current.variants.reduce((sum, row) => sum + row.stock, 0) : current.stock;
+            if (availableStock <= 0) throw new BadRequestException(`Không thể đăng bán SKU ${current.sku}: tồn kho bằng 0. Hãy nhập kho trong Quản lý tồn kho.`);
+            if (!(current.kind === "GEMSTONE" && current.isPremiumGemstone)) {
+              const missingPriceSkus = current.variants.filter((row) => Number(row.price) <= 0).map((row) => row.sku || current.sku);
+              if (current.variants.length && missingPriceSkus.length) throw new BadRequestException(`Không thể đăng bán: SKU ${missingPriceSkus.join(", ")} chưa có giá bán hợp lệ. Cập nhật tại Hồ sơ giá.`);
+              if (!current.variants.length && Number(current.price || 0) <= 0) throw new BadRequestException(`Không thể đăng bán SKU ${current.sku}: chưa có giá bán hợp lệ. Cập nhật tại Hồ sơ giá.`);
+            }
           }
         }
         const statusChanged = current.status !== status;
@@ -1358,11 +1490,16 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         const isPublishingNow = hasExplicitStatus && data.status === "ACTIVE" && (!existingProduct || existingProduct.status !== "ACTIVE");
         if (isPublishingNow) {
           if (!id) throw new BadRequestException("Để đăng bán, hãy chọn một SKU đã có trong kho.");
-          const current = await tx.product.findUnique({ where: { id }, select: { status: true, stock: true, variants: { select: { stock: true } } } });
+          const current = await tx.product.findUnique({ where: { id }, select: { status: true, kind: true, sku: true, name: true, stock: true, stockKg: true, category: { select: { name: true } }, variants: { select: { stock: true } }, sphereItems: { select: { label: true, weightKg: true, price: true, imageUrls: true, status: true } } } });
           if (!current) throw new NotFoundException("Không tìm thấy sản phẩm trong kho.");
-          const availableStock = current.variants.length ? current.variants.reduce((sum, variant) => sum + variant.stock, 0) : current.stock;
-          if (current.status !== "ACTIVE" && availableStock <= 0) throw new BadRequestException("Chỉ có thể đăng bán SKU đang còn hàng trong kho.");
-          if (!(data.kind === "GEMSTONE" && data.isPremiumGemstone)) {
+          if (isWeightBasedProduct(current)) {
+            const issue = weightedProductPublicationIssue(current);
+            if (issue) throw new BadRequestException(`Không thể đăng bán SKU ${current.sku}: ${issue} Cập nhật tồn kho, ảnh và giá riêng từng món trong Hồ sơ giá.`);
+          } else {
+            const availableStock = current.variants.length ? current.variants.reduce((sum, variant) => sum + variant.stock, 0) : current.stock;
+            if (current.status !== "ACTIVE" && availableStock <= 0) throw new BadRequestException("Chỉ có thể đăng bán SKU đang còn hàng trong kho.");
+          }
+          if (!isWeightBasedProduct(current) && !(data.kind === "GEMSTONE" && data.isPremiumGemstone)) {
             const prices = variantCreate.length ? variantCreate.map((variant) => variant.price) : [Number(data.price) || 0];
             if (!prices.length || prices.some((price) => price <= 0)) throw new BadRequestException("Hãy điền giá bán trong Hồ sơ giá trước khi đăng sản phẩm.");
           }
@@ -1574,14 +1711,18 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           name: true,
           status: true,
           stock: true,
+          stockKg: true,
           minimumStock: true,
           price: true,
           kind: true,
           category: { select: { id: true, name: true, pricingMode: true } },
           gemstoneType: { select: { id: true, name: true } },
           materialOption: { select: { id: true, name: true, kind: true, scope: true } },
+          sphereQuality: true,
+          sphereStoneType: { select: { id: true, name: true, group: { select: { id: true, name: true } } } },
+          sphereItems: { where: { status: "AVAILABLE" }, orderBy: { sortOrder: "asc" }, select: { id: true, label: true, weightKg: true, price: true, status: true, sortOrder: true } },
           images: { orderBy: [{ isPrimary: "desc" }, { sortOrder: "asc" }], take: 1, select: { url: true, alt: true } },
-          variants: { orderBy: { sortOrder: "asc" }, select: { id: true, sku: true, quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, stock: true } },
+          variants: { orderBy: { sortOrder: "asc" }, select: { id: true, sku: true, quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true, price: true, stock: true, stockKg: true } },
         },
         orderBy: [{ updatedAt: "desc" }, { name: "asc" }],
         take: 5000,
@@ -1589,23 +1730,35 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       this.prisma.orderItem.groupBy({
         by: ["productId"],
         where: { order: { placedAt: { gte: monthStart }, status: { not: "CANCELLED" } } },
-        _sum: { quantity: true },
+        _sum: { quantity: true, quantityKg: true },
       }),
       this.inventoryMovements("8"),
       this.prisma.inventoryReservation.groupBy({
         by: ["productId", "variantId"],
         where: { status: "ACTIVE", product: { status: "ACTIVE" } },
-        _sum: { quantity: true },
+        _sum: { quantity: true, quantityKg: true },
       }),
     ]);
     const soldByProduct = new Map<string, number>();
-    for (const item of soldItems) if (item.productId) soldByProduct.set(item.productId, Number(item._sum.quantity) || 0);
+    const soldKgByProduct = new Map<string, number>();
+    for (const item of soldItems) {
+      if (!item.productId) continue;
+      soldByProduct.set(item.productId, Number(item._sum.quantity) || 0);
+      soldKgByProduct.set(item.productId, Number(item._sum.quantityKg) || 0);
+    }
     const reservedByProduct = new Map<string, number>();
+    const reservedKgByProduct = new Map<string, number>();
     const reservedByVariant = new Map<string, number>();
+    const reservedKgByVariant = new Map<string, number>();
     for (const reservation of reservations) {
       const quantity = Number(reservation._sum.quantity) || 0;
+      const quantityKg = Number(reservation._sum.quantityKg) || 0;
       reservedByProduct.set(reservation.productId, (reservedByProduct.get(reservation.productId) || 0) + quantity);
-      if (reservation.variantId) reservedByVariant.set(reservation.variantId, quantity);
+      reservedKgByProduct.set(reservation.productId, (reservedKgByProduct.get(reservation.productId) || 0) + quantityKg);
+      if (reservation.variantId) {
+        reservedByVariant.set(reservation.variantId, quantity);
+        reservedKgByVariant.set(reservation.variantId, quantityKg);
+      }
     }
     return {
       products: products.map((product) => ({
@@ -1614,13 +1767,23 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         availableStock: product.variants.length ? product.variants.reduce((sum, variant) => sum + variant.stock, 0) : product.stock,
         reservedStock: reservedByProduct.get(product.id) || 0,
         onHandStock: (product.variants.length ? product.variants.reduce((sum, variant) => sum + variant.stock, 0) : product.stock) + (reservedByProduct.get(product.id) || 0),
+        stockKg: Number(product.stockKg) || 0,
+        availableStockKg: Number(product.stockKg) || 0,
+        reservedStockKg: reservedKgByProduct.get(product.id) || 0,
+        onHandStockKg: (Number(product.stockKg) || 0) + (reservedKgByProduct.get(product.id) || 0),
+        sphereItems: product.sphereItems.map((item) => ({ ...item, weightKg: Number(item.weightKg) || 0 })),
         variants: product.variants.map((variant) => ({
           ...variant,
           availableStock: variant.stock,
           reservedStock: reservedByVariant.get(variant.id) || 0,
           onHandStock: variant.stock + (reservedByVariant.get(variant.id) || 0),
+          stockKg: Number(variant.stockKg) || 0,
+          availableStockKg: Number(variant.stockKg) || 0,
+          reservedStockKg: reservedKgByVariant.get(variant.id) || 0,
+          onHandStockKg: (Number(variant.stockKg) || 0) + (reservedKgByVariant.get(variant.id) || 0),
         })),
         soldThisMonth: soldByProduct.get(product.id) || 0,
+        soldThisMonthKg: soldKgByProduct.get(product.id) || 0,
       })),
       recentMovements: movements,
       warehouse: "Kho chính",
@@ -1630,6 +1793,90 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   inventoryMovements(limitInput?: string) {
     const limit = Math.min(Math.max(Number(limitInput) || 20, 1), 100);
     return this.prisma.inventoryMovement.findMany({ orderBy: { createdAt: "desc" }, take: limit });
+  }
+
+  async sphereInventoryCatalog() {
+    return this.prisma.sphereStoneGroup.findMany({
+      where: { isActive: true },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        stoneTypes: {
+          where: { isActive: true },
+          orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+          select: { id: true, name: true },
+        },
+      },
+    });
+  }
+
+  /** Administrative taxonomy for weight-managed physical items (currently spheres).
+   * It deliberately does not use Category: those rows describe storefront navigation,
+   * while this hierarchy describes a product's stone and quality source of truth. */
+  async sphereStoneCatalogAdmin() {
+    return this.prisma.sphereStoneGroup.findMany({
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      select: {
+        id: true, name: true, slug: true, sortOrder: true, isActive: true,
+        stoneTypes: {
+          orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+          select: {
+            id: true, groupId: true, name: true, slug: true, sortOrder: true, isActive: true,
+            _count: { select: { products: true } },
+          },
+        },
+      },
+    });
+  }
+
+  private sphereStoneText(value: unknown, label: string) {
+    const text = String(value || "").trim().replace(/\s+/g, " ").slice(0, 120);
+    if (text.length < 2) throw new BadRequestException(`${label} cần có ít nhất 2 ký tự.`);
+    return text;
+  }
+
+  private sphereStoneSlug(value: unknown, fallback: string) {
+    const slug = sphereHierarchySlug(String(value || "").trim() || fallback);
+    if (!slug) throw new BadRequestException("Slug loại đá không hợp lệ.");
+    return slug;
+  }
+
+  private async nextSphereStoneSortOrder(model: "group" | "type", groupId?: string) {
+    const aggregate = model === "group"
+      ? await this.prisma.sphereStoneGroup.aggregate({ _max: { sortOrder: true } })
+      : await this.prisma.sphereStoneType.aggregate({ where: groupId ? { groupId } : undefined, _max: { sortOrder: true } });
+    return Number(aggregate._max.sortOrder || 0) + 1;
+  }
+
+  async saveSphereStoneGroup(input: Input, id?: string) {
+    const current = id ? await this.prisma.sphereStoneGroup.findUnique({ where: { id } }) : null;
+    if (id && !current) throw new NotFoundException("Không tìm thấy nhóm đá Vật phẩm.");
+    const name = this.sphereStoneText(input.name ?? current?.name, "Tên nhóm đá");
+    const slug = this.sphereStoneSlug(input.slug, name);
+    const duplicate = await this.prisma.sphereStoneGroup.findFirst({ where: { slug, ...(id ? { NOT: { id } } : {}) }, select: { id: true } });
+    if (duplicate) throw new ConflictException("Slug nhóm đá Vật phẩm đã tồn tại.");
+    const sortOrder = Number.isFinite(Number(input.sortOrder)) ? Math.max(0, Math.floor(Number(input.sortOrder))) : (current?.sortOrder ?? await this.nextSphereStoneSortOrder("group"));
+    const data = { name, slug, sortOrder, isActive: typeof input.isActive === "boolean" ? input.isActive : (current?.isActive ?? true) };
+    if (id) await this.prisma.sphereStoneGroup.update({ where: { id }, data });
+    else await this.prisma.sphereStoneGroup.create({ data });
+    return this.sphereStoneCatalogAdmin();
+  }
+
+  async saveSphereStoneType(input: Input, id?: string) {
+    const current = id ? await this.prisma.sphereStoneType.findUnique({ where: { id } }) : null;
+    if (id && !current) throw new NotFoundException("Không tìm thấy loại đá Vật phẩm.");
+    const groupId = String(input.groupId || current?.groupId || "").trim();
+    if (!groupId || !await this.prisma.sphereStoneGroup.findUnique({ where: { id: groupId }, select: { id: true } })) throw new BadRequestException("Hãy chọn nhóm đá mẹ hợp lệ.");
+    const name = this.sphereStoneText(input.name ?? current?.name, "Tên loại đá");
+    const slug = this.sphereStoneSlug(input.slug, name);
+    const duplicate = await this.prisma.sphereStoneType.findFirst({ where: { groupId, slug, ...(id ? { NOT: { id } } : {}) }, select: { id: true } });
+    if (duplicate) throw new ConflictException("Loại đá này đã có trong nhóm đá mẹ đã chọn.");
+    const sortOrder = Number.isFinite(Number(input.sortOrder)) ? Math.max(0, Math.floor(Number(input.sortOrder))) : (current?.sortOrder ?? await this.nextSphereStoneSortOrder("type", groupId));
+    const data = { groupId, name, slug, sortOrder, isActive: typeof input.isActive === "boolean" ? input.isActive : (current?.isActive ?? true) };
+    if (id) await this.prisma.sphereStoneType.update({ where: { id }, data });
+    else await this.prisma.sphereStoneType.create({ data });
+    return this.sphereStoneCatalogAdmin();
   }
 
   async inventorySkuRules() {
@@ -1760,7 +2007,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   inventoryReceipts(limitInput?: string) {
     const limit = Math.min(Math.max(Number(limitInput) || 100, 1), 500);
     return this.prisma.inventoryReceipt.findMany({
-      select: { id: true, receiptNo: true, receivedAt: true, supplierName: true, receiver: true, warehouseName: true, totalQuantity: true, totalAmount: true, status: true, pos365SyncStatus: true, pos365SyncCode: true, pos365SyncError: true, pos365SyncedAt: true },
+      select: { id: true, receiptNo: true, receivedAt: true, supplierName: true, receiver: true, warehouseName: true, totalQuantity: true, totalQuantityKg: true, totalAmount: true, status: true, pos365SyncStatus: true, pos365SyncCode: true, pos365SyncError: true, pos365SyncedAt: true },
       orderBy: { receivedAt: "desc" }, take: limit,
     });
   }
@@ -1799,8 +2046,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           const affected = new Set<string>();
           for (const item of current.items) {
             const requested = Math.max(0, Number(item.quantity) || 0);
-            if (!requested || !item.productId) {
-              if (!item.productId && requested) issues.push(`${item.productSku}: không còn liên kết sản phẩm trong GEME`);
+            const requestedKg = Math.max(0, Number(item.quantityKg) || 0);
+            if ((!requested && !requestedKg) || !item.productId) {
+              if (!item.productId && (requested || requestedKg)) issues.push(`${item.productSku}: không còn liên kết sản phẩm trong GEME`);
               continue;
             }
             if (item.variantId) {
@@ -1822,8 +2070,25 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
               } });
               affected.add(variant.productId);
             } else {
-              const product = await tx.product.findUnique({ where: { id: item.productId }, select: { id: true, sku: true, name: true, stock: true } });
+              const product = await tx.product.findUnique({ where: { id: item.productId }, select: { id: true, sku: true, name: true, kind: true, stock: true, stockKg: true } });
               if (!product) { issues.push(`${item.productSku}: không tìm thấy sản phẩm để đối trừ`); continue; }
+              if (isWeightBasedProduct(product)) {
+                if (!requestedKg) { issues.push(`${item.productSku}: thiếu khối lượng kg của dòng nhập`); continue; }
+                const beforeKg = Number(product.stockKg) || 0;
+                const deductedKg = Math.min(beforeKg, requestedKg);
+                if (deductedKg < requestedKg) issues.push(`${item.productSku}: cần trừ ${requestedKg} kg, tồn GEME chỉ còn ${beforeKg} kg`);
+                if (!deductedKg) continue;
+                const afterKg = Math.round((beforeKg - deductedKg) * inventoryKgScale) / inventoryKgScale;
+                await tx.product.update({ where: { id: product.id }, data: { stockKg: afterKg, soldOutAt: afterKg > 0 ? null : new Date() } });
+                await tx.inventoryMovement.create({ data: {
+                  productId: product.id, productName: item.productName, productSku: item.productSku, type: "OUT",
+                  quantity: 0, quantityKg: deductedKg, stockBefore: product.stock, stockAfter: product.stock,
+                  stockBeforeKg: beforeKg, stockAfterKg: afterKg, reference: `POS365-${current.receiptNo}`,
+                  note: `Đối trừ phiếu ${current.receiptNo} đã bị xóa trên POS365.`,
+                } });
+                affected.add(product.id);
+                continue;
+              }
               const before = Number(product.stock) || 0;
               const deducted = Math.min(before, requested);
               if (deducted < requested) issues.push(`${item.productSku}: cần trừ ${requested}, tồn GEME chỉ còn ${before}`);
@@ -1871,6 +2136,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           orderBy: { createdAt: "asc" },
           include: { variant: { select: { sku: true, quality: true, shape: true, beadSize: true, carat: true, gemstoneQuality: true } } },
         },
+        sphereItems: {
+          orderBy: { sortOrder: "asc" },
+          select: { id: true, productId: true, label: true, weightKg: true, status: true, sortOrder: true },
+        },
       },
     });
     if (!receipt) throw new NotFoundException("Không tìm thấy phiếu nhập kho.");
@@ -1914,12 +2183,14 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const items: Input[] = rawItems.map((item: Input) => {
       const productId = String(item.productId || "");
       const variantId = String(item.variantId || "") || null;
+      const sphereItemId = String(item.sphereItemId || "") || null;
       const quantity = Number(item.quantity);
       if (!productId) throw new BadRequestException("Chọn sản phẩm cho mỗi dòng xuất.");
       if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000) throw new BadRequestException("Số lượng xuất phải là số nguyên từ 1 đến 100.000.");
-      return { productId, variantId, quantity };
+      if (variantId && sphereItemId) throw new BadRequestException("Một dòng xuất không thể vừa chọn biến thể vừa chọn món vật phẩm.");
+      return { productId, variantId, sphereItemId, quantity };
     });
-    const uniqueLines = new Set(items.map((item) => `${item.productId}:${item.variantId || ""}`));
+    const uniqueLines = new Set(items.map((item) => `${item.productId}:${item.variantId || item.sphereItemId || ""}`));
     if (uniqueLines.size !== items.length) throw new BadRequestException("Mỗi sản phẩm hoặc phiên bản chỉ được có một dòng trong phiếu.");
     const reason = String(input.reason || "").toUpperCase();
     if (!["ORDER", "CUSTOMER", "TRANSFER", "OTHER"].includes(reason)) throw new BadRequestException("Chọn lý do xuất kho hợp lệ.");
@@ -1936,26 +2207,40 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         for (const item of items) {
           const product = await tx.product.findUnique({
             where: { id: item.productId },
-            include: { category: true, materialOption: true, gemstoneType: true, variants: { orderBy: { sortOrder: "asc" } } },
+            include: {
+              category: true, materialOption: true, gemstoneType: true, variants: { orderBy: { sortOrder: "asc" } },
+              sphereItems: { where: { status: "AVAILABLE" }, orderBy: { sortOrder: "asc" }, select: { id: true, label: true, weightKg: true, price: true, status: true } },
+              _count: { select: { sphereItems: true } },
+            },
           });
           if (!product) throw new NotFoundException("Không tìm thấy sản phẩm trong kho.");
           const variant = item.variantId ? product.variants.find((row) => row.id === item.variantId) : null;
           if (item.variantId && !variant) throw new BadRequestException("Phiên bản không thuộc sản phẩm đã chọn.");
           if (!variant && product.variants.length) throw new BadRequestException(`Chọn phiên bản cụ thể cho ${product.name} để trừ đúng số lượng tồn.`);
-          const unitPrice = variantSellPrice(product, variant);
+          const isWeightBased = isWeightBasedProduct(product);
+          let sphereItem: Input | null = null;
+          if (isWeightBased) {
+            if (variant) throw new BadRequestException(`Vật phẩm ${product.name} đang quản lý theo từng món/kg, không xuất theo biến thể.`);
+            if (!item.sphereItemId || item.quantity !== 1) throw new BadRequestException(`Chọn một món cụ thể của ${product.name} để xuất đúng số lượng và kg.`);
+            if (!physicalSphereInventoryMatches(product)) throw new ConflictException(`Tồn số lượng và kg của ${product.name} chưa khớp danh sách từng món. GEME cần kiểm tra kho.`);
+            sphereItem = product.sphereItems.find((row: any) => row.id === item.sphereItemId) || null;
+            if (!sphereItem || Number(sphereItem.weightKg) <= 0) throw new BadRequestException(`Món vật phẩm đã chọn của ${product.name} không còn trong kho.`);
+          } else if (item.sphereItemId) throw new BadRequestException(`Sản phẩm ${product.name} không quản lý tồn theo từng món/kg.`);
+          const unitPrice = sphereItem ? Number(sphereItem.price) || 0 : variantSellPrice(product, variant);
           const lineTotal = unitPrice * item.quantity;
           if (!Number.isSafeInteger(lineTotal) || lineTotal > 100000000000000) throw new BadRequestException("Giá trị dòng xuất vượt giới hạn.");
           const variantLabel = variantDisplayLabel(variant);
           const stoneName = product.kind === "GEMSTONE" ? product.gemstoneType?.name || product.materialOption?.name || null : product.materialOption?.name || null;
-          prepared.push({ ...item, product, variant, unitPrice, lineTotal, variantLabel, stoneName });
+          prepared.push({ ...item, product, variant, sphereItem, quantityKg: sphereItem ? Number(sphereItem.weightKg) : null, unitPrice, lineTotal, variantLabel: sphereItem ? `${product.sphereQuality || "Vật phẩm"} · ${Number(sphereItem.weightKg)} kg` : variantLabel, stoneName });
         }
         const totalAmount = prepared.reduce((sum, item) => sum + item.lineTotal, 0);
         if (!Number.isSafeInteger(totalAmount) || totalAmount > 99999999999999) throw new BadRequestException("Tổng giá trị phiếu xuất vượt giới hạn.");
+        const totalQuantityKg = Math.round(prepared.reduce((sum, item) => sum + (Number(item.quantityKg) || 0), 0) * inventoryKgScale) / inventoryKgScale;
         const recipient = String(input.recipient || "").trim().slice(0, 180) || null;
         const warehouseName = String(input.warehouseName || "Kho chính").trim().slice(0, 120) || "Kho chính";
         const note = String(input.note || "").trim().slice(0, 4000) || null;
         await tx.inventoryIssue.create({ data: {
-          id: issueId, issueNo, issuedAt, reason, recipient, warehouseName, status: "COMPLETED", note, totalQuantity, totalAmount,
+          id: issueId, issueNo, issuedAt, reason, recipient, warehouseName, status: "COMPLETED", note, totalQuantity, totalQuantityKg, totalAmount,
         } });
 
         for (const item of prepared) {
@@ -1971,6 +2256,33 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             const remaining = await tx.productPriceVariant.findMany({ where: { productId: product.id }, select: { stock: true } });
             const productStock = remaining.reduce((sum, row) => sum + row.stock, 0);
             await tx.product.update({ where: { id: product.id }, data: { stock: productStock, soldOutAt: productStock === 0 ? product.soldOutAt ?? new Date() : null } });
+          } else if (item.sphereItem) {
+            const weightKg = Number(item.sphereItem.weightKg);
+            const claimed = await tx.productSphereItem.updateMany({ where: { id: item.sphereItem.id, productId: product.id, status: "AVAILABLE" }, data: { status: "SOLD" } });
+            if (claimed.count !== 1) throw new BadRequestException(`Món ${weightKg} kg của ${product.name} vừa được xuất.`);
+            const before = await tx.product.findUniqueOrThrow({ where: { id: product.id }, select: { stock: true, stockKg: true } });
+            const updated = await tx.product.updateMany({ where: { id: product.id, stock: { gte: 1 }, stockKg: { gte: weightKg } }, data: { stock: { decrement: 1 }, stockKg: { decrement: weightKg } } });
+            if (updated.count !== 1) throw new BadRequestException(`Tồn số lượng hoặc kg của ${product.name} vừa thay đổi. Tải lại và thử lại.`);
+            const after = await tx.product.findUniqueOrThrow({ where: { id: product.id }, select: { stock: true, stockKg: true } });
+            stockBefore = before.stock;
+            stockAfter = after.stock;
+            const beforeKg = Number(before.stockKg) || 0;
+            const afterKg = Number(after.stockKg) || 0;
+            await tx.product.update({ where: { id: product.id }, data: { soldOutAt: stockAfter > 0 && afterKg > 0 ? null : product.soldOutAt ?? new Date() } });
+            await tx.inventoryIssueItem.create({ data: {
+              issueId, productId: product.id, sphereItemId: item.sphereItem.id,
+              productName: product.name, productSku: product.sku, variantLabel: item.variantLabel,
+              categoryName: product.category?.name || null, stoneName: item.stoneName,
+              kind: product.kind, quantity: 1, quantityKg: weightKg, unitPrice: item.unitPrice, lineTotal: item.lineTotal,
+            } });
+            await tx.inventoryMovement.create({ data: {
+              productId: product.id, sphereItemId: item.sphereItem.id, productName: product.name,
+              productSku: product.sku, variantLabel: item.variantLabel, type: "OUT", quantity: 1, quantityKg: weightKg,
+              stockBefore, stockAfter, stockBeforeKg: beforeKg, stockAfterKg: afterKg, reference: issueNo,
+              note: [reason, recipient, note].filter(Boolean).join(" · ").slice(0, 2000) || null,
+            } });
+            changedProductIds.push(product.id);
+            continue;
           } else {
             stockBefore = product.stock;
             if (stockBefore < item.quantity) throw new BadRequestException(`Số lượng xuất của ${product.name} vượt tồn kho hiện tại.`);
@@ -2027,7 +2339,10 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       const result = await this.prisma.$transaction(async (tx) => {
         const products = await tx.product.findMany({
           where: scope === "SELECTED" ? { id: { in: requestedIds } } : undefined,
-          include: { category: true, materialOption: true, gemstoneType: true, variants: { orderBy: { sortOrder: "asc" } } },
+          include: {
+            category: true, materialOption: true, gemstoneType: true, variants: { orderBy: { sortOrder: "asc" } },
+            sphereItems: { where: { status: "AVAILABLE" }, orderBy: { sortOrder: "asc" }, select: { id: true, label: true, weightKg: true, status: true } },
+          },
           orderBy: [{ sku: "asc" }],
         });
         if (scope === "SELECTED" && products.length !== requestedIds.length) {
@@ -2045,6 +2360,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
                 stoneName: product.kind === "GEMSTONE" ? product.gemstoneType?.name || product.materialOption?.name || null : product.materialOption?.name || null,
               });
             }
+          } else if (isWeightBasedProduct(product)) {
+            if (!physicalSphereInventoryMatches(product)) throw new ConflictException(`Tồn số lượng và kg của ${product.sku} không khớp từng món; không thể reset dòng này.`);
+            if (product.stock > 0) rows.push({
+              product, variant: null, sphereItems: product.sphereItems, quantity: product.stock, quantityKg: Number(product.stockKg),
+              unitPrice: 0, lineTotal: 0, variantLabel: null,
+              stoneName: product.kind === "GEMSTONE" ? product.gemstoneType?.name || product.materialOption?.name || null : product.materialOption?.name || null,
+            });
           } else if (product.stock > 0) {
             rows.push({
               product, variant: null, quantity: product.stock, unitPrice: 0, lineTotal: 0,
@@ -2056,6 +2378,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         if (!rows.length) throw new BadRequestException("Không có sản phẩm hoặc biến thể nào còn tồn để reset.");
 
         const totalQuantity = rows.reduce((sum, row) => sum + row.quantity, 0);
+        const totalQuantityKg = Math.round(rows.reduce((sum, row) => sum + (Number(row.quantityKg) || 0), 0) * inventoryKgScale) / inventoryKgScale;
         if (!Number.isSafeInteger(totalQuantity) || totalQuantity > 2_147_483_647) {
           throw new BadRequestException("Tổng số lượng reset vượt giới hạn của phiếu kho.");
         }
@@ -2067,7 +2390,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         }
         await tx.inventoryIssue.create({ data: {
           id: issueId, issueNo, issuedAt, reason: "OTHER", recipient: "Điều chỉnh tồn kho",
-          warehouseName: "Kho chính", status: "COMPLETED", note, totalQuantity, totalAmount: 0,
+          warehouseName: "Kho chính", status: "COMPLETED", note, totalQuantity, totalQuantityKg, totalAmount: 0,
         } });
 
         const touched = new Set<string>();
@@ -2075,7 +2398,42 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           const product = row.product;
           const variant = row.variant;
           const stockBefore = row.quantity as number;
-          if (variant) {
+          if (Array.isArray(row.sphereItems) && row.sphereItems.length) {
+            const sphereItems = row.sphereItems as Array<{ id: string; weightKg: number; label?: string | null }>;
+            let currentStock = stockBefore;
+            let currentKg = Number(row.quantityKg) || 0;
+            for (const sphere of sphereItems) {
+              const weightKg = Number(sphere.weightKg) || 0;
+              const claimed = await tx.productSphereItem.updateMany({
+                where: { id: sphere.id, productId: product.id, status: "AVAILABLE" }, data: { status: "UNAVAILABLE" },
+              });
+              if (claimed.count !== 1) throw new ConflictException(`Món ${sphere.id} của ${product.sku} vừa thay đổi. Tải lại rồi thử lại.`);
+              const afterStock = currentStock - 1;
+              const afterKg = Math.round((currentKg - weightKg) * inventoryKgScale) / inventoryKgScale;
+              await tx.inventoryIssueItem.create({ data: {
+                issueId, productId: product.id, sphereItemId: sphere.id,
+                productName: product.name, productSku: product.sku, variantLabel: `Reset kho · ${weightKg} kg`,
+                categoryName: product.category?.name || null, stoneName: row.stoneName,
+                kind: product.kind, quantity: 1, quantityKg: weightKg, unitPrice: 0, lineTotal: 0,
+              } });
+              await tx.inventoryMovement.create({ data: {
+                productId: product.id, sphereItemId: sphere.id, productName: product.name, productSku: product.sku,
+                variantLabel: `Reset kho · ${weightKg} kg`, type: "OUT", quantity: 1, quantityKg: weightKg,
+                stockBefore: currentStock, stockAfter: afterStock, stockBeforeKg: currentKg, stockAfterKg: afterKg,
+                reference: issueNo, note,
+              } });
+              currentStock = afterStock;
+              currentKg = afterKg;
+            }
+            const updated = await tx.product.updateMany({
+              where: { id: product.id, stock: stockBefore, stockKg: product.stockKg },
+              data: { stock: 0, stockKg: 0, soldOutAt: product.soldOutAt ?? issuedAt },
+            });
+            if (updated.count !== 1) throw new ConflictException(`Tồn số lượng hoặc kg của ${product.sku} vừa thay đổi. Tải lại rồi thử lại.`);
+            touched.add(product.id);
+            changedProductIds.push(product.id);
+            continue;
+          } else if (variant) {
             const updated = await tx.productPriceVariant.updateMany({
               where: { id: variant.id, productId: product.id, stock: stockBefore }, data: { stock: 0 },
             });
@@ -2278,16 +2636,25 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         if (!Number.isSafeInteger(quantity) || !Number.isSafeInteger(lineTotal)) throw new BadRequestException("Tổng số lượng hoặc tiền hàng vượt giới hạn.");
         return { ...item, quantity, unitCost: 0, lineTotal, newProduct: { ...item.newProduct, variants } };
       }
+      const rawQuantityKg = item.quantityKg == null || String(item.quantityKg).trim() === "" ? null : item.quantityKg;
+      const quantityKg = rawQuantityKg == null ? null : normalizeInventoryKg(rawQuantityKg);
+      const sphereItems = normalizeSphereItems(item.sphereItems);
+      const sphereHierarchy = normalizeSphereHierarchy(item);
       const quantity = Number(item.quantity);
       const allowUnknownCost = item.newProduct?.standalonePremiumGemstone === true && item.newProduct?.isPremiumGemstone === true;
       const rawUnitCost = item.unitCost == null || String(item.unitCost).trim() === "" ? null : Number(item.unitCost);
       const unitCost = rawUnitCost;
-      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000) throw new BadRequestException("Số lượng mỗi mặt hàng phải từ 1 đến 100.000.");
+      if (quantityKg === null && (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000)) throw new BadRequestException("Số lượng mỗi mặt hàng phải từ 1 đến 100.000.");
       if ((unitCost === null && !allowUnknownCost) || (unitCost !== null && (!Number.isSafeInteger(unitCost) || unitCost < 0 || unitCost > 1000000000000))) throw new BadRequestException("Đơn giá nhập phải là số nguyên không âm hợp lệ; chỉ mặt đá cao cấp được để trống khi chưa có dữ liệu.");
-      return { ...item, quantity, unitCost, lineTotal: unitCost === null ? null : quantity * unitCost };
+      if (sphereItems.length && quantityKg === null) throw new BadRequestException("Danh sách từng món chỉ dùng cho dòng nhập quản lý theo kg.");
+      if (sphereItems.length && sumSphereWeights(sphereItems) !== quantityKg) {
+        throw new BadRequestException(`Tổng khối lượng ${sphereItems.length} món là ${sumSphereWeights(sphereItems)} kg, phải đúng bằng tổng kg của SKU là ${quantityKg} kg.`);
+      }
+      return { ...item, quantity: quantityKg === null ? quantity : 0, quantityKg, sphereItems, sphereHierarchy, unitCost, lineTotal: unitCost === null ? null : Math.round((quantityKg ?? quantity) * unitCost) };
     });
     const receivedAt = parseDate(input.receivedAt || input.date);
-    const totalQuantity = items.reduce((sum: number, item: Input) => sum + item.quantity, 0);
+    const totalQuantity = items.reduce((sum: number, item: Input) => sum + (Array.isArray(item.sphereItems) && item.sphereItems.length ? item.sphereItems.length : item.quantity), 0);
+    const totalQuantityKg = items.reduce((sum: number, item: Input) => sum + (Number(item.quantityKg) || 0), 0);
     const subtotalAmount = items.reduce((sum: number, item: Input) => sum + (item.lineTotal ?? 0), 0);
     const discountPercent = Number(input.discountPercent ?? 0);
     const vatPercent = Number(input.vatPercent ?? 0);
@@ -2315,6 +2682,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         productId: item.productId ? String(item.productId) : null,
         variantId: item.variantId ? String(item.variantId) : null,
         quantity: Number(item.quantity),
+        quantityKg: item.quantityKg == null ? null : Number(item.quantityKg),
+        sphereHierarchy: item.sphereHierarchy || null,
+        sphereItems: Array.isArray(item.sphereItems)
+          ? item.sphereItems.map((sphere: Input) => ({ label: String(sphere.label || ""), weightKg: Number(sphere.weightKg) })).sort((left: Input, right: Input) => left.weightKg - right.weightKg || left.label.localeCompare(right.label))
+          : [],
         unitCost: item.unitCost == null ? null : Number(item.unitCost),
         newProduct: newProduct ? {
           name: String(newProduct.name || "").trim().toLocaleLowerCase("vi"),
@@ -2361,7 +2733,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           pos365SyncStatus: syncPos365 ? "PENDING" : null,
           pos365SyncNextAttemptAt: syncPos365 ? new Date() : null,
           additionalNote: String(input.additionalNote || "").trim() || null,
-          documentUrls: documents, totalQuantity, subtotalAmount, discountPercent, discountAmount, vatPercent, vatAmount, totalAmount,
+          documentUrls: documents, totalQuantity, totalQuantityKg, subtotalAmount, discountPercent, discountAmount, vatPercent, vatAmount, totalAmount,
         } });
 
         for (const item of items) {
@@ -2613,13 +2985,14 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             if (!product) throw new NotFoundException("Không tìm thấy mặt hàng trong kho.");
           }
 
-          const receiptRows: Array<{ variant: Input | null; quantity: number; unitCost: number | null }> = newProductVariantDrafts.length
+          const receiptRows: Array<{ variant: Input | null; quantity: number; quantityKg: number | null; unitCost: number | null }> = newProductVariantDrafts.length
             ? newProductVariantDrafts.map((draft) => ({
                 variant: (draft.variantId ? product.variants.find((entry: Input) => entry.id === draft.variantId) : null)
                   || product.variants.find((entry: Input) => entry.optionKey === draft.optionKey)
                   || product.variants.find((entry: Input) => String(entry.sku || "").toLocaleUpperCase("en") === String(draft.sku || "").toLocaleUpperCase("en"))
                   || null,
                 quantity: draft.quantity,
+                quantityKg: null,
                 unitCost: draft.unitCost,
               }))
             : (() => {
@@ -2627,12 +3000,81 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
                 const variant = variantId ? product.variants.find((entry: Input) => entry.id === variantId) || null : null;
                 if (variantId && !variant) throw new BadRequestException("Phiên bản không thuộc mặt hàng đã chọn.");
                 if (product.variants.length && !variant) throw new BadRequestException(`Chọn một biến thể cụ thể cho ${product.name} để nhập đúng tồn kho.`);
-                return [{ variant, quantity: item.quantity, unitCost: item.unitCost }];
+                return [{ variant, quantity: item.quantity, quantityKg: item.quantityKg == null ? null : Number(item.quantityKg), unitCost: item.unitCost }];
               })();
+          const sphereItems = Array.isArray(item.sphereItems)
+            ? item.sphereItems as Array<{ label: string | null; weightKg: number }>
+            : [];
+          const isSphereInventory = isSphereInventoryProduct(product);
+          let savedSphereHierarchy: { groupName: string; typeName: string; quality: string } | null = null;
+          if (isSphereInventory) {
+            if (!isWeightBasedProduct(product)) {
+              throw new BadRequestException(`Vật phẩm ${product.name} phải được cấu hình quản lý tồn theo kg trước khi nhập kho.`);
+            }
+            if (receiptRows.length !== 1 || receiptRows[0].quantityKg == null) {
+              throw new BadRequestException(`Vật phẩm ${product.name} phải nhập một tổng khối lượng kg cho SKU.`);
+            }
+            if (!sphereItems.length) {
+              throw new BadRequestException(`Vật phẩm ${product.name} cần thêm từng món và kg tương ứng trước khi lưu.`);
+            }
+            const hierarchy = normalizeSphereHierarchy(item.sphereHierarchy || item);
+            if (!hasSphereHierarchy(hierarchy)) {
+              throw new BadRequestException(`Vật phẩm ${product.sku} cần nhập đủ Nhóm đá, Loại đá và Chất lượng trước khi lưu.`);
+            }
+            const declaredKg = Math.round(Number(receiptRows[0].quantityKg) * inventoryKgScale) / inventoryKgScale;
+            const detailedKg = sumSphereWeights(sphereItems);
+            if (detailedKg !== declaredKg) {
+              throw new BadRequestException(`Tổng kg từng món (${detailedKg} kg) chưa khớp tổng kg SKU (${declaredKg} kg) của ${product.sku}.`);
+            }
+            const groupSlug = sphereHierarchySlug(hierarchy.groupName);
+            const typeSlug = sphereHierarchySlug(hierarchy.typeName);
+            if (!groupSlug || !typeSlug) throw new BadRequestException(`Nhóm đá hoặc loại đá của ${product.sku} không hợp lệ.`);
+            const group = await tx.sphereStoneGroup.upsert({
+              where: { slug: groupSlug },
+              create: { name: hierarchy.groupName, slug: groupSlug },
+              update: {},
+            });
+            const stoneType = await tx.sphereStoneType.upsert({
+              where: { groupId_slug: { groupId: group.id, slug: typeSlug } },
+              create: { groupId: group.id, name: hierarchy.typeName, slug: typeSlug },
+              update: {},
+            });
+            const persistedMapping = await tx.product.findUniqueOrThrow({
+              where: { id: product.id },
+              select: { sphereQuality: true, sphereStoneType: { select: { name: true, group: { select: { name: true } } } } },
+            });
+            if (persistedMapping.sphereStoneType && (
+              normalizeCatalogText(persistedMapping.sphereStoneType.group.name) !== normalizeCatalogText(hierarchy.groupName)
+              || normalizeCatalogText(persistedMapping.sphereStoneType.name) !== normalizeCatalogText(hierarchy.typeName)
+              || normalizeCatalogText(persistedMapping.sphereQuality) !== normalizeCatalogText(hierarchy.quality)
+            )) {
+              throw new BadRequestException(`SKU ${product.sku} đã thuộc ${persistedMapping.sphereStoneType.group.name} → ${persistedMapping.sphereStoneType.name} → ${persistedMapping.sphereQuality || "chưa rõ chất lượng"}. Không thể đổi phân cấp khi nhập kho.`);
+            }
+            if (!persistedMapping.sphereStoneType || !persistedMapping.sphereQuality) {
+              await tx.product.update({ where: { id: product.id }, data: { sphereStoneTypeId: stoneType.id, sphereQuality: hierarchy.quality } });
+            }
+            savedSphereHierarchy = hierarchy;
+          } else if (sphereItems.length) {
+            throw new BadRequestException(`Chỉ vật phẩm đã cấu hình quản lý theo món/kg mới được nhập danh sách từng món theo kg.`);
+          }
+          const lastSphereItem = isSphereInventory
+            ? await tx.productSphereItem.findFirst({
+                where: { productId: product.id },
+                orderBy: { sortOrder: "desc" },
+                select: { sortOrder: true },
+              })
+            : null;
+          let savedSphereItems = false;
           for (const row of receiptRows) {
             const variant = row.variant;
+            const isWeightBased = isWeightBasedProduct(product);
+            if (isWeightBased && variant) throw new BadRequestException(`Vật phẩm ${product.name} đang quản lý tồn theo kg nên không nhập theo biến thể.`);
+            if (isWeightBased && (row.quantityKg == null || row.quantityKg <= 0)) throw new BadRequestException(`Vật phẩm ${product.name} cần nhập khối lượng kg lớn hơn 0.`);
+            if (!isWeightBased && row.quantityKg != null) throw new BadRequestException(`${product.name} đang quản lý theo cái/viên, không nhận khối lượng kg.`);
             let stockBefore: number;
             let stockAfter: number;
+            let stockBeforeKg: number | null = null;
+            let stockAfterKg: number | null = null;
             let variantLabel: string | null = null;
             if (variant) {
               await tx.productPriceVariant.update({ where: { id: variant.id }, data: { stock: { increment: row.quantity } } });
@@ -2643,6 +3085,15 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
               const productStock = currentVariants.reduce((sum, current) => sum + current.stock, 0);
               await tx.product.update({ where: { id: product.id }, data: { stock: productStock, soldOutAt: productStock > 0 ? null : product.soldOutAt } });
               variantLabel = variantDisplayLabel(variant);
+            } else if (isWeightBased) {
+              const quantityKg = row.quantityKg as number;
+              const itemCount = isSphereInventory ? sphereItems.length : row.quantity;
+              await tx.product.update({ where: { id: product.id }, data: { stock: { increment: itemCount }, stockKg: { increment: quantityKg }, soldOutAt: null } });
+              const updatedProduct = await tx.product.findUniqueOrThrow({ where: { id: product.id }, select: { stock: true, stockKg: true } });
+              stockAfter = updatedProduct.stock;
+              stockBefore = stockAfter - itemCount;
+              stockAfterKg = Number(updatedProduct.stockKg);
+              stockBeforeKg = Math.round((stockAfterKg - quantityKg) * inventoryKgScale) / inventoryKgScale;
             } else {
               await tx.product.update({ where: { id: product.id }, data: { stock: { increment: row.quantity }, soldOutAt: null } });
               const updatedProduct = await tx.product.findUniqueOrThrow({ where: { id: product.id }, select: { stock: true } });
@@ -2650,18 +3101,37 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
               stockBefore = stockAfter - row.quantity;
             }
             const productSku = variant?.sku || product.sku;
+            const inventoryQuantity = isWeightBased && isSphereInventory ? sphereItems.length : row.quantity;
             const stoneName = product.kind === "GEMSTONE" ? product.gemstoneType?.name || product.materialOption?.name || null : product.materialOption?.name || null;
-            const lineTotal = row.unitCost == null ? null : row.quantity * row.unitCost;
+            const lineQuantityForCost = isWeightBased ? Number(row.quantityKg) : row.quantity;
+            const lineTotal = row.unitCost == null ? null : Math.round(lineQuantityForCost * row.unitCost);
             await tx.inventoryReceiptItem.create({ data: {
               receiptId: savedReceipt.id, productId: product.id, variantId: variant?.id || null,
               productName: product.name, productSku, quality: variant?.quality || null, shape: variant?.shape || null, beadSize: variant?.beadSize || null,
               carat: variant?.carat || null, gemstoneQuality: variant?.gemstoneQuality || null, categoryName: product.category?.name || null,
-              stoneName, kind: product.kind, quantity: row.quantity, unitCost: row.unitCost, lineTotal,
+              stoneName, kind: product.kind, quantity: inventoryQuantity, quantityKg: row.quantityKg, unitCost: row.unitCost, lineTotal,
+              sphereStoneGroupName: savedSphereHierarchy?.groupName || null,
+              sphereStoneTypeName: savedSphereHierarchy?.typeName || null,
+              sphereQuality: savedSphereHierarchy?.quality || null,
             } });
+            if (isSphereInventory && !savedSphereItems) {
+              await tx.productSphereItem.createMany({
+                data: sphereItems.map((sphere, index) => ({
+                  productId: product.id,
+                  receiptId: savedReceipt.id,
+                  label: sphere.label,
+                  weightKg: sphere.weightKg,
+                  status: "AVAILABLE",
+                  sortOrder: (lastSphereItem?.sortOrder ?? -1) + index + 1,
+                })),
+              });
+              savedSphereItems = true;
+            }
             await tx.inventoryMovement.create({ data: {
               productId: product.id, variantId: variant?.id || null, productName: product.name,
-              productSku: variant?.sku || product.sku, variantLabel, type: "IN", quantity: row.quantity,
-              stockBefore, stockAfter, reference: receiptNo, note: String(input.note || input.additionalNote || "").trim().slice(0, 2000) || null,
+              productSku: variant?.sku || product.sku, variantLabel, type: "IN", quantity: inventoryQuantity,
+              quantityKg: row.quantityKg, stockBefore, stockAfter, stockBeforeKg, stockAfterKg,
+              reference: receiptNo, note: String(input.note || input.additionalNote || "").trim().slice(0, 2000) || null,
             } });
             changedProductIds.push(product.id);
           }
@@ -2699,9 +3169,12 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     const productId = String(input.productId || "");
     const variantId = input.variantId ? String(input.variantId) : null;
     const type = String(input.type || "").toUpperCase();
-    const quantity = Number(input.quantity);
+    const quantityKg = input.quantityKg === undefined || input.quantityKg === null || input.quantityKg === ""
+      ? null
+      : normalizeInventoryKg(input.quantityKg);
+    const quantity = quantityKg === null ? Number(input.quantity) : 0;
     if (!productId || !["IN", "OUT"].includes(type)) throw new BadRequestException("Chọn sản phẩm và loại nhập hoặc xuất kho.");
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000) throw new BadRequestException("Số lượng phải là số nguyên từ 1 đến 100.000.");
+    if (quantityKg === null && (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000)) throw new BadRequestException("Số lượng phải là số nguyên từ 1 đến 100.000.");
 
     const movement = await this.prisma.$transaction(async (tx) => {
       const delta = type === "IN" ? quantity : -quantity;
@@ -2709,11 +3182,14 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       let productSku: string;
       let stockBefore: number;
       let stockAfter: number;
+      let stockBeforeKg: number | null = null;
+      let stockAfterKg: number | null = null;
       let variantLabel: string | null = null;
 
       if (variantId) {
-        const product = await tx.product.findUnique({ where: { id: productId }, select: { id: true, name: true, sku: true } });
+        const product = await tx.product.findUnique({ where: { id: productId }, select: { id: true, name: true, sku: true, kind: true } });
         if (!product) throw new NotFoundException("Không tìm thấy sản phẩm.");
+        if (quantityKg !== null || isWeightBasedProduct(product)) throw new BadRequestException("Vật phẩm quản lý theo kg không hỗ trợ điều chỉnh theo biến thể.");
         const selectedVariant = await tx.productPriceVariant.findFirst({
           where: { id: variantId, productId }, select: { id: true, sku: true, shape: true, quality: true, beadSize: true },
         });
@@ -2774,32 +3250,59 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           include: { variants: { select: { id: true }, take: 1 } },
         });
         if (!product) throw new NotFoundException("Không tìm thấy sản phẩm.");
+        if (isSphereInventoryProduct(product)) {
+          throw new BadRequestException("Vật phẩm phải được nhập bằng phiếu nhập kèm phân cấp đá, chất lượng và từng món/kg. Không thể điều chỉnh kg trực tiếp vì sẽ làm lệch tồn của từng món.");
+        }
         if (product.variants.length) throw new BadRequestException("Sản phẩm có biến thể; hãy chọn SKU/biến thể cụ thể để điều chỉnh tồn kho.");
 
         const now = new Date();
-        const productRows = await tx.$queryRaw<Array<{ stockBefore: number; stockAfter: number }>>`
-          UPDATE "products"
-          SET "stock" = "stock" + ${delta},
-              "sold_out_at" = CASE
-                WHEN "stock" + ${delta} = 0 THEN COALESCE("sold_out_at", ${now})
-                WHEN "stock" + ${delta} > 0 THEN NULL
-                ELSE "sold_out_at"
-              END
-          WHERE "id" = ${productId}::uuid AND "stock" + ${delta} >= 0
-          RETURNING ("stock" - ${delta})::int AS "stockBefore", "stock"::int AS "stockAfter"
-        `;
+        const isWeightBased = isWeightBasedProduct(product);
+        if (isWeightBased && quantityKg === null) throw new BadRequestException("Vật phẩm cần nhập khối lượng kg để điều chỉnh tồn kho.");
+        if (!isWeightBased && quantityKg !== null) throw new BadRequestException("Sản phẩm này quản lý theo cái/viên, không nhận khối lượng kg.");
+        const productRows = isWeightBased
+          ? await tx.$queryRaw<Array<{ stockBeforeKg: number; stockAfterKg: number; stock: number }>>`
+              UPDATE "products"
+              SET "stock_kg" = "stock_kg" + ${type === "IN" ? quantityKg! : -quantityKg!},
+                  "sold_out_at" = CASE
+                    WHEN "stock_kg" + ${type === "IN" ? quantityKg! : -quantityKg!} = 0 THEN COALESCE("sold_out_at", ${now})
+                    WHEN "stock_kg" + ${type === "IN" ? quantityKg! : -quantityKg!} > 0 THEN NULL
+                    ELSE "sold_out_at"
+                  END
+              WHERE "id" = ${productId}::uuid AND "stock_kg" + ${type === "IN" ? quantityKg! : -quantityKg!} >= 0
+              RETURNING ("stock_kg" - ${type === "IN" ? quantityKg! : -quantityKg!})::numeric AS "stockBeforeKg", "stock_kg"::numeric AS "stockAfterKg", "stock"::int AS "stock"
+            `
+          : await tx.$queryRaw<Array<{ stockBefore: number; stockAfter: number }>>`
+              UPDATE "products"
+              SET "stock" = "stock" + ${delta},
+                  "sold_out_at" = CASE
+                    WHEN "stock" + ${delta} = 0 THEN COALESCE("sold_out_at", ${now})
+                    WHEN "stock" + ${delta} > 0 THEN NULL
+                    ELSE "sold_out_at"
+                  END
+              WHERE "id" = ${productId}::uuid AND "stock" + ${delta} >= 0
+              RETURNING ("stock" - ${delta})::int AS "stockBefore", "stock"::int AS "stockAfter"
+            `;
         if (!productRows.length) {
-          if (type === "OUT") throw new BadRequestException("Số lượng xuất vượt quá tồn kho hiện tại hoặc tồn vừa thay đổi.");
+          if (type === "OUT") throw new BadRequestException(isWeightBased ? "Khối lượng xuất vượt quá tồn kho hiện tại hoặc tồn vừa thay đổi." : "Số lượng xuất vượt quá tồn kho hiện tại hoặc tồn vừa thay đổi.");
           throw new NotFoundException("Không tìm thấy sản phẩm.");
         }
         productName = product.name;
         productSku = product.sku;
-        stockBefore = productRows[0].stockBefore;
-        stockAfter = productRows[0].stockAfter;
+        if (isWeightBased) {
+          const row = productRows[0] as { stockBeforeKg: number; stockAfterKg: number; stock: number };
+          stockBefore = row.stock;
+          stockAfter = row.stock;
+          stockBeforeKg = Number(row.stockBeforeKg);
+          stockAfterKg = Number(row.stockAfterKg);
+        } else {
+          const row = productRows[0] as { stockBefore: number; stockAfter: number };
+          stockBefore = row.stockBefore;
+          stockAfter = row.stockAfter;
+        }
       }
 
       const savedMovement = await tx.inventoryMovement.create({ data: {
-        productId, variantId, productName, productSku, variantLabel, type, quantity, stockBefore, stockAfter,
+        productId, variantId, productName, productSku, variantLabel, type, quantity, quantityKg, stockBefore, stockAfter, stockBeforeKg, stockAfterKg,
         reference: input.reference ? String(input.reference).trim().slice(0, 120) : null,
         note: input.note ? String(input.note).trim().slice(0, 2000) : null,
       } });
@@ -2942,6 +3445,18 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  async adminOrderPaymentQr(id: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      select: {
+        id: true, code: true, status: true, totalAmount: true, qrPaymentExpiresAt: true,
+        payments: { select: { id: true, method: true, status: true, amount: true, providerRef: true, paidAt: true, recordedByAdminId: true, recordingNote: true, refunds: { select: { amount: true } } } },
+      },
+    });
+    if (!order) throw new NotFoundException("Không tìm thấy đơn hàng.");
+    return adminOrderQrSnapshot(order);
+  }
+
   orders(query: Record<string, string> = {}) {
     const take = Math.min(Math.max(Number(query.limit) || 500, 1), 500);
     if (query.view === "admin-summary") return this.prisma.order.findMany({
@@ -2949,6 +3464,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         id: true, code: true, customerName: true, customerPhone: true, customerEmail: true,
         salesChannel: true, salesChannelBuyerRef: true, buyerTypeAtCheckout: true,
         shippingMethod: true, status: true, totalAmount: true, placedAt: true,
+        qrPaymentStartedAt: true, qrPaymentExpiresAt: true,
         customer: { select: { name: true, phone: true, email: true } },
         items: {
           select: {
@@ -3124,6 +3640,25 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   private async releaseOrderReservation(tx: any, order: Input, changedProductIds: Set<string>, reason = "ORDER_CANCELLED") {
     for (const item of order.items as any[]) {
       if (!item.productId) continue;
+      if (item.sphereItemId) {
+        const sphere = await tx.productSphereItem.findFirst({ where: { id: item.sphereItemId, productId: item.productId }, select: { id: true, weightKg: true, status: true } });
+        if (!sphere || sphere.status !== "RESERVED") continue;
+        const releasedSphere = await tx.productSphereItem.updateMany({ where: { id: sphere.id, productId: item.productId, status: "RESERVED" }, data: { status: "AVAILABLE" } });
+        if (releasedSphere.count !== 1) continue;
+        const weightKg = Number(item.quantityKg ?? sphere.weightKg) || 0;
+        const before = await tx.product.findUnique({ where: { id: item.productId }, select: { stock: true, stockKg: true } });
+        if (!before || weightKg <= 0) throw new ConflictException(`Không thể hoàn tồn cho ${item.productName}: thiếu khối lượng quả.`);
+        const after = await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: 1 }, stockKg: { increment: weightKg }, soldOutAt: null }, select: { stock: true, stockKg: true } });
+        await tx.inventoryMovement.create({ data: {
+          productId: item.productId, sphereItemId: sphere.id, productName: item.productName, productSku: item.productSku,
+          variantLabel: `${weightKg} kg`, type: "IN", quantity: 1, quantityKg: weightKg,
+          stockBefore: before.stock, stockAfter: after.stock,
+          stockBeforeKg: Number(before.stockKg), stockAfterKg: Number(after.stockKg),
+          reference: order.code, note: "Hoàn lại quả và khối lượng do hủy đơn trước khi xuất hàng",
+        } });
+        changedProductIds.add(item.productId);
+        continue;
+      }
       if (item.variantId) {
         const variant = await tx.productPriceVariant.findFirst({ where: { id: item.variantId, productId: item.productId }, select: { stock: true } });
         if (!variant) continue;
@@ -3290,6 +3825,11 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           where: { orderId: id, status: "ACTIVE" },
           data: { status: "COMMITTED", committedAt: inventoryCommittedAt, expiresAt: null },
         });
+        if (inventoryCommittedAt) {
+          const reservedSpheres = await tx.inventoryReservation.findMany({ where: { orderId: id, status: "COMMITTED", sphereItemId: { not: null } }, select: { sphereItemId: true } });
+          const sphereItemIds = reservedSpheres.map((reservation: any) => reservation.sphereItemId).filter(Boolean);
+          if (sphereItemIds.length) await tx.productSphereItem.updateMany({ where: { id: { in: sphereItemIds }, status: "RESERVED" }, data: { status: "SOLD" } });
+        }
         if (status === "PROCESSING") await tx.inventoryReservation.updateMany({
           where: { orderId: id, status: "ACTIVE" },
           data: { expiresAt: null },
@@ -3582,6 +4122,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.$transaction(async (tx) => {
       const promotions = await this.activeStorePromotions(tx);
       const requestedStock = new Map<string, number>();
+      const requestedSphereByProduct = new Map<string, { count: number; kg: number; availableCount: number; availableKg: number }>();
       const quotedItems: Array<Record<string, unknown>> = [];
       let subtotal = 0;
       let discountAmount = 0;
@@ -3592,21 +4133,43 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             status: "ACTIVE",
             AND: visibility.AND,
           },
-          include: { category: true, variants: { orderBy: { sortOrder: "asc" } } },
+          include: {
+            category: true,
+            variants: { orderBy: { sortOrder: "asc" } },
+            sphereItems: { where: { status: "AVAILABLE" }, orderBy: { sortOrder: "asc" }, select: { id: true, label: true, weightKg: true, price: true, imageUrls: true, status: true } },
+            _count: { select: { sphereItems: true } },
+          },
         });
         if (!product) throw new BadRequestException("Một sản phẩm trong giỏ không còn khả dụng.");
         if (product.kind === "GEMSTONE" && product.isPremiumGemstone) throw new BadRequestException(`Sản phẩm đá quý cao cấp ${product.name} chỉ nhận yêu cầu tư vấn, không đặt trực tiếp qua giỏ hàng.`);
         const variant = line.variantId ? product.variants.find((item: any) => item.id === String(line.variantId)) : null;
         if (line.variantId && !variant) throw new BadRequestException(`Phiên bản của ${product.name} không còn khả dụng.`);
         if (product.variants.length && !variant) throw new BadRequestException(`Chọn phiên bản cụ thể cho ${product.name}.`);
+        const hasWeightItems = Number(product._count?.sphereItems) > 0;
+        if (hasWeightItems && !physicalSphereInventoryMatches(product)) throw new ConflictException(`Tồn số lượng và kg của ${product.name} chưa khớp danh sách từng món. GEME cần kiểm tra kho trước khi nhận đơn.`);
+        const sphereItem = line.sphereItemId ? product.sphereItems.find((item: any) => item.id === String(line.sphereItemId)) : null;
+        if (hasWeightItems && !line.sphereItemId) throw new BadRequestException(`Chọn quả cụ thể theo khối lượng cho ${product.name}.`);
+        if (line.sphereItemId && !sphereItem) throw new BadRequestException(`Quả đã chọn của ${product.name} không còn tồn kho.`);
+        if (sphereItem && (Number(sphereItem.weightKg) <= 0 || Number(sphereItem.price) <= 0 || !sphereItem.imageUrls?.length)) throw new BadRequestException(`Quả ${product.name} chưa đủ kg, giá hoặc ảnh để bán.`);
         const quantity = Number(line.quantity);
+        if (sphereItem && quantity !== 1) throw new BadRequestException(`Mỗi quả ${product.name} chỉ được đặt một lần.`);
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) throw new BadRequestException("Số lượng mỗi dòng phải từ 1 đến 99.");
-        const stockKey = `${product.id}:${variant?.id || "base"}`;
+        const requestedWeight = line.quantityKg == null ? null : Number(line.quantityKg);
+        if (sphereItem && requestedWeight != null && Math.abs(requestedWeight - Number(sphereItem.weightKg)) > 0.0005) throw new BadRequestException(`Khối lượng quả ${product.name} vừa thay đổi. Hãy tải lại trang.`);
+        if (sphereItem && (product.stock < 1 || Number(product.stockKg) < Number(sphereItem.weightKg))) throw new BadRequestException(`Tồn số lượng hoặc tổng kg của ${product.name} không khớp. Vui lòng liên hệ GEME.`);
+        const stockKey = sphereItem ? `${product.id}:sphere:${sphereItem.id}` : `${product.id}:${variant?.id || "base"}`;
         const requested = (requestedStock.get(stockKey) || 0) + quantity;
-        const available = variant ? variant.stock : product.stock;
+        const available = sphereItem ? 1 : variant ? variant.stock : product.stock;
         if (requested > available) throw new BadRequestException(`Không đủ tồn kho cho ${product.name}${variant ? ` (${variantDisplayLabel(variant)})` : ""}.`);
         requestedStock.set(stockKey, requested);
-        const pricing = calculateCheckoutPrice(product, variant, getCheckoutPromotionValue(product, promotions));
+        if (sphereItem) {
+          const aggregate = requestedSphereByProduct.get(product.id) || { count: 0, kg: 0, availableCount: product.stock, availableKg: Number(product.stockKg) || 0 };
+          aggregate.count += quantity;
+          aggregate.kg += Number(sphereItem.weightKg) * quantity;
+          requestedSphereByProduct.set(product.id, aggregate);
+        }
+        const priceProduct = sphereItem ? { ...product, price: sphereItem.price, originalPrice: null } : product;
+        const pricing = calculateCheckoutPrice(priceProduct, variant, getCheckoutPromotionValue(product, promotions));
         if (pricing.listedUnitPrice <= 0) throw new BadRequestException(`Sản phẩm ${product.name} chưa có giá bán.`);
         const lineTotal = pricing.saleUnitPrice * quantity;
         const lineDiscount = pricing.promotionDiscountPerUnit * quantity;
@@ -3615,6 +4178,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         quotedItems.push({
           productId: product.id,
           variantId: variant?.id || null,
+          sphereItemId: sphereItem?.id || null,
+          quantityKg: sphereItem ? Number(sphereItem.weightKg) : null,
+          weightKg: sphereItem ? Number(sphereItem.weightKg) : null,
           productName: product.name,
           productSku: variant?.sku || product.sku,
           quality: variant?.quality || null,
@@ -3628,6 +4194,12 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           lineTotal,
           stock: available,
         });
+      }
+      for (const [productId, requested] of requestedSphereByProduct) {
+        if (requested.count > requested.availableCount || requested.kg - requested.availableKg > 0.0005) {
+          const product = await tx.product.findUnique({ where: { id: productId }, select: { name: true } });
+          throw new BadRequestException(`Không đủ số quả hoặc kg tồn kho của ${product?.name || "sản phẩm"}.`);
+        }
       }
       const shippingFee = Math.max(0, Number(input.shippingFee) || 0);
       const loyalty = await this.loyalty.preview(tx, authenticatedCustomerId, subtotal - discountAmount, input.loyaltyPointsToRedeem);
@@ -3760,8 +4332,12 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         : /^[A-Z0-9_-]{2,40}$/.test(requestedChannel) ? requestedChannel : "DIRECT";
     const storeSale = salesChannel === "DIRECT";
     const method = enumValue(input.paymentMethod, ["COD", "BANK_TRANSFER", "MOMO", "CREDIT_CARD", "OTHER"], "COD");
-    const qrPayment = !storeSale && input.qrPayment === true && method === "BANK_TRANSFER";
-    const paid = storeSale && (input.paid === true || method === "COD");
+    const { qrPayment, paid } = getOrderPaymentFlags({
+      storeSale,
+      method,
+      requestedQrPayment: input.qrPayment === true,
+      requestedPaid: input.paid === true,
+    });
     const orderStartedAt = new Date();
     const qrPaymentWindow = qrPayment ? getQrPaymentWindow(orderStartedAt) : null;
     const inventoryReservationExpiresAt = qrPaymentWindow?.expiresAt ?? getInventoryReservationExpiry(method, paid, orderStartedAt);
@@ -3788,7 +4364,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       shippingFee: input.shippingFee ?? null,
       shippingMethod: input.shippingMethod ?? null,
       expectedTotalAmount: input.expectedTotalAmount,
-      items: items.map((line: Input) => ({ productId: line.productId, variantId: line.variantId, sku: line.sku, quantity: line.quantity })),
+      items: items.map((line: Input) => ({ productId: line.productId, variantId: line.variantId, sphereItemId: line.sphereItemId || null, quantityKg: line.quantityKg ?? null, sku: line.sku, quantity: line.quantity })),
     })).digest("hex") : null;
     const findIdempotentOrder = async (client: any) => idempotencyKey
       ? client.order.findUnique({ where: { idempotencyKey }, include: { items: true, payments: true, customer: true } })
@@ -3824,7 +4400,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       }
       const promotions = storeSale ? [] : await this.activeStorePromotions(tx);
       const orderVisibility = storeSale ? null : await this.storefrontProductVisibilityWhere();
-      const placedItems: Array<{ productId: string; variantId: string | null; productName: string; productSku: string; shape: string | null; quality: string | null; beadSize: string | null; carat: number | null; gemstoneQuality: string | null; quantity: number; unitPrice: number; lineTotal: number }> = [];
+      const placedItems: Array<{ productId: string; variantId: string | null; sphereItemId: string | null; productName: string; productSku: string; shape: string | null; quality: string | null; beadSize: string | null; carat: number | null; gemstoneQuality: string | null; quantity: number; quantityKg: number | null; unitPrice: number; lineTotal: number }> = [];
       const outboundItems = new Map<string, {
         productId: string;
         variantId: string | null;
@@ -3835,6 +4411,8 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         stoneName: string | null;
         kind: string;
         quantity: number;
+        sphereItemId: string | null;
+        quantityKg: number | null;
         unitPrice: number;
         lineTotal: number;
       }>();
@@ -3845,28 +4423,58 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             status: storeSale ? { not: "ARCHIVED" } : "ACTIVE",
             ...(orderVisibility ? { AND: orderVisibility.AND } : {}),
           },
-          include: { category: true, materialOption: true, gemstoneType: true, variants: { orderBy: { sortOrder: "asc" } } },
+          include: {
+            category: true, materialOption: true, gemstoneType: true,
+            variants: { orderBy: { sortOrder: "asc" } },
+            sphereItems: { where: { status: "AVAILABLE" }, orderBy: { sortOrder: "asc" }, select: { id: true, label: true, weightKg: true, price: true, imageUrls: true, status: true } },
+            _count: { select: { sphereItems: true } },
+          },
         });
         if (!product) throw new BadRequestException("Một sản phẩm trong giỏ không còn khả dụng.");
         if (product.kind === "GEMSTONE" && product.isPremiumGemstone && !storeSale) throw new BadRequestException(`Sản phẩm đá quý cao cấp ${product.name} chỉ nhận yêu cầu tư vấn, không đặt trực tiếp qua giỏ hàng.`);
         const variant = line.variantId ? product.variants.find((item: any) => item.id === String(line.variantId)) : null;
         if (line.variantId && !variant) throw new BadRequestException(`Phiên bản của ${product.name} không còn khả dụng.`);
         if (product.variants.length && !variant) throw new BadRequestException(`Chọn phiên bản cụ thể cho ${product.name}.`);
+        const hasWeightItems = Number(product._count?.sphereItems) > 0;
+        if (hasWeightItems && !physicalSphereInventoryMatches(product)) throw new ConflictException(`Tồn số lượng và kg của ${product.name} chưa khớp danh sách từng món. GEME cần kiểm tra kho trước khi nhận đơn.`);
+        const sphereItem = line.sphereItemId ? product.sphereItems.find((item: any) => item.id === String(line.sphereItemId)) : null;
+        if (hasWeightItems && !line.sphereItemId) throw new BadRequestException(`Chọn quả cụ thể theo khối lượng cho ${product.name}.`);
+        if (line.sphereItemId && !sphereItem) throw new BadRequestException(`Quả đã chọn của ${product.name} không còn tồn kho.`);
+        if (sphereItem && (Number(sphereItem.weightKg) <= 0 || Number(sphereItem.price) <= 0 || !sphereItem.imageUrls?.length)) throw new BadRequestException(`Quả ${product.name} chưa đủ kg, giá hoặc ảnh để bán.`);
         const quantity = Number(line.quantity);
+        if (sphereItem && quantity !== 1) throw new BadRequestException(`Mỗi quả ${product.name} chỉ được đặt một lần.`);
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) throw new BadRequestException("Số lượng mỗi dòng phải từ 1 đến 99.");
+        const weightKg = sphereItem ? Number(sphereItem.weightKg) : null;
+        const requestedWeightKg = line.quantityKg == null ? null : Number(line.quantityKg);
+        if (sphereItem && requestedWeightKg != null && Math.abs(requestedWeightKg - weightKg!) > 0.0005) throw new BadRequestException(`Khối lượng quả ${product.name} vừa thay đổi. Hãy tải lại trang.`);
+        if (sphereItem && (product.stock < 1 || Number(product.stockKg) < weightKg!)) throw new BadRequestException(`Tồn số lượng hoặc tổng kg của ${product.name} không khớp. Vui lòng liên hệ GEME.`);
         const promotionValue = storeSale ? 0 : getCheckoutPromotionValue(product, promotions);
-        const pricing = calculateCheckoutPrice(product, variant, promotionValue);
+        const priceProduct = sphereItem ? { ...product, price: sphereItem.price, originalPrice: null } : product;
+        const pricing = calculateCheckoutPrice(priceProduct, variant, promotionValue);
         const unitPrice = pricing.listedUnitPrice;
         const lineTotal = pricing.saleUnitPrice * quantity;
         if (!unitPrice) throw new BadRequestException(`Sản phẩm ${product.name} chưa có giá bán.`);
-        const variantLabel = variantDisplayLabel(variant);
+        const variantLabel = sphereItem ? `${product.sphereQuality || "Vật phẩm"} · ${weightKg} kg` : variantDisplayLabel(variant);
         // Hold stock for unpaid counter orders too. Payment and inventory issue
         // are separate events; a later payment must not be the first stock check.
         const shouldReserveInventory = true;
         if (shouldReserveInventory) {
           let stockBefore: number;
           let stockAfter: number;
-          if (variant) {
+          let stockBeforeKg: number | null = null;
+          let stockAfterKg: number | null = null;
+          if (sphereItem) {
+            const claimed = await tx.productSphereItem.updateMany({ where: { id: sphereItem.id, productId: product.id, status: "AVAILABLE" }, data: { status: paid ? "SOLD" : "RESERVED" } });
+            if (claimed.count !== 1) throw new BadRequestException(`Quả ${weightKg} kg của ${product.name} vừa được người khác mua.`);
+            const updatedProduct = await tx.product.updateMany({ where: { id: product.id, stock: { gte: 1 }, stockKg: { gte: weightKg! } }, data: { stock: { decrement: 1 }, stockKg: { decrement: weightKg! } } });
+            if (updatedProduct.count !== 1) throw new BadRequestException(`Tồn số lượng hoặc tổng kg của ${product.name} vừa thay đổi. Tải lại và thử lại.`);
+            const freshProduct = await tx.product.findUniqueOrThrow({ where: { id: product.id }, select: { stock: true, stockKg: true } });
+            stockAfter = freshProduct.stock;
+            stockBefore = stockAfter + 1;
+            stockAfterKg = Number(freshProduct.stockKg);
+            stockBeforeKg = stockAfterKg + weightKg!;
+            await tx.product.update({ where: { id: product.id }, data: { soldOutAt: stockAfter > 0 && stockAfterKg > 0 ? null : product.soldOutAt ?? new Date() } });
+          } else if (variant) {
             const updatedVariant = await tx.productPriceVariant.updateMany({ where: { id: variant.id, productId: product.id, stock: { gte: quantity } }, data: { stock: { decrement: quantity } } });
             if (updatedVariant.count !== 1) throw new BadRequestException(`Tồn kho ${product.name} (${variantLabel}) vừa thay đổi hoặc không đủ. Tải lại và thử lại.`);
             const freshVariant = await tx.productPriceVariant.findUniqueOrThrow({ where: { id: variant.id }, select: { stock: true } });
@@ -3881,32 +4489,36 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             stockAfter = freshProduct.stock;
             stockBefore = stockAfter + quantity;
           }
-          await tx.product.updateMany({ where: { id: product.id, stock: 0 }, data: { soldOutAt: product.soldOutAt ?? new Date() } });
-          await tx.product.updateMany({ where: { id: product.id, stock: { gt: 0 } }, data: { soldOutAt: null } });
+          if (!sphereItem) {
+            await tx.product.updateMany({ where: { id: product.id, stock: 0 }, data: { soldOutAt: product.soldOutAt ?? new Date() } });
+            await tx.product.updateMany({ where: { id: product.id, stock: { gt: 0 } }, data: { soldOutAt: null } });
+          }
           await tx.inventoryMovement.create({ data: {
-            productId: product.id, variantId: variant?.id || null, productName: product.name, productSku: variant?.sku || product.sku,
-            variantLabel, type: "OUT", quantity, stockBefore, stockAfter, reference: code,
+            productId: product.id, variantId: variant?.id || null, sphereItemId: sphereItem?.id || null, productName: product.name, productSku: variant?.sku || product.sku,
+            variantLabel, type: "OUT", quantity, quantityKg: weightKg, stockBefore, stockAfter, stockBeforeKg, stockAfterKg, reference: code,
             note: paid ? "Đơn hàng đã thanh toán" : storeSale ? "Giữ tồn kho cho đơn tại cửa hàng" : "Giữ tồn kho cho đơn online",
           } });
           changedProductIds.add(product.id);
         }
         if (storeSale && paid) {
-          const issueKey = `${product.id}:${variant?.id || "base"}`;
+          const issueKey = sphereItem ? `${product.id}:sphere:${sphereItem.id}` : `${product.id}:${variant?.id || "base"}`;
           const issueLine = outboundItems.get(issueKey);
           if (issueLine) {
             issueLine.quantity += quantity;
+            issueLine.quantityKg = (issueLine.quantityKg || 0) + (weightKg || 0);
             issueLine.lineTotal += unitPrice * quantity;
           } else {
             outboundItems.set(issueKey, {
               productId: product.id, variantId: variant?.id || null,
+              sphereItemId: sphereItem?.id || null,
               productName: product.name, productSku: variant?.sku || product.sku, variantLabel,
               categoryName: product.category?.name || null,
               stoneName: product.kind === "GEMSTONE" ? product.gemstoneType?.name || product.materialOption?.name || null : product.materialOption?.name || null,
-              kind: product.kind, quantity, unitPrice, lineTotal: unitPrice * quantity,
+              kind: product.kind, quantity, quantityKg: weightKg, unitPrice, lineTotal: unitPrice * quantity,
             });
           }
         }
-        placedItems.push({ productId: product.id, variantId: variant?.id || null, productName: product.name, productSku: variant?.sku || product.sku, shape: variant?.shape || null, quality: variant?.quality || null, beadSize: variant?.beadSize || null, carat: variant?.carat == null ? null : Number(variant.carat), gemstoneQuality: variant?.gemstoneQuality || null, quantity, unitPrice, lineTotal });
+        placedItems.push({ productId: product.id, variantId: variant?.id || null, sphereItemId: sphereItem?.id || null, productName: product.name, productSku: variant?.sku || product.sku, shape: variant?.shape || null, quality: variant?.quality || product.sphereQuality || null, beadSize: variant?.beadSize || null, carat: variant?.carat == null ? null : Number(variant.carat), gemstoneQuality: variant?.gemstoneQuality || null, quantity, quantityKg: weightKg, unitPrice, lineTotal });
       }
       const subtotal = placedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
       const promotionDiscount = placedItems.reduce((sum, item) => sum + item.unitPrice * item.quantity - item.lineTotal, 0);
@@ -3941,11 +4553,12 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         const issueNo = `PX${dateKey}-${issueId.slice(0, 6).toUpperCase()}`;
         const issueLines = [...outboundItems.values()];
         const totalQuantity = issueLines.reduce((sum, item) => sum + item.quantity, 0);
+        const totalQuantityKg = issueLines.reduce((sum, item) => sum + (item.quantityKg || 0), 0);
         const issueTotal = issueLines.reduce((sum, item) => sum + item.lineTotal, 0);
         await tx.inventoryIssue.create({ data: {
           id: issueId, issueNo, issuedAt, reason: "ORDER", recipient: customerName || null,
           warehouseName: "Kho chính", status: "COMPLETED", note: `Mã đơn hàng: ${code}`,
-          totalQuantity, totalAmount: issueTotal,
+          totalQuantity, totalQuantityKg, totalAmount: issueTotal,
           items: { create: issueLines },
         } });
       }
@@ -3991,7 +4604,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             orderItemId: item.id,
             productId: item.productId,
             variantId: item.variantId,
+            sphereItemId: item.sphereItemId,
             quantity: item.quantity,
+            quantityKg: item.quantityKg,
             status: "ACTIVE",
             expiresAt: inventoryReservationExpiresAt,
           })),

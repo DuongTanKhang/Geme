@@ -56,6 +56,22 @@ function compareNewestByGemstone(a: StoreProduct, b: StoreProduct) {
   return dateB - dateA || a.id.localeCompare(b.id);
 }
 
+function resolveProductCategoryContext(categoryIds: string[], categoriesById: Map<string, StoreCategory>) {
+  if (!categoryIds.length) return undefined;
+  const roots = categoryIds.map((id) => {
+    let current = categoriesById.get(id);
+    if (!current) return undefined;
+    while (current.parentId && current.level > 2) {
+      const parent = categoriesById.get(current.parentId);
+      if (!parent) break;
+      current = parent;
+    }
+    return current;
+  });
+  const root = roots[0];
+  return root && roots.every((item) => item?.id === root.id) ? root : undefined;
+}
+
 function FilterChevron() {
   return <svg className="catalog-facet-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.25" /></svg>;
 }
@@ -139,12 +155,31 @@ export function OpalCollection({ products, categories, materials, connected, pro
   }, [filtersOpen, isMobile]);
 
   const bestSellerRanks = useMemo(() => new Map(bestSellerOrder.map((id, index) => [id, index])), [bestSellerOrder]);
+  const selectedCatalogRoot = useMemo(() => {
+    let current = categories.find((category) => category.id === (selectedTypes[0] || initialCategoryId));
+    while (current?.parentId) current = categories.find((category) => category.id === current?.parentId);
+    return current;
+  }, [categories, initialCategoryId, selectedTypes]);
+  const categoryKind = selectedCatalogRoot?.kind || "JEWELRY";
   const enabledCategories = useMemo(() => categories
-    .filter((category) => category.status === "ACTIVE" && category.usage === "PRODUCT_CATEGORY" && category.kind === "JEWELRY" && category.level > 1)
-    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "vi")), [categories]);
-  const enabledStones = useMemo(() => materials
-    .filter((item) => item.active && item.scope === "JEWELRY" && item.kind === "STONE")
-    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "vi")), [materials]);
+    .filter((category) => category.status === "ACTIVE" && category.usage === "PRODUCT_CATEGORY" && category.kind === categoryKind && category.level > 1)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "vi")), [categories, categoryKind]);
+  const enabledStones = useMemo(() => {
+    const catalogProducts = categoryKind === "OTHER" ? products.filter((product) => product.kind === "OTHER") : products.filter((product) => product.kind === "JEWELRY");
+    const usedMaterialIds = new Set(catalogProducts.map((product) => product.materialOption?.id).filter((id): id is string => Boolean(id)));
+    const materialStones = materials
+      .filter((item) => item.active && item.kind === "STONE" && (categoryKind === "OTHER" ? usedMaterialIds.has(item.id) : item.scope === "JEWELRY"))
+      .map((item) => ({ id: item.id, slug: item.slug, name: item.name, sortOrder: item.sortOrder }));
+    if (categoryKind !== "OTHER") return materialStones.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "vi"));
+    const sphereStones = new Map<string, { id: string; slug: string; name: string; sortOrder: number }>();
+    for (const product of catalogProducts) {
+      const stone = product.sphereStoneType;
+      if (stone) sphereStones.set(stone.id, { id: stone.id, slug: stone.slug, name: stone.name, sortOrder: 0 });
+      else if (product.gemstoneType) sphereStones.set(product.gemstoneType.id, { ...product.gemstoneType, sortOrder: 0 });
+    }
+    return [...new Map([...materialStones, ...sphereStones.values()].map((stone) => [stone.id, stone])).values()]
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "vi"));
+  }, [materials, products, categoryKind]);
   const categoryDescendants = useMemo(() => new Map(categories.map((root) => {
     const found = new Set([root.id]);
     let changed = true;
@@ -177,10 +212,26 @@ export function OpalCollection({ products, categories, materials, connected, pro
     enabledCategories.forEach((category) => visit(category, 0));
     return options.filter((option) => option.count > 0);
   }, [enabledCategories, products, categoryDescendants]);
-  const tabs = useMemo(() => {
+  const enabledCategoryMap = useMemo(() => new Map(enabledCategories.map((category) => [category.id, category])), [enabledCategories]);
+  const categoryContext = useMemo(() => resolveProductCategoryContext(selectedTypes, enabledCategoryMap), [selectedTypes, enabledCategoryMap]);
+  const draftCategoryContext = useMemo(() => resolveProductCategoryContext(filtersOpen ? draftTypes : selectedTypes, enabledCategoryMap), [filtersOpen, draftTypes, selectedTypes, enabledCategoryMap]);
+  const mainCategoryOptions = useMemo(() => {
     const roots = categoryOptions.filter(({ depth }) => depth === 0);
     return roots.length ? roots : categoryOptions;
   }, [categoryOptions]);
+  const categoryContextChildren = useMemo(() => categoryContext
+    ? categoryOptions.filter(({ category }) => category.parentId === categoryContext.id)
+    : [], [categoryOptions, categoryContext]);
+  const filterCategoryOptions = useMemo(() => draftCategoryContext
+    ? categoryOptions.filter(({ category }) => category.parentId === draftCategoryContext.id)
+    : categoryOptions, [categoryOptions, draftCategoryContext]);
+  const isAllOtherProductsView = categoryKind === "OTHER" && (!draftCategoryContext || draftCategoryContext.level === 1);
+  const showCategoryFacet = !isAllOtherProductsView && (!draftCategoryContext || filterCategoryOptions.length > 0);
+  const tabs = categoryContext
+    ? categoryContext.level > 1 && categoryContext.parentId
+      ? categoryOptions.filter(({ category }) => category.parentId === categoryContext.parentId)
+      : categoryContextChildren
+    : mainCategoryOptions;
   // A category tab represents a fresh collection view. Scope stone choices to
   // products in that collection so the filter never offers stones that cannot
   // produce a result for the selected category.
@@ -189,7 +240,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
     const scopedProducts = stoneScopeTypes.length
       ? products.filter((product) => stoneScopeTypes.some((categoryId) => categoryDescendants.get(categoryId)?.has(product.categoryId || "")))
       : products;
-    return new Map(enabledStones.map((stone) => [stone.slug, scopedProducts.filter((product) => product.materialOption?.slug === stone.slug || product.gemstoneType?.slug === stone.slug).length]));
+    return new Map(enabledStones.map((stone) => [stone.slug, scopedProducts.filter((product) => product.materialOption?.slug === stone.slug || product.gemstoneType?.slug === stone.slug || product.sphereStoneType?.slug === stone.slug).length]));
   }, [enabledStones, products, categoryDescendants, stoneScopeTypes]);
   const availableStones = useMemo(() => enabledStones.filter((stone) => (stoneCounts.get(stone.slug) || 0) > 0), [enabledStones, stoneCounts]);
   const sizeOptions = useMemo(() => {
@@ -211,7 +262,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
     const normalizedSearch = search.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").trim();
     const filtered = products.filter((product) => {
       const matchesType = selectedTypes.length === 0 || selectedTypes.some((categoryId) => categoryDescendants.get(categoryId)?.has(product.categoryId || ""));
-      const productStones = [product.materialOption?.slug, product.gemstoneType?.slug].filter(Boolean);
+      const productStones = [product.materialOption?.slug, product.gemstoneType?.slug, product.sphereStoneType?.slug].filter(Boolean);
       const matchesStone = selectedStones.length === 0 || selectedStones.some((slug) => productStones.includes(slug));
       const matchesSize = appliedSizes.length === 0 || product.variants.some((variant) => appliedSizes.includes(variant.beadSize || ""));
       const matchesPrice = !priceRange || (!product.isPremiumGemstone && (priceRange === "under2" ? product.price < 2_000_000 : priceRange === "2to5" ? product.price >= 2_000_000 && product.price <= 5_000_000 : priceRange === "5to10" ? product.price > 5_000_000 && product.price <= 10_000_000 : product.price > 10_000_000));
@@ -233,6 +284,21 @@ export function OpalCollection({ products, categories, materials, connected, pro
   }, [filterStateKey, restoringListRef]);
 
   const toggle = (value: string, current: string[], update: (next: string[]) => void) => update(current.includes(value) ? current.filter((item) => item !== value) : [...current, value]);
+  const toggleContextCategory = (categoryId: string) => {
+    const context = draftCategoryContext;
+    if (!context) {
+      toggle(categoryId, draftTypes, setDraftTypes);
+      return;
+    }
+    const childIds = new Set(filterCategoryOptions.map(({ category }) => category.id));
+    setDraftTypes((current) => {
+      const currentChildren = current.includes(context.id) ? [] : current.filter((id) => childIds.has(id));
+      const nextChildren = currentChildren.includes(categoryId)
+        ? currentChildren.filter((id) => id !== categoryId)
+        : [...currentChildren, categoryId];
+      return nextChildren.length ? nextChildren : [context.id];
+    });
+  };
   const openFilters = () => {
     setDraftTypes(selectedTypes);
     setDraftStones(selectedStones);
@@ -250,8 +316,9 @@ export function OpalCollection({ products, categories, materials, connected, pro
     setFiltersOpen(false);
   };
   const reset = () => {
-    setSelectedTypes([]); setSelectedStones([]); setSelectedSizes([]); setPriceRange("");
-    setDraftTypes([]); setDraftStones([]); setDraftSizes([]); setDraftPriceRange("");
+    const defaultTypes = initialCategoryId ? [initialCategoryId] : [];
+    setSelectedTypes(defaultTypes); setSelectedStones([]); setSelectedSizes([]); setPriceRange("");
+    setDraftTypes(defaultTypes); setDraftStones([]); setDraftSizes([]); setDraftPriceRange("");
     setSearch("");
     const url = new URL(window.location.href);
     url.searchParams.delete("search");
@@ -270,13 +337,14 @@ export function OpalCollection({ products, categories, materials, connected, pro
         <p role="status" aria-live="polite">{connected ? `${filteredProducts.length} sản phẩm` : "Không thể tải dữ liệu sản phẩm"}</p>
       </div>
       <div className="new-arrivals-tabs" role="group" aria-label="Lọc theo loại trang sức">
-        <button type="button" className={!selectedTypes.length ? "is-selected" : ""} aria-pressed={!selectedTypes.length} onClick={() => {
-          setSelectedTypes([]); setDraftTypes([]);
+        <button type="button" className={categoryContext ? selectedTypes.length === 1 && selectedTypes[0] === categoryContext.id ? "is-selected" : "" : !selectedTypes.length ? "is-selected" : ""} aria-pressed={categoryContext ? selectedTypes.length === 1 && selectedTypes[0] === categoryContext.id : !selectedTypes.length} onClick={() => {
+          const allCategoryTypes = categoryContext ? [categoryContext.id] : [];
+          setSelectedTypes(allCategoryTypes); setDraftTypes(allCategoryTypes);
           setSelectedStones([]); setDraftStones([]);
           setSelectedSizes([]); setDraftSizes([]);
           setPriceRange(""); setDraftPriceRange("");
           setVisibleCount(PRODUCT_BATCH_SIZE);
-        }}>Tất cả</button>
+        }}>{categoryContext ? "Tất cả sản phẩm" : "Tất cả"}</button>
         {tabs.map(({ category }) => {
           const selected = selectedTypes.includes(category.id) || selectedTypes.some((id) => categoryDescendants.get(category.id)?.has(id));
           return <button type="button" key={category.id} className={selected ? "is-selected" : ""} aria-pressed={selected} onClick={() => {
@@ -305,9 +373,9 @@ export function OpalCollection({ products, categories, materials, connected, pro
       <button type="button" className="new-arrivals-filter-overlay" aria-hidden={!isMobile} tabIndex={isMobile ? 0 : -1} aria-label="Đóng bộ lọc" onClick={() => setFiltersOpen(false)} />
       <div className="new-arrivals-filter-panel" id="catalog-filter-panel" ref={filterPanelRef} role={isMobile ? "dialog" : undefined} aria-modal={isMobile ? true : undefined} aria-labelledby="catalog-filter-title" tabIndex={isMobile ? -1 : undefined}>
         <div className="new-arrivals-filter-header"><h3 id="catalog-filter-title">Bộ lọc</h3><button type="button" aria-label="Đóng bộ lọc" onClick={() => setFiltersOpen(false)}>×</button></div>
-        {categoryOptions.length > 0 && <fieldset>
-          <legend>Loại sản phẩm</legend>
-          {categoryOptions.map(({ category, depth, count }) => <label key={category.id} style={{ marginInlineStart: Math.min(depth, 3) * 12 }}><input type="checkbox" checked={draftTypes.includes(category.id)} onChange={() => toggle(category.id, draftTypes, setDraftTypes)} />{category.name} <span>({count})</span></label>)}
+        {showCategoryFacet && filterCategoryOptions.length > 0 && <fieldset>
+          <legend>{draftCategoryContext ? "Danh mục con" : "Loại sản phẩm"}</legend>
+          {filterCategoryOptions.map(({ category, depth, count }) => <label key={category.id} style={{ marginInlineStart: draftCategoryContext ? 0 : Math.min(depth, 3) * 12 }}><input type="checkbox" checked={draftTypes.includes(category.id)} onChange={() => toggleContextCategory(category.id)} />{category.name} <span>({count})</span></label>)}
         </fieldset>}
         {availableStones.length > 0 && <fieldset>
           <legend>Loại đá</legend>
