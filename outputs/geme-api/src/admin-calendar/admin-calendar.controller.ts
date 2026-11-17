@@ -15,6 +15,10 @@ export class AdminCalendarController {
   @RequireAdminPermissions("calendar.read")
   today() { return this.calendar.today(); }
 
+  @Get("due")
+  @RequireAdminPermissions("calendar.read")
+  due() { return this.calendar.due(); }
+
   @Get("events")
   @RequireAdminPermissions("calendar.read")
   list(@Query("from") from?: string, @Query("to") to?: string) { return this.calendar.list(from, to); }

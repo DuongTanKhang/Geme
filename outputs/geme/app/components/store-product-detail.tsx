@@ -19,15 +19,6 @@ function HeartIcon({ filled = false }: { filled?: boolean }) {
   return <svg viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} aria-hidden="true"><path d="M20.8 8.8c0 5-8.8 10.3-8.8 10.3S3.2 13.8 3.2 8.8A4.5 4.5 0 0 1 12 6.5a4.5 4.5 0 0 1 8.8 2.3Z" /></svg>;
 }
 
-function DetailAssuranceIcon({ name }: { name: "product" | "variants" | "consulting" | "support" }) {
-  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    {name === "product" && <><path d="m12 3 9 9-9 9-9-9 9-9Z" /><circle cx="12" cy="12" r="1.5" /></>}
-    {name === "variants" && <><rect x="4" y="4" width="6.5" height="6.5" rx="1" /><rect x="13.5" y="4" width="6.5" height="6.5" rx="1" /><rect x="4" y="13.5" width="6.5" height="6.5" rx="1" /><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1" /></>}
-    {name === "consulting" && <><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-5.5A7.5 7.5 0 0 1 10.5 8h2A7.5 7.5 0 0 1 20 15.5Z" /><path d="M8 13h8M8 16h5" /></>}
-    {name === "support" && <><path d="M12 3 19 6v5c0 4.4-2.8 8.2-7 10-4.2-1.8-7-5.6-7-10V6l7-3Z" /><path d="m8.5 12 2.2 2.2 4.8-4.8" /></>}
-  </svg>;
-}
-
 function ProductPhoto({ url, alt, className = "", loading = "lazy", sizes = "(max-width: 760px) 100vw, 50vw", onLoad }: { url?: string; alt: string; className?: string; loading?: "eager" | "lazy"; sizes?: string; onLoad?: (event: SyntheticEvent<HTMLImageElement>) => void }) {
   const imageUrl = storeMediaDeliveryUrl(url);
   return url
@@ -360,16 +351,9 @@ export function StoreProductDetail({
           {cartNotice && <p className="detail-cart-notice" role="status">{cartNotice}</p>}
           <button className={`detail-wishlist${isSaved ? " is-saved" : ""}`} type="button" aria-label={isSaved ? "Bỏ khỏi danh sách yêu thích" : "Thêm vào danh sách yêu thích"} aria-pressed={isSaved} aria-busy={wishlistPending} disabled={wishlistPending} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void handleFavorite(); }}><HeartIcon filled={isSaved} />{isSaved ? "Đã lưu yêu thích" : "Thêm vào danh sách yêu thích"}</button>
           {wishlistNotice && <p className="detail-cart-notice" role="status">{wishlistNotice}</p>}
-          <div className="detail-share"><span>Chia sẻ:</span><button type="button" onClick={() => window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(window.location.href)}`, "_blank", "noopener,noreferrer")} aria-label="Chia sẻ Facebook">f</button><button type="button" onClick={() => navigator.clipboard?.writeText(window.location.href)} aria-label="Sao chép liên kết">↗</button></div>
+          <div className="detail-share"><span>Chia sẻ:</span><button type="button" onClick={() => window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(window.location.href)}`, "_blank", "noopener,noreferrer")} aria-label="Chia sẻ Facebook">f</button></div>
         </div>
       </section>
-
-      {!product.hasWeightItems && <section className="detail-assurance-strip" aria-label="Thông tin dịch vụ">
-        <div><DetailAssuranceIcon name="product" /><span><strong>Dữ liệu sản phẩm rõ ràng</strong><small>Thông tin lấy từ GEME</small></span></div>
-        <div><DetailAssuranceIcon name="variants" /><span><strong>Biến thể theo sản phẩm</strong><small>Giá và tồn kho theo lựa chọn</small></span></div>
-        <div><DetailAssuranceIcon name="consulting" /><span><strong>Tư vấn riêng</strong><small>Hỗ trợ trước khi đặt hàng</small></span></div>
-        <div><DetailAssuranceIcon name="support" /><span><strong>Hỗ trợ sau mua</strong><small>Liên hệ đội ngũ GEME</small></span></div>
-      </section>}
 
       <section className="detail-content">
         <div className="detail-tabs" role="tablist" aria-label="Thông tin chi tiết">

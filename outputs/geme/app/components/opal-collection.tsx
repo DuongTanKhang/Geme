@@ -85,6 +85,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
   const [draftStones, setDraftStones] = useState<string[]>(initialStoneSlug ? [initialStoneSlug] : []);
   const [draftSizes, setDraftSizes] = useState<string[]>([]);
   const [draftPriceRange, setDraftPriceRange] = useState("");
+  const [stoneSearch, setStoneSearch] = useState("");
   const [sort, setSort] = useState(initialSort);
   const [visibleCount, setVisibleCount] = useState(PRODUCT_BATCH_SIZE);
   const [search, setSearch] = useState(initialSearch);
@@ -243,6 +244,17 @@ export function OpalCollection({ products, categories, materials, connected, pro
     return new Map(enabledStones.map((stone) => [stone.slug, scopedProducts.filter((product) => product.materialOption?.slug === stone.slug || product.gemstoneType?.slug === stone.slug || product.sphereStoneType?.slug === stone.slug).length]));
   }, [enabledStones, products, categoryDescendants, stoneScopeTypes]);
   const availableStones = useMemo(() => enabledStones.filter((stone) => (stoneCounts.get(stone.slug) || 0) > 0), [enabledStones, stoneCounts]);
+  const normalizedStoneSearch = useMemo(() => stoneSearch.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi").trim(), [stoneSearch]);
+  const visibleStones = useMemo(() => availableStones.filter((stone) => {
+    const name = stone.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLocaleLowerCase("vi");
+    return !normalizedStoneSearch || name.includes(normalizedStoneSearch);
+  }), [availableStones, normalizedStoneSearch]);
+  const draftStoneOptions = useMemo(() => draftStones.map((slug) => enabledStones.find((stone) => stone.slug === slug) || {
+    id: slug,
+    slug,
+    name: slug === initialStoneSlug && initialStoneName ? initialStoneName : slug,
+    sortOrder: 0,
+  }), [draftStones, enabledStones, initialStoneName, initialStoneSlug]);
   const sizeOptions = useMemo(() => {
     const sizes = new Set(sizeScopedProducts.flatMap((product) => product.variants.map((variant) => variant.beadSize).filter((size): size is string => Boolean(size?.trim()))));
     return [...sizes].sort((a, b) => a.localeCompare(b, "vi", { numeric: true })).map((size) => ({ size, count: sizeScopedProducts.filter((product) => product.variants.some((variant) => variant.beadSize === size)).length }));
@@ -373,24 +385,41 @@ export function OpalCollection({ products, categories, materials, connected, pro
       <button type="button" className="new-arrivals-filter-overlay" aria-hidden={!isMobile} tabIndex={isMobile ? 0 : -1} aria-label="Đóng bộ lọc" onClick={() => setFiltersOpen(false)} />
       <div className="new-arrivals-filter-panel" id="catalog-filter-panel" ref={filterPanelRef} role={isMobile ? "dialog" : undefined} aria-modal={isMobile ? true : undefined} aria-labelledby="catalog-filter-title" tabIndex={isMobile ? -1 : undefined}>
         <div className="new-arrivals-filter-header"><h3 id="catalog-filter-title">Bộ lọc</h3><button type="button" aria-label="Đóng bộ lọc" onClick={() => setFiltersOpen(false)}>×</button></div>
-        {showCategoryFacet && filterCategoryOptions.length > 0 && <fieldset>
-          <legend>{draftCategoryContext ? "Danh mục con" : "Loại sản phẩm"}</legend>
-          {filterCategoryOptions.map(({ category, depth, count }) => <label key={category.id} style={{ marginInlineStart: draftCategoryContext ? 0 : Math.min(depth, 3) * 12 }}><input type="checkbox" checked={draftTypes.includes(category.id)} onChange={() => toggleContextCategory(category.id)} />{category.name} <span>({count})</span></label>)}
-        </fieldset>}
-        {availableStones.length > 0 && <fieldset>
-          <legend>Loại đá</legend>
-          {availableStones.map((stone) => <label key={stone.id}><input type="checkbox" checked={draftStones.includes(stone.slug)} onChange={() => toggle(stone.slug, draftStones, setDraftStones)} />{stone.name} <span>({stoneCounts.get(stone.slug) || 0})</span></label>)}
-        </fieldset>}
-        {sizeOptions.length > 0 && <fieldset>
-          <legend>Kích thước</legend>
-          <p className="catalog-size-filter-note">Chỉ áp dụng cho sản phẩm có biến thể kích thước trong danh mục đang chọn.</p>
-          {sizeOptions.map(({ size, count }) => <label key={size}><input type="checkbox" checked={draftSizes.includes(size)} onChange={() => toggle(size, draftSizes, setDraftSizes)} />{size} <span>({count})</span></label>)}
-        </fieldset>}
-        <fieldset>
-          <legend>Khoảng giá</legend>
-          <label><input type="radio" name="catalog-price" checked={!draftPriceRange} onChange={() => setDraftPriceRange("")} />Tất cả mức giá</label>
-          {priceOptions.map(([value, label]) => <label key={value}><input type="radio" name="catalog-price" checked={draftPriceRange === value} onChange={() => setDraftPriceRange(value)} />{label}</label>)}
-        </fieldset>
+        <div className="new-arrivals-filter-primary">
+          {categoryKind !== "JEWELRY" && showCategoryFacet && filterCategoryOptions.length > 0 && <fieldset>
+            <legend>{draftCategoryContext ? "Danh mục con" : "Loại sản phẩm"}</legend>
+            {filterCategoryOptions.map(({ category, depth, count }) => <label key={category.id} style={{ marginInlineStart: draftCategoryContext ? 0 : Math.min(depth, 3) * 12 }}><input type="checkbox" checked={draftTypes.includes(category.id)} onChange={() => toggleContextCategory(category.id)} />{category.name} <span>({count})</span></label>)}
+          </fieldset>}
+          {availableStones.length > 0 && <fieldset className="new-arrivals-stone-fieldset">
+            <legend>Loại đá</legend>
+            <label className="new-arrivals-stone-search">
+              <span aria-hidden="true">⌕</span>
+              <input type="search" aria-label="Tìm kiếm loại đá" placeholder="Tìm kiếm loại đá..." value={stoneSearch} onChange={(event) => setStoneSearch(event.target.value)} />
+            </label>
+            {draftStoneOptions.length > 0 && <div className="new-arrivals-stone-selected" aria-label={`${draftStoneOptions.length} loại đá đang chọn`}>
+              <span className="new-arrivals-stone-selected-count">{draftStoneOptions.length} đang chọn</span>
+              {draftStoneOptions.map((stone) => <button type="button" key={stone.slug} aria-label={`Bỏ chọn ${stone.name}`} onClick={() => setDraftStones((current) => current.filter((slug) => slug !== stone.slug))}>{stone.name}<span aria-hidden="true">×</span></button>)}
+            </div>}
+            <div className="new-arrivals-stone-options" aria-label="Các loại đá">
+              {visibleStones.length > 0 ? visibleStones.map((stone) => <label className="new-arrivals-stone-option" key={stone.id}>
+                <input type="checkbox" checked={draftStones.includes(stone.slug)} onChange={() => toggle(stone.slug, draftStones, setDraftStones)} />
+                <span>{stone.name}<small>({stoneCounts.get(stone.slug) || 0})</small></span>
+              </label>) : <p className="new-arrivals-stone-empty">Không tìm thấy loại đá phù hợp.</p>}
+            </div>
+          </fieldset>}
+          {sizeOptions.length > 0 && <fieldset>
+            <legend>Kích thước</legend>
+            <p className="catalog-size-filter-note">Chỉ áp dụng cho sản phẩm có biến thể kích thước trong danh mục đang chọn.</p>
+            {sizeOptions.map(({ size, count }) => <label key={size}><input type="checkbox" checked={draftSizes.includes(size)} onChange={() => toggle(size, draftSizes, setDraftSizes)} />{size} <span>({count})</span></label>)}
+          </fieldset>}
+        </div>
+        <div className="new-arrivals-filter-secondary">
+          <fieldset className="new-arrivals-price-fieldset">
+            <legend>Khoảng giá</legend>
+            <label><input type="radio" name="catalog-price" checked={!draftPriceRange} onChange={() => setDraftPriceRange("")} />Tất cả mức giá</label>
+            {priceOptions.map(([value, label]) => <label key={value}><input type="radio" name="catalog-price" checked={draftPriceRange === value} onChange={() => setDraftPriceRange(value)} />{label}</label>)}
+          </fieldset>
+        </div>
         <div className="new-arrivals-filter-actions">
           <button type="button" className="new-arrivals-reset" onClick={reset}>Xóa bộ lọc</button>
           <button type="button" className="new-arrivals-apply" onClick={applyFilters}>Áp dụng</button>

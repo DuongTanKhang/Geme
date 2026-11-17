@@ -11,6 +11,8 @@ type MenuStone = { id: string; name: string; slug: string; imageUrl?: string; ap
 type MenuCategory = { id: string; name: string; slug: string; kind: "JEWELRY" | "GEMSTONE" | "OTHER"; usage: "PRODUCT_CATEGORY" | "GEMSTONE_TYPE"; level: number; parentId?: string | null; status: "ACTIVE" | "INACTIVE"; imageUrl?: string | null; sortOrder?: number };
 type ApiMaterialOption = { id: string; name: string; scope: "JEWELRY" | "GEMSTONE"; kind: "MATERIAL" | "STONE"; active: boolean; imageUrl?: string | null; slug?: string; sortOrder?: number; appliedCategoryIds?: string[]; availableCategoryIds?: string[] };
 type StoreCartLine = { key: string; productId: string; variantId: string | null; slug: string; name: string; sku: string; price: number; shape?: string | null; quality: string | null; beadSize: string | null; carat?: number | null; gemstoneQuality?: string | null; quantity: number; stock: number };
+type ShopMenuEditorialMedia = { enabled: boolean; kind: "image" | "video"; imageUrl: string; videoUrl: string; posterUrl: string; altText: string; topLine: string; bottomLine: string };
+const defaultShopMenuEditorialMedia: ShopMenuEditorialMedia = { enabled: true, kind: "image", imageUrl: "/images/geme-ring-editorial.png", videoUrl: "", posterUrl: "/images/geme-ring-editorial.png", altText: "Nhẫn kim cương GEME trên nền lụa sáng", topLine: "TIMELESS", bottomLine: "ELEGANCE" };
 const CART_STORAGE_KEY = "geme-cart-v1";
 function readStoreCart(): StoreCartLine[] {
   try {
@@ -206,7 +208,7 @@ function categoryChildHref(category: MenuCategory, root: MenuCategory, byId: Map
   return `/da-quy?loai=${encodeURIComponent(category.slug)}`;
 }
 
-function ShopCategoryMenu({ roots, categories, compact = false, onNavigate }: { roots: MenuCategory[]; categories: MenuCategory[]; compact?: boolean; onNavigate?: () => void }) {
+function ShopCategoryMenu({ roots, categories, compact = false, editorialMedia, menuOpen = false, onNavigate }: { roots: MenuCategory[]; categories: MenuCategory[]; compact?: boolean; editorialMedia: ShopMenuEditorialMedia; menuOpen?: boolean; onNavigate?: () => void }) {
   const byId = new Map(categories.map((category) => [category.id, category]));
   const orderedRoots = [...roots].sort((left, right) => {
     const rank = (item: MenuCategory) => item.kind === "JEWELRY" ? 0 : item.kind === "OTHER" ? 1 : item.kind === "GEMSTONE" ? 2 : 3;
@@ -225,7 +227,7 @@ function ShopCategoryMenu({ roots, categories, compact = false, onNavigate }: { 
       const title = root.kind === "JEWELRY" ? "TRANG SỨC" : root.kind === "OTHER" ? "VẬT PHẨM" : root.kind === "GEMSTONE" ? "ĐÁ QUÝ" : root.name.toLocaleUpperCase("vi");
 
       return <section className="shop-mega-section" key={root.id} aria-label={title}>
-        <a className="shop-mega-title" href={categoryRootHref(root)} onClick={onNavigate}>{title}<span aria-hidden="true">↗</span></a>
+        <a className="shop-mega-title" href={categoryRootHref(root)} onClick={onNavigate}>{title}</a>
         <div className="shop-mega-links">
           {childCategories.map((category) => {
             const depth = Math.max(0, category.level - root.level - 1);
@@ -239,6 +241,15 @@ function ShopCategoryMenu({ roots, categories, compact = false, onNavigate }: { 
       </section>;
     })}
     {!orderedRoots.length && <p className="shop-mega-empty">Danh mục sản phẩm đang được cập nhật.</p>}
+    {!compact && editorialMedia.enabled && <aside className="shop-mega-editorial" aria-label="GEME editorial">
+      {editorialMedia.kind === "video" && editorialMedia.videoUrl
+        ? <video src={menuOpen ? editorialMedia.videoUrl : undefined} poster={editorialMedia.posterUrl || editorialMedia.imageUrl || undefined} muted autoPlay={menuOpen} loop playsInline preload="none" aria-label={editorialMedia.altText || "Video GEME"}/>
+        : <img src={editorialMedia.imageUrl || defaultShopMenuEditorialMedia.imageUrl} alt={editorialMedia.altText || "Ảnh quảng bá GEME"} loading="lazy" />}
+      <div className="shop-mega-editorial-text" aria-hidden="true">
+        {editorialMedia.topLine && <span>{editorialMedia.topLine}</span>}
+        {editorialMedia.bottomLine && <span>{editorialMedia.bottomLine}</span>}
+      </div>
+    </aside>}
   </div>;
 }
 
@@ -304,6 +315,7 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [rootCategories, setRootCategories] = useState<MenuCategory[]>([]);
   const [categories, setCategories] = useState<MenuCategory[]>([]);
+  const [editorialMedia, setEditorialMedia] = useState<ShopMenuEditorialMedia>(defaultShopMenuEditorialMedia);
   const [cartCount, setCartCount] = useState(0);
   const [cartOpen, setCartOpen] = useState(false);
   const [cartItems, setCartItems] = useState<StoreCartLine[]>([]);
@@ -318,9 +330,16 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
       if (!active) return;
       const enabled = records.filter((item) => item.status === "ACTIVE");
       setCategories(enabled);
-      setRootCategories(enabled
+      const rootCandidates = enabled
         .filter((item) => item.usage === "PRODUCT_CATEGORY" && !item.parentId)
-        .sort((left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name, "vi")));
+        .sort((left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name, "vi"));
+      const rootForKind = new Map<MenuCategory["kind"], MenuCategory>();
+      const childCount = (root: MenuCategory) => enabled.filter((item) => item.parentId === root.id && item.usage === "PRODUCT_CATEGORY").length;
+      for (const candidate of rootCandidates) {
+        const current = rootForKind.get(candidate.kind);
+        if (!current || childCount(candidate) > childCount(current)) rootForKind.set(candidate.kind, candidate);
+      }
+      setRootCategories([...rootForKind.values()].sort((left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name, "vi")));
     };
     let categoriesRequestId = 0;
     const fetchCategories = async (fresh = false) => {
@@ -349,6 +368,25 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
       } catch { /* Ignore malformed event payloads. */ }
     };
     return () => { active = false; window.removeEventListener("geme:categories-changed", refreshCategories); events.close(); };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void fetch(`${materialsApiBase}/settings/public`, { cache: "no-store" }).then((response) => response.ok ? response.json() : null).then((settings: Record<string, unknown> | null) => {
+      if (!active || !settings?.shopMenuEditorial || typeof settings.shopMenuEditorial !== "object") return;
+      const value = settings.shopMenuEditorial as Record<string, unknown>;
+      setEditorialMedia({
+        enabled: value.enabled !== false,
+        kind: value.kind === "video" ? "video" : "image",
+        imageUrl: typeof value.imageUrl === "string" ? value.imageUrl : defaultShopMenuEditorialMedia.imageUrl,
+        videoUrl: typeof value.videoUrl === "string" ? value.videoUrl : "",
+        posterUrl: typeof value.posterUrl === "string" ? value.posterUrl : defaultShopMenuEditorialMedia.posterUrl,
+        altText: typeof value.altText === "string" ? value.altText : defaultShopMenuEditorialMedia.altText,
+        topLine: typeof value.topLine === "string" ? value.topLine : defaultShopMenuEditorialMedia.topLine,
+        bottomLine: typeof value.bottomLine === "string" ? value.bottomLine : defaultShopMenuEditorialMedia.bottomLine,
+      });
+    }).catch(() => { /* Keep the local default editorial media when settings are unavailable. */ });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -451,13 +489,13 @@ export function SiteHeader({ searchPlaceholder = "Tìm kiếm sản phẩm...", 
     </div>
     <div className={`shop-menu-layer${shopMenuOpen && !mobileOpen ? " is-open" : ""}`} aria-hidden={!(shopMenuOpen && !mobileOpen)}>
       <div className="shop-mega-menu" id="geme-shop-menu" onMouseEnter={cancelMenuClose}>
-        <ShopCategoryMenu roots={rootCategories} categories={categories} onNavigate={closeNavigation} />
+        <ShopCategoryMenu roots={rootCategories} categories={categories} editorialMedia={editorialMedia} menuOpen={shopMenuOpen} onNavigate={closeNavigation} />
       </div>
     </div>
     {mobileOpen && <div className="mobile-nav-layer" id="geme-mobile-nav">
       <nav className="mobile-nav-panel" aria-label="Điều hướng chính">
         <button className="mobile-shop-trigger" type="button" aria-expanded={shopMenuOpen} onClick={() => setShopMenuOpen((open) => !open)}>SHOP <span aria-hidden="true">{shopMenuOpen ? "−" : "+"}</span></button>
-        {shopMenuOpen && <div className="mobile-shop-menu"><ShopCategoryMenu roots={rootCategories} categories={categories} compact onNavigate={closeNavigation} /></div>}
+        {shopMenuOpen && <div className="mobile-shop-menu"><ShopCategoryMenu roots={rootCategories} categories={categories} compact editorialMedia={editorialMedia} menuOpen={shopMenuOpen} onNavigate={closeNavigation} /></div>}
         <a href="/new-arrivals" onClick={closeNavigation}>NEW ARRIVALS</a>
         <span aria-disabled="true" title="Sắp ra mắt">COLLECTIONS <small>Sắp ra mắt</small></span>
         <span aria-disabled="true" title="Sắp ra mắt">FEEDBACK <small>Sắp ra mắt</small></span>

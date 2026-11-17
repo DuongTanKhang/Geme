@@ -6,6 +6,7 @@ import type { MaterialOption } from "./materials-workspace";
 import { uploadProductImage, uploadProductVideo, MAX_PRODUCT_IMAGES, MAX_VARIANT_MEDIA_ITEMS, parsePriceInput } from "./product-images";
 import { TechnicalImagePicker } from "./technical-image-picker";
 import NewArrivalsAdminWorkspace, { type AdminJewelryStoneGroup } from "./new-arrivals-admin-workspace";
+import { exportProductsExcel } from "./order-excel-export";
 
 export type AdminProduct = {
   id: string;
@@ -651,16 +652,13 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
     update("image", next[0] ?? "");
     setImageIndex(Math.max(0, Math.min(imageIndex, next.length - 1)));
   };
-  const exportCsv = () => {
-    const columns = ["Mã SKU", "Tên sản phẩm", "Danh mục", "Giá bán", "Tồn kho", "Trạng thái"];
-    const csv = [columns.join(","), ...rows.map((item) => [item.id, item.name, item.category ?? "", item.price, item.stock, item.status].map((value) => `"${String(value).replaceAll('"', '""')}"`).join(","))].join("\r\n");
-    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "geme-san-pham.csv";
-    link.click();
-    URL.revokeObjectURL(url);
-  };
+  const exportExcel = () => exportProductsExcel(rows, {
+    catalogKind,
+    category: categoryFilter,
+    stoneType: types.find((item) => item.key === typeFilter)?.label || "",
+    status: statusFilter,
+    search,
+  });
   const clearFilters = () => { setSearch(""); setCategoryFilter(""); setTypeFilter(""); setStatusFilter(""); setPage(0); };
   const changeCatalogKind = (kind: "Trang sức" | "Đá quý" | "Vật phẩm") => {
     setCatalogKind(kind);
@@ -680,7 +678,7 @@ export default function ProductsWorkspace({ products, categories: categoryRecord
         <div className="products-actions">
           {canManageNewArrivals && <button className="button button-quiet" type="button" onClick={() => setStoneGroupWorkspaceOpen(true)}>Nhóm đá / New Arrivals</button>}
           {canFullCatalog && <button className="button button-quiet" onClick={() => onNotify("Nhập Excel sẽ được kết nối ở bước backend.")}><Icon name="upload"/>Nhập Excel</button>}
-          <button className="button button-quiet" onClick={exportCsv}><Icon name="download"/>Xuất Excel</button>
+          <button className="button button-quiet" onClick={exportExcel}><Icon name="download"/>Xuất Excel</button>
           {canFullCatalog && <button className="button button-primary" onClick={onAdd}><Icon name="plus"/>Thêm bài đăng</button>}
         </div>
       </div>

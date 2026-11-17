@@ -131,8 +131,8 @@ export class LoyaltyService {
     await tx.loyaltyPointTransaction.updateMany({ where: { orderId, type: "REDEEM_RESERVED", status: "RESERVED" }, data: { status: "VOID", note: "Đơn bị hủy; điểm giữ chỗ đã được trả lại." } });
   }
 
-  async awardIfDeliveredAndPaid(tx: any, order: any) {
-    if (!order || order.status !== "DELIVERED" || !order.customerId) return 0;
+  async awardIfFullyPaid(tx: any, order: any) {
+    if (!order?.customerId) return 0;
     const payments = await tx.payment.findMany({
       where: { orderId: order.id },
       select: { status: true, amount: true, refunds: { select: { amount: true } } },
@@ -156,7 +156,7 @@ export class LoyaltyService {
     await tx.loyaltyPointTransaction.create({ data: {
       customerId: order.customerId, orderId: order.id, points, amountVnd: eligibleAmount,
       status: "POSTED", type: "ORDER_EARNED", idempotencyKey: `LOYALTY:EARN:${order.id}`,
-      note: `Tích điểm sau khi giao và thanh toán đủ đơn ${order.code}.`,
+      note: `Tích điểm sau khi thanh toán đủ đơn ${order.code}.`,
     } });
     return points;
   }

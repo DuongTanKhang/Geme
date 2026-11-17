@@ -62,7 +62,17 @@ type NewArrivalsMedia = {
   videoPosterUrl: string;
   videoAltText: string;
 };
-type SiteContent = { banners?: unknown; footerContent?: unknown; catalogEditorialPromos?: unknown; newArrivalsMedia?: unknown };
+type ShopMenuEditorialMedia = {
+  enabled: boolean;
+  kind: "image" | "video";
+  imageUrl: string;
+  videoUrl: string;
+  posterUrl: string;
+  altText: string;
+  topLine: string;
+  bottomLine: string;
+};
+type SiteContent = { banners?: unknown; footerContent?: unknown; catalogEditorialPromos?: unknown; newArrivalsMedia?: unknown; shopMenuEditorial?: unknown };
 type CategoryBanner = { id: string; name: string; slug?: string; bannerUrl?: string | null };
 
 const defaultNewArrivalsMedia: NewArrivalsMedia = {
@@ -74,6 +84,31 @@ const defaultNewArrivalsMedia: NewArrivalsMedia = {
   videoPosterUrl: "",
   videoAltText: "",
 };
+
+const defaultShopMenuEditorialMedia: ShopMenuEditorialMedia = {
+  enabled: true,
+  kind: "image",
+  imageUrl: "/images/geme-ring-editorial.png",
+  videoUrl: "",
+  posterUrl: "/images/geme-ring-editorial.png",
+  altText: "Nhẫn kim cương GEME trên nền lụa sáng",
+  topLine: "TIMELESS",
+  bottomLine: "ELEGANCE",
+};
+
+function normalizeShopMenuEditorialMedia(value: unknown): ShopMenuEditorialMedia {
+  const item = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    enabled: item.enabled !== false,
+    kind: item.kind === "video" ? "video" : "image",
+    imageUrl: typeof item.imageUrl === "string" ? item.imageUrl : defaultShopMenuEditorialMedia.imageUrl,
+    videoUrl: typeof item.videoUrl === "string" ? item.videoUrl : "",
+    posterUrl: typeof item.posterUrl === "string" ? item.posterUrl : defaultShopMenuEditorialMedia.posterUrl,
+    altText: typeof item.altText === "string" ? item.altText : defaultShopMenuEditorialMedia.altText,
+    topLine: typeof item.topLine === "string" ? item.topLine : defaultShopMenuEditorialMedia.topLine,
+    bottomLine: typeof item.bottomLine === "string" ? item.bottomLine : defaultShopMenuEditorialMedia.bottomLine,
+  };
+}
 
 function normalizeNewArrivalsMedia(value: unknown): NewArrivalsMedia {
   const item = value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -344,7 +379,7 @@ async function uploadVideo(file: File, alt: string) {
 }
 
 export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message: string) => void }) {
-  const [tab, setTab] = useState<"banners" | "footer" | "catalog" | "library">("banners");
+  const [tab, setTab] = useState<"banners" | "footer" | "catalog" | "menu" | "library">("banners");
   const [libraryKind, setLibraryKind] = useState<"banner" | "footer">("banner");
   const [zoomImage, setZoomImage] = useState<{ url: string; name: string } | null>(null);
   const [banners, setBanners] = useState<Banner[]>(fallbackBanners);
@@ -354,6 +389,7 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
   const [footer, setFooter] = useState<FooterContent>(defaultFooter);
   const [catalogPromos, setCatalogPromos] = useState<CatalogEditorialPromo[]>(defaultCatalogEditorialPromos);
   const [newArrivalsMedia, setNewArrivalsMedia] = useState<NewArrivalsMedia>(defaultNewArrivalsMedia);
+  const [shopMenuEditorialMedia, setShopMenuEditorialMedia] = useState<ShopMenuEditorialMedia>(defaultShopMenuEditorialMedia);
   const [filterPosition, setFilterPosition] = useState("Tất cả vị trí");
   const [filterSeason, setFilterSeason] = useState("Tất cả mùa");
   const [saving, setSaving] = useState(false);
@@ -379,7 +415,9 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
     ...catalogPromos.flatMap((item) => [item.imageUrl && { url: item.imageUrl, name: `${item.title || item.id} · Ảnh`, detail: "Trang sản phẩm · Nội dung biên tập", season: "" }, item.posterUrl && { url: item.posterUrl, name: `${item.title || item.id} · Poster video`, detail: "Trang sản phẩm · Poster video", season: "" }].filter((asset): asset is { url: string; name: string; detail: string; season: string } => Boolean(asset))),
     newArrivalsMedia.editorialImageUrl && { url: newArrivalsMedia.editorialImageUrl, name: "New Arrivals · Ảnh biên tập", detail: "New Arrivals · Ảnh", season: "" },
     newArrivalsMedia.videoPosterUrl && { url: newArrivalsMedia.videoPosterUrl, name: "New Arrivals · Poster video", detail: "New Arrivals · Poster video", season: "" },
-  ].filter((asset): asset is { url: string; name: string; detail: string; season: string } => Boolean(asset)), [managedBanners, categoryBanners, catalogPromos, newArrivalsMedia]);
+    shopMenuEditorialMedia.imageUrl && { url: shopMenuEditorialMedia.imageUrl, name: "Menu Shop · Ảnh", detail: "Mega menu · Ảnh quảng bá", season: "" },
+    shopMenuEditorialMedia.posterUrl && { url: shopMenuEditorialMedia.posterUrl, name: "Menu Shop · Poster video", detail: "Mega menu · Poster video", season: "" },
+  ].filter((asset): asset is { url: string; name: string; detail: string; season: string } => Boolean(asset)), [managedBanners, categoryBanners, catalogPromos, newArrivalsMedia, shopMenuEditorialMedia]);
   const footerImages = useMemo(() => [footer.logoImageUrl && { url: footer.logoImageUrl, name: "Logo footer", detail: "Thương hiệu", season: "" }, footer.backgroundImageUrl && { url: footer.backgroundImageUrl, name: "Ảnh nền footer", detail: "Ảnh chân trang", season: "" }].filter((item): item is { url: string; name: string; detail: string; season: string } => Boolean(item)), [footer.logoImageUrl, footer.backgroundImageUrl]);
   const galleryImages = libraryKind === "banner" ? bannerImages : footerImages;
   const filteredGallery = libraryKind === "banner" && filterSeason !== "Tất cả mùa" ? galleryImages.filter((item) => item.season === filterSeason) : galleryImages;
@@ -398,7 +436,7 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
         return websiteBannerPositionSet.has(position) ? [position] : [];
       }) : []);
       const hasSavedAllWebsiteSlots = websiteBannerPositions.every((position) => savedWebsitePositions.has(position));
-      setBanners(nextBanners); setSelectedId(firstManagedBanner?.id || ""); setDraft(firstManagedBanner || emptyBanner()); setFooter(normalizeFooter(settings.footerContent)); setCatalogPromos(normalizeCatalogEditorialPromos(settings.catalogEditorialPromos)); setNewArrivalsMedia(normalizeNewArrivalsMedia(settings.newArrivalsMedia)); setBannerConfigSaved(hasSavedAllWebsiteSlots); setLoaded(true);
+      setBanners(nextBanners); setSelectedId(firstManagedBanner?.id || ""); setDraft(firstManagedBanner || emptyBanner()); setFooter(normalizeFooter(settings.footerContent)); setCatalogPromos(normalizeCatalogEditorialPromos(settings.catalogEditorialPromos)); setNewArrivalsMedia(normalizeNewArrivalsMedia(settings.newArrivalsMedia)); setShopMenuEditorialMedia(normalizeShopMenuEditorialMedia(settings.shopMenuEditorial)); setBannerConfigSaved(hasSavedAllWebsiteSlots); setLoaded(true);
     }).catch(() => { if (alive) { setLoaded(true); notifyRef.current("Không tải được cấu hình nội dung từ database."); } });
     return () => { alive = false; };
   }, []);
@@ -520,6 +558,39 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
     finally { setUploading(false); }
   };
 
+  const uploadShopMenuImage = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
+    setUploading(true);
+    try {
+      const imageUrl = await uploadImage(file, shopMenuEditorialMedia.altText || "Ảnh quảng bá menu Shop GEME");
+      setShopMenuEditorialMedia((old) => ({ ...old, imageUrl }));
+      onNotify("Ảnh menu đã lưu trong thư viện media. Bấm Lưu nội dung menu để áp dụng.");
+    } catch (error) { onNotify(error instanceof Error ? error.message : "Không lưu được ảnh menu."); }
+    finally { setUploading(false); }
+  };
+
+  const uploadShopMenuVideo = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
+    setUploading(true);
+    try {
+      const videoUrl = await uploadVideo(file, shopMenuEditorialMedia.altText || "Video quảng bá menu Shop GEME");
+      setShopMenuEditorialMedia((old) => ({ ...old, videoUrl }));
+      onNotify("Video menu đã lưu trong thư viện media. Bấm Lưu nội dung menu để áp dụng.");
+    } catch (error) { onNotify(error instanceof Error ? error.message : "Không lưu được video menu."); }
+    finally { setUploading(false); }
+  };
+
+  const uploadShopMenuPoster = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
+    setUploading(true);
+    try {
+      const posterUrl = await uploadImage(file, shopMenuEditorialMedia.altText || "Poster video menu Shop GEME");
+      setShopMenuEditorialMedia((old) => ({ ...old, posterUrl }));
+      onNotify("Poster video menu đã lưu. Bấm Lưu nội dung menu để áp dụng.");
+    } catch (error) { onNotify(error instanceof Error ? error.message : "Không lưu được poster menu."); }
+    finally { setUploading(false); }
+  };
+
   const saveCatalogPromos = async () => {
     setSaving(true);
     try {
@@ -540,6 +611,15 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
     finally { setSaving(false); }
   };
 
+  const saveShopMenuEditorialMedia = async () => {
+    setSaving(true);
+    try {
+      await saveSettings({ shopMenuEditorial: shopMenuEditorialMedia });
+      onNotify("Ảnh/video quảng bá trong menu Shop đã được lưu.");
+    } catch (error) { onNotify(error instanceof Error ? error.message : "Không lưu được nội dung menu Shop."); }
+    finally { setSaving(false); }
+  };
+
   const updateCatalogPromo = <K extends keyof CatalogEditorialPromo>(promoId: CatalogEditorialPromo["id"], field: K, value: CatalogEditorialPromo[K]) => {
     setCatalogPromos((items) => items.map((item) => item.id === promoId ? { ...item, [field]: value } : item));
   };
@@ -551,7 +631,7 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
 
   return <section className="bf-workspace">
     <div className="page-heading bf-heading"><div><h1>Quản lý Banner &amp; Footer</h1><p>Cập nhật banner và nội dung chân trang; ảnh được lưu bền vững trong thư viện media.</p></div>{tab === "banners" && <div className="bf-heading-actions"><button className="button button-quiet" onClick={editLoginBanner}>Chỉnh ảnh đăng nhập</button><button className="button button-primary" onClick={beginCreate}>＋ Thêm banner mới</button></div>}</div>
-    <div className="bf-tabs"><button className={tab === "banners" ? "active" : ""} onClick={() => setTab("banners")}>▧ &nbsp; Banner</button><button className={tab === "footer" ? "active" : ""} onClick={() => setTab("footer")}>▤ &nbsp; Footer</button><button className={tab === "catalog" ? "active" : ""} onClick={() => setTab("catalog")}>▧ &nbsp; Ảnh &amp; video Trang sức / New Arrivals</button><button className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}>▦ &nbsp; Thư viện ảnh</button></div>
+    <div className="bf-tabs"><button className={tab === "banners" ? "active" : ""} onClick={() => setTab("banners")}>▧ &nbsp; Banner</button><button className={tab === "footer" ? "active" : ""} onClick={() => setTab("footer")}>▤ &nbsp; Footer</button><button className={tab === "catalog" ? "active" : ""} onClick={() => setTab("catalog")}>▧ &nbsp; Ảnh &amp; video Trang sức / New Arrivals</button><button className={tab === "menu" ? "active" : ""} onClick={() => setTab("menu")}>▣ &nbsp; Ảnh &amp; video menu Shop</button><button className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}>▦ &nbsp; Thư viện ảnh</button></div>
 
     {tab === "banners" ? <div className="bf-banner-layout">
       <section className="bf-list-panel"><div className="bf-list-heading"><div><h2>Danh sách banner</h2><p>Quản lý ảnh banner theo vị trí hiển thị trên website.</p></div><label><span className="sr-only">Lọc vị trí</span><select value={filterPosition} onChange={(event) => setFilterPosition(event.target.value)}><option>Tất cả vị trí</option>{positions.map((position) => <option key={position}>{position}</option>)}</select></label><label><span className="sr-only">Lọc mùa</span><select value={filterSeason} onChange={(event) => setFilterSeason(event.target.value)}><option>Tất cả mùa</option>{seasons.map((season) => <option key={season}>{season}</option>)}</select></label></div>
@@ -625,6 +705,17 @@ export default function BannerFooterWorkspace({ onNotify }: { onNotify: (message
         </div>
         <div className="bf-footer-save"><span>Lưu riêng ảnh biên tập và video của New Arrivals.</span><button className="button button-primary" onClick={() => void saveNewArrivalsMedia()} disabled={saving || uploading}>{saving ? "Đang lưu…" : "Lưu ảnh & video New Arrivals"}</button></div>
       </section>
+    </div> : tab === "menu" ? <div className="bf-catalog-editor bf-menu-editor">
+      <div className="bf-catalog-intro"><div><h2>Ảnh quảng bá trong menu Shop</h2><p>Tùy chỉnh khung hình bên phải menu chính. Có thể dùng ảnh đã nén hoặc video ngắn.</p></div><label className="bf-catalog-enable"><input type="checkbox" checked={shopMenuEditorialMedia.enabled} onChange={(event) => setShopMenuEditorialMedia((old) => ({ ...old, enabled: event.target.checked }))}/> Hiển thị</label></div>
+      <p className="bf-catalog-video-note">Video MP4/WebM tối đa 8 MB. Video chỉ tải khi người dùng mở menu; poster vẫn hiển thị trước đó.</p>
+      <div className="bf-menu-media-layout"><article className="bf-catalog-promo-card">
+        <label className="bf-field"><span>Loại nội dung</span><select value={shopMenuEditorialMedia.kind} onChange={(event) => setShopMenuEditorialMedia((old) => ({ ...old, kind: event.target.value === "video" ? "video" : "image" }))}><option value="image">Ảnh</option><option value="video">Video</option></select></label>
+        {shopMenuEditorialMedia.kind === "image" ? <><label className="bf-field"><span>URL ảnh (tuỳ chọn)</span><input value={shopMenuEditorialMedia.imageUrl} onChange={(event) => setShopMenuEditorialMedia((old) => ({ ...old, imageUrl: event.target.value }))} placeholder="Dán URL ảnh hoặc tải ảnh bên dưới"/></label><label className="bf-catalog-upload"><span>{shopMenuEditorialMedia.imageUrl ? <img src={apiImageUrl(shopMenuEditorialMedia.imageUrl)} alt="Xem trước ảnh menu Shop"/> : "Chưa chọn ảnh"}</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadShopMenuImage(event)} disabled={uploading}/></label></> : <><label className="bf-field"><span>URL video (MP4/WebM, tuỳ chọn)</span><input value={shopMenuEditorialMedia.videoUrl} onChange={(event) => setShopMenuEditorialMedia((old) => ({ ...old, videoUrl: event.target.value }))} placeholder="Dán URL video hoặc tải video bên dưới"/></label><label className="bf-catalog-upload bf-video-upload"><span>{shopMenuEditorialMedia.videoUrl ? "Video đã chọn · bấm để thay video" : "Chọn video MP4/WebM · tối đa 8 MB"}</span><input type="file" accept="video/mp4,video/webm,.mp4,.webm" onChange={(event) => void uploadShopMenuVideo(event)} disabled={uploading}/></label>{shopMenuEditorialMedia.videoUrl && <video className="bf-catalog-video-preview" src={apiImageUrl(shopMenuEditorialMedia.videoUrl)} poster={shopMenuEditorialMedia.posterUrl ? apiImageUrl(shopMenuEditorialMedia.posterUrl) : undefined} controls playsInline preload="metadata" aria-label="Xem trước video menu Shop"/>}<label className="bf-field"><span>URL poster (tuỳ chọn)</span><input value={shopMenuEditorialMedia.posterUrl} onChange={(event) => setShopMenuEditorialMedia((old) => ({ ...old, posterUrl: event.target.value }))} placeholder="Dán URL ảnh poster"/></label><label className="bf-catalog-upload"><span>{shopMenuEditorialMedia.posterUrl ? <img src={apiImageUrl(shopMenuEditorialMedia.posterUrl)} alt="Xem trước poster menu Shop"/> : "Chọn ảnh poster"}</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadShopMenuPoster(event)} disabled={uploading}/></label></>}
+        <label className="bf-field"><span>Dòng chữ phía trên</span><input value={shopMenuEditorialMedia.topLine} onChange={(event) => setShopMenuEditorialMedia((old) => ({ ...old, topLine: event.target.value }))} placeholder="TIMELESS"/></label>
+        <label className="bf-field"><span>Dòng chữ phía dưới</span><input value={shopMenuEditorialMedia.bottomLine} onChange={(event) => setShopMenuEditorialMedia((old) => ({ ...old, bottomLine: event.target.value }))} placeholder="ELEGANCE"/></label>
+        <label className="bf-field"><span>Mô tả ảnh/video</span><input value={shopMenuEditorialMedia.altText} onChange={(event) => setShopMenuEditorialMedia((old) => ({ ...old, altText: event.target.value }))} placeholder="Mô tả ngắn media"/></label>
+      </article><aside className="bf-menu-media-preview" aria-label="Xem trước khung media menu">{shopMenuEditorialMedia.kind === "video" && shopMenuEditorialMedia.videoUrl ? <video src={apiImageUrl(shopMenuEditorialMedia.videoUrl)} poster={shopMenuEditorialMedia.posterUrl ? apiImageUrl(shopMenuEditorialMedia.posterUrl) : undefined} muted loop playsInline controls preload="metadata"/> : <img src={apiImageUrl(shopMenuEditorialMedia.kind === "video" ? shopMenuEditorialMedia.posterUrl || shopMenuEditorialMedia.imageUrl : shopMenuEditorialMedia.imageUrl)} alt={shopMenuEditorialMedia.altText}/>}<div><span>{shopMenuEditorialMedia.topLine || "TIMELESS"}</span><span>{shopMenuEditorialMedia.bottomLine || "ELEGANCE"}</span></div></aside></div>
+      <div className="bf-footer-save"><span>Lưu ảnh/video, poster và dòng chữ cho menu Shop.</span><button className="button button-primary" onClick={() => void saveShopMenuEditorialMedia()} disabled={saving || uploading}>{saving ? "Đang lưu…" : "Lưu nội dung menu"}</button></div>
     </div> : <div className="bf-library-panel">
       <div className="bf-library-heading"><div><h2>Thư viện ảnh Banner &amp; Footer</h2><p>Ảnh được lưu trong media storage, phân nhóm theo mục đang sử dụng.</p></div><div className="bf-library-filters"><button className={libraryKind === "banner" ? "active" : ""} onClick={() => setLibraryKind("banner")}>Tất cả ảnh banner <span>{bannerImages.length}</span></button><button className={libraryKind === "footer" ? "active" : ""} onClick={() => setLibraryKind("footer")}>Tất cả ảnh footer <span>{footerImages.length}</span></button>{libraryKind === "banner" && <select aria-label="Lọc ảnh theo mùa" value={filterSeason} onChange={(event) => setFilterSeason(event.target.value)}><option>Tất cả mùa</option>{seasons.map((season) => <option key={season}>{season}</option>)}</select>}</div></div>
       {filteredGallery.length ? <div className="bf-gallery-grid">{filteredGallery.map((item, index) => <article className="bf-gallery-card" key={`${item.url}-${index}`}><button type="button" className="bf-gallery-open" aria-label={`Phóng to ảnh ${item.name}`} onClick={() => setZoomImage({ url: apiImageUrl(item.url), name: item.name })}><span className="bf-gallery-photo"><img src={apiImageUrl(item.url)} alt={item.name}/><span>⌕</span></span></button><strong>{item.name}</strong><small>{item.detail}</small>{libraryKind === "banner" && <em>{item.season || "Không theo mùa"}</em>}<button type="button" className="bf-download-button" onClick={() => void downloadImage(item.url, item.name).catch((error) => onNotify(error instanceof Error ? error.message : "Không tải được ảnh."))}>↓ Tải ảnh</button></article>)}</div> : <p className="bf-empty">{libraryKind === "footer" ? "Chưa có ảnh footer được chọn." : "Không có ảnh banner thuộc mùa này."}</p>}

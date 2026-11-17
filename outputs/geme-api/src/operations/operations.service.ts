@@ -60,12 +60,25 @@ export class OperationsService {
     });
   }
 
-  async returnEligibleOrders(limitInput?: string) {
+  async returnEligibleOrders(limitInput?: string, phoneInput?: string) {
     const take = Math.min(Math.max(Number(limitInput) || 100, 1), 200);
+    const phoneDigits = String(phoneInput || "").replace(/\D/g, "");
+    let matchingIds: string[] | undefined;
+    if (phoneDigits) {
+      if (phoneDigits.length < 4) throw new BadRequestException("Nhập tối thiểu 4 chữ số để tìm đơn theo số điện thoại.");
+      const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT id::text AS id FROM orders
+        WHERE regexp_replace(COALESCE(customer_phone, ''), '[^0-9]', '', 'g') LIKE ${`%${phoneDigits}%`}
+          AND (status::text = 'DELIVERED' OR (status::text = 'SHIPPING' AND carrier_shipment_status = 'RETURNING'))
+        ORDER BY placed_at DESC
+        LIMIT 200
+      `;
+      matchingIds = rows.map((row) => row.id);
+    }
     return this.prisma.order.findMany({
-      where: { OR: [{ status: "DELIVERED" }, { status: "SHIPPING", carrierShipmentStatus: "RETURNING" }] },
+      where: { OR: [{ status: "DELIVERED" }, { status: "SHIPPING", carrierShipmentStatus: "RETURNING" }], ...(matchingIds ? { id: { in: matchingIds } } : {}) },
       select: {
-        id: true, code: true, placedAt: true, customerName: true, totalAmount: true, carrierShipmentStatus: true,
+        id: true, code: true, placedAt: true, customerName: true, customerPhone: true, totalAmount: true, carrierShipmentStatus: true,
         items: { select: { id: true, productName: true, productSku: true, quantity: true, unitPrice: true, lineTotal: true } },
         returns: { where: { status: { not: "REJECTED" } }, select: { items: { select: { orderItemId: true, quantity: true } } } },
       },
@@ -497,7 +510,7 @@ export class OperationsService {
         const order = await tx.order.findUnique({ where: { id: orderId }, include: { payments: { select: { status: true, amount: true } } } });
         if (!order) continue;
         await this.loyalty.settleReservation(tx, orderId);
-        await this.loyalty.awardIfDeliveredAndPaid(tx, order);
+        await this.loyalty.awardIfFullyPaid(tx, order);
       }
       const saved = await tx.codReconciliationBatch.findUniqueOrThrow({ where: { id }, include: { items: true } });
       await tx.auditLog.create({ data: { adminId: actor.id, correlationId: actor.correlationId, action: "COD_RECONCILIATION_CLOSED", entityType: "COD_RECONCILIATION", entityId: id, before: { status: "OPEN" }, after: { status: saved.status, decisionNote: note || null } } });
@@ -539,7 +552,7 @@ export class OperationsService {
   async auditLogs(query: Row) {
     const take = Math.min(Math.max(Number(query.limit) || 50, 1), 200);
     const rows = await this.prisma.auditLog.findMany({
-      include: { admin: { select: { id: true, email: true, displayName: true } } },
+      include: { admin: { select: { id: true, username: true, email: true, displayName: true } } },
       orderBy: { createdAt: "desc" }, take,
       ...(typeof query.cursor === "string" && query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     });

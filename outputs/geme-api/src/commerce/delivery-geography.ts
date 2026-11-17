@@ -87,3 +87,59 @@ export function parseHcmcDeliveryArea(addressInput: unknown): ParsedDeliveryArea
     wardLabel,
   };
 }
+
+export type ParsedVietnamDeliveryArea = {
+  provinceKey: string;
+  provinceLabel: string;
+  districtKey: string;
+  districtLabel: string;
+  wardKey: string;
+  wardLabel: string;
+  isHcmc: boolean;
+};
+
+const cleanAreaPart = (value: string) => value
+  .replace(/\s+(?:phường|phuong|p\.?|xã|xa|thị trấn|thi tran|quận|quan|q\.?|huyện|huyen|thị xã|thi xa|tỉnh|tinh|thành phố|thanh pho|tp\.?|đặc khu|dac khu|ward|commune|district|province)\b.*$/i, "")
+  .replace(/^[,\s.]+|[,\s.]+$/g, "")
+  .replace(/\s+/g, " ");
+
+export function parseVietnamDeliveryArea(addressInput: unknown, latitude?: number, longitude?: number): ParsedVietnamDeliveryArea {
+  const address = String(addressInput || "").trim();
+  const parts = address.split(/[,;\n]/).map((part) => part.trim()).filter(Boolean);
+  const provinceIndex = [...parts.keys()].reverse().find((index) => /^(?:tỉnh|tinh|thành phố|thanh pho|tp\.?|province|city)\s+/i.test(parts[index]) || /(?:^|\s)(?:tỉnh|tinh|province)\s+/i.test(parts[index]));
+  const provincePart = provinceIndex == null ? "" : parts[provinceIndex];
+  const provinceLabel = provincePart ? cleanAreaPart(provincePart.replace(/^(?:tỉnh|tinh|thành phố|thanh pho|tp\.?|province|city)\s*/i, "")) : "";
+  const districtCandidates = parts.filter((part, index) => index !== provinceIndex && /^(?:quận|quan|q\.?|huyện|huyen|h\.?|thị xã|thi xa|tx\.?|thành phố|thanh pho|tp\.?|district|town)\s*/i.test(part));
+  const districtPart = districtCandidates[districtCandidates.length - 1] || "";
+  const districtPrefix = districtPart.match(/^(quận|quan|q\.?|huyện|huyen|h\.?|thị xã|thi xa|tx\.?|thành phố|thanh pho|tp\.?|district|town)\s*/i)?.[1] || "";
+  const districtBody = cleanAreaPart(districtPart.slice(districtPrefix.length));
+  const wardCandidates = parts.filter((part) => /^(?:phường|phuong|p\.?|xã|xa|thị trấn|thi tran|đặc khu|dac khu|ward|commune)\s*/i.test(part));
+  const wardPart = wardCandidates[wardCandidates.length - 1] || "";
+  const wardPrefix = wardPart.match(/^(phường|phuong|p\.?|xã|xa|thị trấn|thi tran|đặc khu|dac khu|ward|commune)\s*/i)?.[1] || "";
+  const wardBody = cleanAreaPart(wardPart.slice(wardPrefix.length));
+  const normalizedAddress = normalize(address);
+  const hcmc = /^(?:ho chi minh|hcm|sai gon)$/i.test(normalize(provinceLabel)) || /(?:^|\s)(?:tp\s*)?hcmc?(?:$|\s)|ho chi minh|sai gon/i.test(normalizedAddress);
+  const areaFallback = latitude != null && longitude != null
+    ? `Khu vực ${Number(latitude).toFixed(2)}, ${Number(longitude).toFixed(2)}`
+    : "Chưa xác định khu vực";
+  const provinceName = hcmc ? "Hồ Chí Minh" : provinceLabel ? titleCase(provinceLabel) : "Chưa xác định tỉnh/thành";
+  const districtTypeLabel = ({ q: "Quận", "q.": "Quận", quan: "Quận", h: "Huyện", "h.": "Huyện", huyen: "Huyện", tx: "Thị xã", "tx.": "Thị xã", "thi xa": "Thị xã", tp: "Thành phố", "tp.": "Thành phố", "thanh pho": "Thành phố", "district": "Quận", "town": "Thị xã" } as Record<string, string>)[normalize(districtPrefix)] || titleCase(districtPrefix);
+  const wardTypeLabel = /^(?:xã|xa|commune)/i.test(wardPrefix) ? "Xã" : /^(?:thị trấn|thi tran)/i.test(wardPrefix) ? "Thị trấn" : /^(?:đặc khu|dac khu)/i.test(wardPrefix) ? "Đặc khu" : "Phường";
+  const districtName = districtBody
+    ? `${districtPrefix ? `${districtTypeLabel} ` : ""}${/^\d+$/.test(districtBody) ? Number(districtBody) : titleCase(districtBody)}`
+    : provinceLabel || hcmc ? provinceName : areaFallback;
+  const resolvedDistrictName = hcmc && /^(?:quận|quan)\s*(?:2|9)$/.test(normalize(districtName)) ? "TP. Thủ Đức" : districtName;
+  const wardName = wardBody ? `${wardTypeLabel} ${/^\d+$/.test(wardBody) ? Number(wardBody) : titleCase(wardBody)}` : "Chưa rõ phường/xã";
+  const provinceKey = normalize(provinceName).replace(/\s+/g, "-") || "unknown-province";
+  const districtKey = `${provinceKey}:${normalize(resolvedDistrictName).replace(/\s+/g, "-") || "unknown-district"}`;
+  const districtLabel = resolvedDistrictName === provinceName ? provinceName : (provinceLabel || hcmc ? `${resolvedDistrictName} · ${provinceName}` : resolvedDistrictName);
+  return {
+    provinceKey,
+    provinceLabel: provinceName,
+    districtKey,
+    districtLabel,
+    wardKey: normalize(wardName).replace(/\s+/g, "-") || "unknown-ward",
+    wardLabel: wardName,
+    isHcmc: hcmc,
+  };
+}

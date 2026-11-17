@@ -16,6 +16,32 @@ const idempotencyKey = () => `ops-${globalThis.crypto?.randomUUID?.() || `${Date
 const money = (value: unknown) => `${new Intl.NumberFormat("vi-VN").format(Number(value) || 0)} ₫`;
 const date = (value: unknown) => { const parsed = new Date(String(value || "")); return Number.isNaN(parsed.getTime()) ? "—" : parsed.toLocaleString("vi-VN"); };
 const stateLabel: Record<string, string> = { REQUESTED: "Chờ duyệt", APPROVED: "Đã duyệt", REJECTED: "Từ chối", RECEIVED: "Đã nhận hàng", CLOSED: "Đã đóng", NONE: "Chưa hoàn", PARTIALLY_REFUNDED: "Hoàn một phần", REFUNDED: "Đã hoàn", OPEN: "Đang đối soát", RECONCILED: "Khớp", RECONCILED_WITH_VARIANCE: "Có chênh lệch", REVERSED: "Đã đảo", MATCHED: "Khớp", VARIANCE: "Chênh lệch" };
+const auditActions: Record<string, string> = {
+  ADMIN_CALENDAR_EVENT_CREATED: "Đã thêm sự kiện", ADMIN_CALENDAR_EVENT_UPDATED: "Đã cập nhật sự kiện", ADMIN_CALENDAR_EVENT_DELETED: "Đã xóa sự kiện",
+  PRODUCT_CONTENT_UPDATED: "Đã cập nhật thông tin sản phẩm", PRODUCT_CONTENT_AND_PRICE_UPDATED: "Đã cập nhật thông tin và giá sản phẩm", PRODUCT_PUBLISHED: "Đã đăng sản phẩm lên website", PRODUCT_UNPUBLISHED: "Đã ẩn sản phẩm",
+  RETURN_REQUESTED: "Đã tạo yêu cầu trả hàng", RETURN_APPROVED: "Đã duyệt yêu cầu trả hàng", RETURN_REJECTED: "Đã từ chối yêu cầu trả hàng", RETURN_RECEIVED: "Đã xác nhận nhận hàng trả", RETURN_CLOSED: "Đã đóng phiếu trả hàng",
+  COD_RECONCILIATION_CREATED: "Đã lập bảng kê đối soát COD", COD_RECONCILIATION_CLOSED: "Đã chốt đối soát COD", MARKETING_SPEND_CREATED: "Đã ghi nhận chi phí marketing",
+};
+const auditEntities: Record<string, string> = { PRODUCT: "Sản phẩm", ORDER: "Đơn hàng", ORDER_RETURN: "Yêu cầu trả hàng", COD_RECONCILIATION: "Bảng kê COD", ADMIN_CALENDAR_EVENT: "Sự kiện", MARKETING_SPEND: "Chi phí marketing", CATEGORY: "Danh mục", SITE_SETTING: "Cài đặt website" };
+const auditFields: Record<string, string> = { title: "Tên sự kiện", description: "Mô tả", startsAt: "Giờ bắt đầu", endsAt: "Giờ kết thúc", location: "Địa điểm", allDay: "Thời lượng", status: "Trạng thái", price: "Giá bán", name: "Tên", categoryId: "Danh mục", stock: "Tồn kho", stockKg: "Tồn kho (kg)", quantity: "Số lượng", quantityKg: "Khối lượng (kg)", note: "Ghi chú", decisionNote: "Ghi chú đối soát", reason: "Lý do", restockedItemCount: "Số món nhập lại kho", itemCount: "Số dòng sản phẩm", varianceLines: "Dòng chênh lệch", expectedTotal: "Tổng dự kiến", receivedTotal: "Tổng thực nhận", feeTotal: "Tổng phí", remittedTotal: "Tiền chuyển về", amount: "Số tiền" };
+function auditActionLabel(action: string) {
+  if (auditActions[action]) return auditActions[action];
+  if (action.startsWith("SOCIAL_")) return "Đã cập nhật nội dung mạng xã hội";
+  if (action.startsWith("INVENTORY_")) return "Đã cập nhật tồn kho";
+  if (action.startsWith("ORDER_")) return "Đã cập nhật đơn hàng";
+  if (action.startsWith("CUSTOMER_")) return "Đã cập nhật khách hàng";
+  if (action.startsWith("CATEGORY_") || action.startsWith("MATERIAL_")) return "Đã cập nhật danh mục hoặc loại đá";
+  if (action.startsWith("ADMIN_")) return "Đã cập nhật nội dung quản trị";
+  return "Đã thực hiện thao tác quản trị";
+}
+function auditEntityLabel(entity: string) { return auditEntities[entity] || entity.replace(/_/g, " ").toLocaleLowerCase("vi"); }
+function auditChangeText(entry: Row) {
+  const before = entry.before && typeof entry.before === "object" && !Array.isArray(entry.before) ? entry.before as Row : {};
+  const after = entry.after && typeof entry.after === "object" && !Array.isArray(entry.after) ? entry.after as Row : {};
+  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+  const names = keys.map((key) => auditFields[key]).filter(Boolean);
+  return names.length ? `Đã thay đổi: ${names.slice(0, 4).join(", ")}${names.length > 4 ? ` và ${names.length - 4} mục khác` : ""}.` : `Có cập nhật ${auditEntityLabel(String(entry.entityType || "thông tin")).toLocaleLowerCase("vi")}.`;
+}
 
 export default function OperationsWorkspace({ request, permissions }: Props) {
   const [tab, setTab] = useState<Tab>("overview");
@@ -29,6 +55,8 @@ export default function OperationsWorkspace({ request, permissions }: Props) {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [returnOrderId, setReturnOrderId] = useState("");
+  const [returnPhoneSearch, setReturnPhoneSearch] = useState("");
+  const [returnPhoneApplied, setReturnPhoneApplied] = useState("");
   const [returnReason, setReturnReason] = useState("");
   const [returnQuantities, setReturnQuantities] = useState<Record<string, number>>({});
   const [restock, setRestock] = useState<Record<string, boolean>>({});
@@ -48,7 +76,8 @@ export default function OperationsWorkspace({ request, permissions }: Props) {
     try {
       if (selected === "overview") setOverview(await request("operations/dashboard"));
       if (selected === "returns") {
-        const [cases, eligible] = await Promise.all([request("returns?limit=100"), request("operations/return-eligible-orders?limit=100")]);
+        const phoneQuery = returnPhoneApplied ? `&phone=${encodeURIComponent(returnPhoneApplied)}` : "";
+        const [cases, eligible] = await Promise.all([request("returns?limit=100"), request(`operations/return-eligible-orders?limit=200${phoneQuery}`)]);
         setReturns(Array.isArray(cases) ? cases : []); setReturnOrders(Array.isArray(eligible) ? eligible : []);
       }
       if (selected === "cod") {
@@ -58,7 +87,7 @@ export default function OperationsWorkspace({ request, permissions }: Props) {
       if (selected === "audit") setAudit(await request("audit-logs?limit=100"));
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Không tải được dữ liệu vận hành."); }
     finally { setLoading(false); }
-  }, [request, tab]);
+  }, [request, tab, returnPhoneApplied]);
 
   useEffect(() => { if (!availableTabs.some((item) => item.id === tab)) setTab(availableTabs[0]?.id || "overview"); }, [availableTabs, tab]);
   useEffect(() => { void refresh(tab); }, [tab, refresh]);
@@ -148,7 +177,8 @@ export default function OperationsWorkspace({ request, permissions }: Props) {
     </> : tab === "returns" ? <>
       <section className={styles.card}><div className={styles.sectionHeading}><div><h2>Tạo yêu cầu trả hàng</h2><p>Chọn đơn đã giao hoặc kiện Viettel Post đang hoàn về. Hàng chỉ nhập lại kho sau khi nhận và kiểm tra.</p></div></div>
         <form className={styles.returnForm} onSubmit={createReturn}>
-          <label>Đơn đã giao / kiện đang hoàn<select value={returnOrderId} onChange={(event) => { setReturnOrderId(event.target.value); setReturnQuantities({}); }}><option value="">Chọn đơn hàng</option>{returnOrders.map((order) => <option key={order.id} value={order.id}>{order.code} · {order.customerName} · {money(order.totalAmount)}{order.carrierShipmentStatus === "RETURNING" ? " · Hãng đang hoàn" : ""}</option>)}</select></label>
+          <div className={styles.returnOrderLookup}><label>Tìm đơn theo số điện thoại khách hàng<input type="search" inputMode="tel" value={returnPhoneSearch} onChange={(event) => setReturnPhoneSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); setReturnOrderId(""); setReturnPhoneApplied(returnPhoneSearch.trim()); } }} placeholder="Nhập tối thiểu 4 số"/></label><div><button className="button button-quiet" type="button" onClick={() => { setReturnOrderId(""); setReturnPhoneApplied(returnPhoneSearch.trim()); }} disabled={loading}>Tìm đơn</button>{returnPhoneApplied && <button className="button button-quiet" type="button" onClick={() => { setReturnPhoneSearch(""); setReturnPhoneApplied(""); setReturnOrderId(""); }}>Xóa lọc</button>}</div></div>
+          <label>Đơn đã giao / kiện đang hoàn<select value={returnOrderId} onChange={(event) => { setReturnOrderId(event.target.value); setReturnQuantities({}); }}><option value="">{returnPhoneApplied ? `Chọn đơn phù hợp (${returnOrders.length})` : "Chọn đơn hàng"}</option>{returnOrders.map((order) => <option key={order.id} value={order.id}>{order.code} · {order.customerName} · {order.customerPhone || "Chưa có SĐT"} · {money(order.totalAmount)}{order.carrierShipmentStatus === "RETURNING" ? " · Hãng đang hoàn" : ""}</option>)}</select></label>
           {selectedReturnOrder && <div className={styles.lineList}>{selectedReturnOrder.items.map((line: Row) => {
             const previouslyReturned = selectedReturnOrder.returns.flatMap((entry: Row) => entry.items).filter((returned: Row) => returned.orderItemId === line.id).reduce((sum: number, returned: Row) => sum + returned.quantity, 0);
             const remaining = Math.max(0, line.quantity - previouslyReturned);
@@ -173,6 +203,6 @@ export default function OperationsWorkspace({ request, permissions }: Props) {
         </form>
       </section>
       <section className={styles.card}><div className={styles.sectionHeading}><div><h2>Bảng kê gần đây</h2><p>{codBatches.length} bảng kê</p></div></div>{codBatches.length ? <div className={styles.batchList}>{codBatches.map((batch) => <article className={styles.batch} key={batch.id}><div><strong>{batch.externalReference}</strong><small>{batch.carrier} · {date(batch.statementDate)} · {batch.items?.length || 0} đơn</small><small>COD dự kiến {money(batch.expectedTotal)} · khách trả {money(batch.receivedTotal)} · phí hãng {money(batch.feeTotal)} · thực chuyển {batch.remittedTotal == null ? "Chưa ghi nhận (phiếu cũ)" : money(batch.remittedTotal)}</small></div><span>{stateLabel[batch.status] || batch.status}</span>{batch.status === "OPEN" && <button className="button button-quiet" disabled={busy} onClick={() => reconcile(batch)}>Đối soát & chốt</button>}{batch.status !== "REVERSED" && <button className="button button-quiet" disabled={busy} onClick={() => reverseCod(batch)}>Đảo bảng kê</button>}</article>)}</div> : <div className={styles.empty}>Chưa có bảng kê COD.</div>}</section>
-    </> : <section className={styles.card}><div className={styles.sectionHeading}><div><h2>Nhật ký thay đổi</h2><p>Chỉ hiển thị metadata của thao tác quản trị, không lưu nội dung khách hàng hay bí mật cấu hình.</p></div></div>{audit.length ? <div className={styles.auditList}>{audit.map((entry) => <article key={entry.id}><div><strong>{entry.action}</strong><small>{entry.entityType}{entry.entityId ? ` · ${entry.entityId}` : ""}</small></div><div><span>{entry.admin?.displayName || "Hệ thống"}</span><small>{date(entry.createdAt)}</small></div></article>)}</div> : <div className={styles.empty}>Chưa có nhật ký hoặc tài khoản không có quyền xem.</div>}</section>}
+    </> : <section className={styles.card}><div className={styles.sectionHeading}><div><h2>Nhật ký thay đổi</h2><p>Lịch sử thao tác được diễn giải để nhân viên dễ theo dõi.</p></div></div>{audit.length ? <div className={styles.auditList}>{audit.map((entry) => <article key={entry.id}><div><strong>{auditActionLabel(String(entry.action || "Cập nhật thông tin"))}</strong><small>{auditChangeText(entry)}</small></div><div><span>{entry.admin?.displayName || "Hệ thống"}</span>{entry.admin ? <small>Tài khoản: {[entry.admin.username ? `@${entry.admin.username}` : null, entry.admin.email].filter(Boolean).join(" · ")}</small> : <small>Thao tác hệ thống</small>}<small>{date(entry.createdAt)}</small></div></article>)}</div> : <div className={styles.empty}>Chưa có nhật ký hoặc tài khoản không có quyền xem.</div>}</section>}
   </div>;
 }

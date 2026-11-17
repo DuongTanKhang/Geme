@@ -21,7 +21,7 @@ export class OperationsController {
 
   @Get("operations/return-eligible-orders")
   @RequireAdminPermissions("returns.read")
-  returnEligibleOrders(@Query("limit") limit?: string) { return this.operations.returnEligibleOrders(limit); }
+  returnEligibleOrders(@Query("limit") limit?: string, @Query("phone") phone?: string) { return this.operations.returnEligibleOrders(limit, phone); }
 
   @Get("operations/cod-eligible-orders")
   @RequireAdminPermissions("finance.read")

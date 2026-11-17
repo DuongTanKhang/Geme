@@ -15,7 +15,7 @@ import { adminOrderQrSnapshot } from "./admin-order-qr.js";
 import { getInventoryReservationExpiry, getQrPaymentWindow } from "./reservation-expiry.js";
 import { assertBangleQualityImages, normalizeBangleQuality, synchronizeBangleVariantMedia } from "./bangle-variant-media.js";
 import { isNewLabelActive } from "./new-arrivals.rules.js";
-import { HCMC_HISTORIC_DISTRICTS, parseHcmcDeliveryArea } from "./delivery-geography.js";
+import { parseVietnamDeliveryArea } from "./delivery-geography.js";
 import { LoyaltyService } from "../loyalty/loyalty.service.js";
 import type { AegisCustomerIdentity } from "../auth/aegis-customer.guard.js";
 
@@ -227,7 +227,7 @@ const requiredJewelryCategories = [
 const requiredJewelryCategorySlugs = new Set<string>(requiredJewelryCategories.map((category) => category.slug));
 const isRequiredJewelryRoot = (category: { slug: string; kind: string; level: number }) => category.slug === "trang-suc" && category.kind === "JEWELRY" && category.level === 1;
 const isRequiredJewelryChild = (category: { slug: string; kind: string; level: number; parentId?: string | null }, rootId: string) => category.kind === "JEWELRY" && category.level === 2 && category.parentId === rootId && requiredJewelryCategorySlugs.has(category.slug);
-const includeProduct = { category: true, gemstoneType: true, materialOption: true, jewelryStoneGroup: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { orderBy: { sortOrder: "asc" as const } }, sphereItems: { orderBy: { sortOrder: "asc" as const }, select: { id: true, label: true, weightKg: true, price: true, imageUrls: true, status: true, sortOrder: true } } } satisfies Prisma.ProductInclude;
+const includeProduct = { category: true, gemstoneType: true, materialOption: true, sphereStoneType: { select: { id: true, name: true, group: { select: { id: true, name: true } } } }, jewelryStoneGroup: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { orderBy: { sortOrder: "asc" as const } }, sphereItems: { orderBy: { sortOrder: "asc" as const }, select: { id: true, label: true, weightKg: true, price: true, imageUrls: true, status: true, sortOrder: true } } } satisfies Prisma.ProductInclude;
 const selectAdminProductSummary = {
   id: true, sku: true, name: true, kind: true, categoryId: true, gemstoneTypeId: true, materialOptionId: true,
   jewelryStoneGroupId: true, status: true, isNew: true, newUntil: true, firstPublishedAt: true, publicationHistoryKnown: true, isPremiumGemstone: true, price: true, originalPrice: true, stock: true, stockKg: true,
@@ -2644,13 +2644,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       const allowUnknownCost = item.newProduct?.standalonePremiumGemstone === true && item.newProduct?.isPremiumGemstone === true;
       const rawUnitCost = item.unitCost == null || String(item.unitCost).trim() === "" ? null : Number(item.unitCost);
       const unitCost = rawUnitCost;
-      if (quantityKg === null && (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000)) throw new BadRequestException("Số lượng mỗi mặt hàng phải từ 1 đến 100.000.");
+      if ((quantityKg === null || !sphereItems.length) && (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000)) throw new BadRequestException("Số lượng mỗi mặt hàng phải từ 1 đến 100.000.");
       if ((unitCost === null && !allowUnknownCost) || (unitCost !== null && (!Number.isSafeInteger(unitCost) || unitCost < 0 || unitCost > 1000000000000))) throw new BadRequestException("Đơn giá nhập phải là số nguyên không âm hợp lệ; chỉ mặt đá cao cấp được để trống khi chưa có dữ liệu.");
       if (sphereItems.length && quantityKg === null) throw new BadRequestException("Danh sách từng món chỉ dùng cho dòng nhập quản lý theo kg.");
       if (sphereItems.length && sumSphereWeights(sphereItems) !== quantityKg) {
         throw new BadRequestException(`Tổng khối lượng ${sphereItems.length} món là ${sumSphereWeights(sphereItems)} kg, phải đúng bằng tổng kg của SKU là ${quantityKg} kg.`);
       }
-      return { ...item, quantity: quantityKg === null ? quantity : 0, quantityKg, sphereItems, sphereHierarchy, unitCost, lineTotal: unitCost === null ? null : Math.round((quantityKg ?? quantity) * unitCost) };
+      return { ...item, quantity: sphereItems.length ? sphereItems.length : quantity, quantityKg, sphereItems, sphereHierarchy, unitCost, lineTotal: unitCost === null ? null : Math.round((quantityKg ?? quantity) * unitCost) };
     });
     const receivedAt = parseDate(input.receivedAt || input.date);
     const totalQuantity = items.reduce((sum: number, item: Input) => sum + (Array.isArray(item.sphereItems) && item.sphereItems.length ? item.sphereItems.length : item.quantity), 0);
@@ -3481,37 +3481,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   async shippingDeliveryMap() {
-    const addressRows = await this.prisma.$queryRaw<Array<{ address: string; orderCount: number; paidAmount: unknown }>>`
-      WITH captured_by_order AS (
-        SELECT order_id, SUM(amount)::numeric AS captured_amount
-        FROM payments
-        WHERE paid_at IS NOT NULL AND status::text IN ('PAID', 'PARTIALLY_REFUNDED', 'REFUNDED')
-        GROUP BY order_id
-      ), refunds_by_order AS (
-        SELECT payment.order_id, SUM(refund.amount)::numeric AS refunded_amount
-        FROM payment_refunds refund
-        JOIN payments payment ON payment.id = refund.payment_id
-        GROUP BY payment.order_id
-      ), eligible_deliveries AS (
-        SELECT "order".shipping_address AS address,
-               "order".total_amount AS total_amount,
-               GREATEST(COALESCE(captured.captured_amount, 0) - COALESCE(refunds.refunded_amount, 0), 0)::numeric AS net_paid
-        FROM orders "order"
-        LEFT JOIN captured_by_order captured ON captured.order_id = "order".id
-        LEFT JOIN refunds_by_order refunds ON refunds.order_id = "order".id
-        WHERE ("order".status::text = 'DELIVERED' OR "order".carrier_shipment_status = 'DELIVERED')
-          AND "order".status::text <> 'CANCELLED'
-          AND "order".total_amount > 0
-          AND GREATEST(COALESCE(captured.captured_amount, 0) - COALESCE(refunds.refunded_amount, 0), 0) >= "order".total_amount
-      )
-      SELECT address,
-             COUNT(*)::int AS "orderCount",
-             SUM(net_paid)::numeric AS "paidAmount"
-      FROM eligible_deliveries
-      GROUP BY address
-    `;
-
-    const deliveryPointRows = await this.prisma.$queryRaw<Array<{ code: string; address: string; latitude: number; longitude: number }>>`
+    const deliveryRows = await this.prisma.$queryRaw<Array<{ code: string; address: string; latitude: number; longitude: number; paidAmount: unknown }>>`
       WITH captured_by_order AS (
         SELECT order_id, SUM(amount)::numeric AS captured_amount
         FROM payments
@@ -3527,113 +3497,89 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
              "order".code,
              "order".shipping_address AS address,
              "order".shipping_latitude AS latitude,
-             "order".shipping_longitude AS longitude
+             "order".shipping_longitude AS longitude,
+             GREATEST(COALESCE(captured.captured_amount, 0) - COALESCE(refunds.refunded_amount, 0), 0)::numeric AS "paidAmount"
       FROM orders "order"
       LEFT JOIN captured_by_order captured ON captured.order_id = "order".id
       LEFT JOIN refunds_by_order refunds ON refunds.order_id = "order".id
-      WHERE ("order".status::text = 'DELIVERED' OR "order".carrier_shipment_status = 'DELIVERED')
-        AND "order".status::text <> 'CANCELLED'
+      WHERE "order".status::text IN ('PENDING_CONFIRMATION', 'PROCESSING', 'SHIPPING', 'DELIVERED')
+        AND "order".shipping_method IS DISTINCT FROM 'Bán trực tiếp tại cửa hàng'
+        AND COALESCE("order".sales_channel, '') NOT IN ('STORE', 'DIRECT')
         AND "order".total_amount > 0
-        AND "order".shipping_latitude BETWEEN 10.2 AND 11.3
-        AND "order".shipping_longitude BETWEEN 106.2 AND 107.3
-        AND GREATEST(COALESCE(captured.captured_amount, 0) - COALESCE(refunds.refunded_amount, 0), 0) >= "order".total_amount
+        AND "order".shipping_address IS NOT NULL
+        AND "order".shipping_latitude IS NOT NULL
+        AND "order".shipping_longitude IS NOT NULL
+        AND "order".shipping_latitude BETWEEN 8 AND 24
+        AND "order".shipping_longitude BETWEEN 102 AND 110
       ORDER BY "order".placed_at DESC
-      LIMIT 1500
     `;
 
-    const districts = new Map(HCMC_HISTORIC_DISTRICTS.map((district) => [district.key, {
-      key: district.key,
-      name: district.label,
-      orderCount: 0,
-      paidAmount: 0,
-      wards: new Map<string, { key: string; name: string; orderCount: number; paidAmount: number }>(),
-    }]));
-    const unclassified = {
-      hcmcOrders: 0,
-      hcmcPaidAmount: 0,
-      unknownDistrictOrders: 0,
-      unknownWardOrders: 0,
-      outsideHcmcOrders: 0,
-      outsideHcmcPaidAmount: 0,
-    };
-    let eligibleOrders = 0;
+    const districts = new Map<string, { key: string; name: string; orderCount: number; paidAmount: number; latitudeTotal: number; longitudeTotal: number; wards: Map<string, { key: string; name: string; orderCount: number; paidAmount: number }> }>();
     let eligiblePaidAmount = 0;
     let hcmcOrders = 0;
     let hcmcPaidAmount = 0;
+    let unknownDistrictOrders = 0;
+    let unknownWardOrders = 0;
+    let unclassifiedOrders = 0;
     let mappedOrders = 0;
-
-    for (const row of addressRows) {
-      const orderCount = Math.max(0, Number(row.orderCount) || 0);
-      const paidAmount = Number(row.paidAmount) || 0;
-      const area = parseHcmcDeliveryArea(row.address);
-      eligibleOrders += orderCount;
-      eligiblePaidAmount += paidAmount;
-      if (!area.isHcmc) {
-        unclassified.outsideHcmcOrders += orderCount;
-        unclassified.outsideHcmcPaidAmount += paidAmount;
-        continue;
-      }
-      hcmcOrders += orderCount;
-      hcmcPaidAmount += paidAmount;
-      unclassified.hcmcOrders += orderCount;
-      unclassified.hcmcPaidAmount += paidAmount;
-      if (area.districtKey === "unknown-district") {
-        unclassified.unknownDistrictOrders += orderCount;
-        continue;
-      }
-      const district = districts.get(area.districtKey);
-      if (!district) {
-        unclassified.unknownDistrictOrders += orderCount;
-        continue;
-      }
-      district.orderCount += orderCount;
-      district.paidAmount += paidAmount;
-      if (area.wardKey === "chua-ro-phuong" || area.wardLabel === "Chưa rõ phường") {
-        unclassified.unknownWardOrders += orderCount;
-        continue;
-      }
-      const ward = district.wards.get(area.wardKey) || { key: area.wardKey, name: area.wardLabel, orderCount: 0, paidAmount: 0 };
-      ward.orderCount += orderCount;
-      ward.paidAmount += paidAmount;
-      district.wards.set(ward.key, ward);
-      mappedOrders += orderCount;
-    }
-
-    const deliveryPoints = deliveryPointRows.flatMap((row) => {
-      const area = parseHcmcDeliveryArea(row.address);
+    const deliveryPoints = deliveryRows.flatMap((row) => {
       const latitude = Number(row.latitude);
       const longitude = Number(row.longitude);
-      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return [];
+      if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) return [];
+      const paidAmount = Number(row.paidAmount) || 0;
+      const area = parseVietnamDeliveryArea(row.address, latitude, longitude);
+      eligiblePaidAmount += paidAmount;
+      if (area.isHcmc) { hcmcOrders += 1; hcmcPaidAmount += paidAmount; }
+      const districtUnknown = area.districtLabel.startsWith("Khu vực ") || area.districtLabel === "Chưa xác định khu vực";
+      const wardUnknown = area.wardLabel === "Chưa rõ phường/xã";
+      if (districtUnknown) unknownDistrictOrders += 1;
+      if (districtUnknown || wardUnknown) unclassifiedOrders += 1;
+      const district = districts.get(area.districtKey) || { key: area.districtKey, name: area.districtLabel, orderCount: 0, paidAmount: 0, latitudeTotal: 0, longitudeTotal: 0, wards: new Map() };
+      district.orderCount += 1;
+      district.paidAmount += paidAmount;
+      district.latitudeTotal += latitude;
+      district.longitudeTotal += longitude;
+      const ward = district.wards.get(area.wardKey) || { key: area.wardKey, name: area.wardLabel, orderCount: 0, paidAmount: 0 };
+      ward.orderCount += 1;
+      ward.paidAmount += paidAmount;
+      district.wards.set(ward.key, ward);
+      if (wardUnknown) unknownWardOrders += 1;
+      else mappedOrders += 1;
+      districts.set(district.key, district);
       return [{ code: row.code, latitude, longitude, districtKey: area.districtKey }];
     });
+    const rankedDistricts = [...districts.values()]
+      .map((district) => ({
+        key: district.key,
+        name: district.name,
+        orderCount: district.orderCount,
+        paidAmount: district.paidAmount,
+        latitude: district.latitudeTotal / district.orderCount,
+        longitude: district.longitudeTotal / district.orderCount,
+        wards: [...district.wards.values()].sort((a, b) => b.orderCount - a.orderCount || a.name.localeCompare(b.name, "vi")),
+      }))
+      .sort((a, b) => b.orderCount - a.orderCount || a.name.localeCompare(b.name, "vi"));
 
     return {
       generatedAt: new Date().toISOString(),
-      basis: "Đơn giao thành công và số tiền đã thu ròng (đã trừ hoàn tiền) đạt ít nhất tổng đơn.",
+      basis: "Tất cả đơn chưa hủy, không phải mua tại cửa hàng và đã xác nhận tọa độ giao hàng. Số tiền thu ròng được thống kê riêng.",
       summary: {
-        eligibleOrders,
+        eligibleOrders: deliveryPoints.length,
         eligiblePaidAmount,
         hcmcOrders,
         hcmcPaidAmount,
         mappedOrders,
-        unknownDistrictOrders: unclassified.unknownDistrictOrders,
-        unknownWardOrders: unclassified.unknownWardOrders,
-        outsideHcmcOrders: unclassified.outsideHcmcOrders,
-        outsideHcmcPaidAmount: unclassified.outsideHcmcPaidAmount,
+        unknownDistrictOrders,
+        unknownWardOrders,
+        unclassifiedOrders,
+        outsideHcmcOrders: deliveryPoints.length - hcmcOrders,
+        outsideHcmcPaidAmount: Math.max(0, eligiblePaidAmount - hcmcPaidAmount),
         coordinateConfirmedOrders: deliveryPoints.length,
       },
-      districts: [...districts.values()]
-        .map((district) => ({
-          key: district.key,
-          name: district.name,
-          orderCount: district.orderCount,
-          paidAmount: district.paidAmount,
-          wards: [...district.wards.values()].sort((a, b) => b.orderCount - a.orderCount || a.name.localeCompare(b.name, "vi")),
-        }))
-        .sort((a, b) => b.orderCount - a.orderCount || a.name.localeCompare(b.name, "vi")),
+      districts: rankedDistricts,
       deliveryPoints,
-      deliveryPointsLimited: deliveryPointRows.length === 1500,
-      unclassified,
+      deliveryPointsLimited: false,
+      unclassified: { hcmcOrders, hcmcPaidAmount, unknownDistrictOrders, unknownWardOrders, outsideHcmcOrders: deliveryPoints.length - hcmcOrders, outsideHcmcPaidAmount: Math.max(0, eligiblePaidAmount - hcmcPaidAmount) },
     };
   }
 
@@ -3836,7 +3782,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         });
         const updatedOrder = await tx.order.findUnique({ where: { id }, select: selectAdminOrder });
         if (!updatedOrder) throw new NotFoundException("Không tìm thấy đơn hàng sau khi cập nhật.");
-        if (status === "DELIVERED") await this.loyalty.awardIfDeliveredAndPaid(tx, updatedOrder);
+        if (status === "DELIVERED") await this.loyalty.awardIfFullyPaid(tx, updatedOrder);
         await tx.auditLog.create({ data: {
           adminId: actor?.id || null,
           correlationId: actor?.correlationId,
@@ -4077,7 +4023,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         });
         if (current.status !== "CANCELLED" && totalCapturedAfter >= Number(current.totalAmount)) {
           await this.loyalty.settleReservation(tx, id);
-          await this.loyalty.awardIfDeliveredAndPaid(tx, result);
+          await this.loyalty.awardIfFullyPaid(tx, result);
         }
         await tx.auditLog.create({ data: {
           adminId: actor.id || null,
@@ -4588,6 +4534,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         payments: { create: { method: method as any, amount: totalAmount, status: paid ? "PAID" as any : "PENDING" as any, ...(paid ? { paidAt: new Date() } : {}) } },
       }, include: { items: true, payments: true, customer: true } });
       await this.loyalty.reserve(tx, orderCustomer?.id || customer?.id || null, savedOrder.id, loyalty.pointsToRedeem, loyaltyDiscountAmount);
+      if (paid) await this.loyalty.awardIfFullyPaid(tx, savedOrder);
       if (!storeSale) {
         await tx.adminNotification.create({ data: {
           type: "ORDER_CREATED",
@@ -5019,7 +4966,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   }
 
   async publicSettings() {
-    const publicKeys = ["banners", "footerContent", "catalogEditorialPromos", "newArrivalsMedia", "bankQr", "address", "addressNote", "phone", "supportEmail", "openingHours", "socialLinks", "blogCategories"];
+    const publicKeys = ["banners", "footerContent", "catalogEditorialPromos", "newArrivalsMedia", "shopMenuEditorial", "bankQr", "address", "addressNote", "phone", "supportEmail", "openingHours", "socialLinks", "blogCategories"];
     const rows = await this.prisma.siteSetting.findMany({ where: { key: { in: publicKeys } }, select: { key: true, value: true } });
     const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]));
     const facebookPage = await this.prisma.socialAccount.findFirst({

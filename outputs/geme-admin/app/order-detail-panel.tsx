@@ -60,6 +60,17 @@ function posSyncName(status?: string | null) {
   return ({ PENDING: "Đang chờ gửi", SYNCING: "Đang đồng bộ", RETRYING: "Sẽ tự thử lại", SYNCED: "Đã đồng bộ", BLOCKED: "Cần cấu hình thanh toán" } as Record<string, string>)[status || ""] || "Chưa gửi lên POS365";
 }
 
+function customerContactHref(order: OrderReceiptData) {
+  const phone = String(order.phone || "").replace(/[^\d+]/g, "");
+  if (phone) return `https://zalo.me/${phone.replace(/^\+/, "")}`;
+  if (order.email) {
+    const subject = encodeURIComponent(`GEME · Đơn hàng ${order.id}`);
+    const body = encodeURIComponent(`Chào ${order.customer || "Quý khách"},\n\nGEME xin liên hệ về đơn hàng ${order.id}.`);
+    return `mailto:${encodeURIComponent(order.email)}?subject=${subject}&body=${body}`;
+  }
+  return "";
+}
+
 export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch, onDelivered, onRecordPayment, onRefundPreShipment, onRetryOrderEmail, onShowBill, onShowPaymentQr, onCustomerHistory, onGetViettelPostStatus, onGetViettelPostPrintUrl, onQuoteViettelPost, onCreateViettelPostShipment, onRefreshOrders }: Props) {
   const defaultWeight = Math.round(order.items.reduce((sum, item) => sum + (Number(item.weightGrams) || 0) * item.quantity, 0));
   const [shipmentOpen, setShipmentOpen] = useState(false);
@@ -168,6 +179,8 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
     ? ["Đặt hàng", "Chờ thanh toán", "Chờ xác nhận", "Đang xử lý", "Đang giao", "Đã giao", "Đã hủy"]
     : ["Đặt hàng", "Chờ xác nhận", "Đang xử lý", "Đang giao", "Đã giao", "Đã hủy"];
   const statusIndex = Math.max(0, statusSteps.indexOf(order.status));
+  const storeSale = order.shipping === "Bán trực tiếp tại cửa hàng" || ["STORE", "IN_STORE", "POS"].includes(String(order.salesChannel || "").toUpperCase());
+  const contactHref = customerContactHref(order);
 
   return <aside className="order-drawer" aria-label={`Chi tiết đơn hàng ${order.id}`}>
     <div className="drawer-title"><h2>Chi tiết đơn hàng #{order.id}</h2><button className="icon-button" type="button" onClick={onClose} aria-label="Đóng chi tiết"><SectionIcon name="close" /></button></div>
@@ -239,7 +252,7 @@ export default function OrderDetailPanel({ order, onClose, onConfirm, onDispatch
               : <button className="button button-primary" type="button" onClick={onDelivered}>✓ Xác nhận đã giao</button>
             : <button className="button button-quiet" type="button" onClick={onShowBill}>Chi tiết hóa đơn</button>}
       <button className="button button-quiet" type="button" onClick={onShowBill}>▤ In đơn</button>
-      {order.phone ? <a className="button button-quiet" href={`tel:${order.phone}`}>☎ Liên hệ khách</a> : <button className="button button-quiet" type="button" disabled>☎ Liên hệ khách</button>}
+      {!storeSale && (contactHref ? <a className="button button-quiet" href={contactHref} target={order.phone ? "_blank" : undefined} rel={order.phone ? "noreferrer" : undefined}>{order.phone ? "Chat Zalo" : "Soạn email cho khách"}</a> : <button className="button button-quiet" type="button" disabled title="Đơn này chưa có số điện thoại hoặc email của khách">Thiếu liên hệ khách</button>)}
     </div>
   </aside>;
 }

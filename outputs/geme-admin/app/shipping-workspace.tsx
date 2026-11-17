@@ -7,12 +7,12 @@ import VietMapDeliveryMap from "./vietmap-delivery-map";
 type ShippingOrder = OrderReceiptData & { product?: string; sku?: string; quantity?: number };
 type ShipmentFilter = "READY" | "PICKUP" | "TRANSIT" | "ISSUES" | "DELIVERED" | "CANCELLED" | "ALL";
 type DeliveryWard = { key: string; name: string; orderCount: number; paidAmount: number };
-type DeliveryDistrict = { key: string; name: string; orderCount: number; paidAmount: number; wards: DeliveryWard[] };
+type DeliveryDistrict = { key: string; name: string; orderCount: number; paidAmount: number; latitude: number; longitude: number; wards: DeliveryWard[] };
 type DeliveryPoint = { code: string; latitude: number; longitude: number; districtKey: string };
 type DeliveryMap = {
   generatedAt: string;
   basis: string;
-  summary: { eligibleOrders: number; eligiblePaidAmount: number; hcmcOrders: number; hcmcPaidAmount: number; mappedOrders: number; unknownDistrictOrders: number; unknownWardOrders: number; outsideHcmcOrders: number; outsideHcmcPaidAmount: number; coordinateConfirmedOrders: number };
+  summary: { eligibleOrders: number; eligiblePaidAmount: number; hcmcOrders: number; hcmcPaidAmount: number; mappedOrders: number; unknownDistrictOrders: number; unknownWardOrders: number; unclassifiedOrders?: number; outsideHcmcOrders: number; outsideHcmcPaidAmount: number; coordinateConfirmedOrders: number };
   districts: DeliveryDistrict[];
   deliveryPoints: DeliveryPoint[];
   deliveryPointsLimited: boolean;
@@ -100,27 +100,27 @@ export default function ShippingWorkspace({ orders, onOpenOrder, request }: Prop
     </div>
     <section className="shipping-delivery-map-panel" aria-label="Bản đồ khu vực giao hàng">
       <header className="shipping-delivery-map-heading">
-        <div><span className="eyebrow">PHÂN BỐ GIAO THÀNH CÔNG</span><h3>Đơn giao theo quận và phường</h3><p>{deliveryMap?.basis || "Chỉ tính đơn đã thanh toán đủ và có trạng thái giao thành công."}</p></div>
+        <div><span className="eyebrow">PHÂN BỐ ĐƠN GIAO</span><h3>Đơn giao theo tỉnh/thành, quận/huyện</h3><p>{deliveryMap?.basis || "Tổng hợp đơn có tọa độ giao hàng đã xác nhận, trừ đơn mua tại cửa hàng và đơn đã hủy."}</p></div>
         <button type="button" className="button button-quiet" onClick={() => void loadDeliveryMap()} disabled={deliveryMapLoading}>{deliveryMapLoading ? "Đang tải…" : "↻ Làm mới"}</button>
       </header>
-      {deliveryMapError ? <div className="shipping-map-error" role="alert">{deliveryMapError}</div> : deliveryMapLoading && !deliveryMap ? <div className="shipping-map-loading" role="status">Đang tổng hợp đơn đã thanh toán và giao thành công…</div> : deliveryMap && <>
+      {deliveryMapError ? <div className="shipping-map-error" role="alert">{deliveryMapError}</div> : deliveryMapLoading && !deliveryMap ? <div className="shipping-map-loading" role="status">Đang tổng hợp đơn giao có vị trí đã xác nhận…</div> : deliveryMap && <>
         <div className="shipping-map-summary">
-          <article><span>Đơn đủ điều kiện</span><strong>{deliveryMap.summary.eligibleOrders.toLocaleString("vi-VN")}</strong><small>Đã thu đủ tiền và giao thành công</small></article>
+          <article><span>Đơn đủ điều kiện</span><strong>{deliveryMap.summary.eligibleOrders.toLocaleString("vi-VN")}</strong><small>Có vị trí giao hàng đã xác nhận</small></article>
           <article><span>Trong TP.HCM</span><strong>{deliveryMap.summary.hcmcOrders.toLocaleString("vi-VN")}</strong><small>{money(deliveryMap.summary.hcmcPaidAmount)} đã thu ròng</small></article>
           <article><span>Xác định được phường</span><strong>{deliveryMap.summary.mappedOrders.toLocaleString("vi-VN")}</strong><small>Quận/huyện và phường đều nhận diện được</small></article>
-          <article><span>Chưa rõ khu vực</span><strong>{(deliveryMap.summary.unknownDistrictOrders + deliveryMap.summary.unknownWardOrders).toLocaleString("vi-VN")}</strong><small>Thiếu quận hoặc phường trong địa chỉ</small></article>
+          <article><span>Chưa rõ khu vực</span><strong>{(deliveryMap.summary.unclassifiedOrders ?? deliveryMap.summary.unknownDistrictOrders + deliveryMap.summary.unknownWardOrders).toLocaleString("vi-VN")}</strong><small>Thiếu quận/huyện hoặc phường/xã trong địa chỉ</small></article>
         </div>
         <div className="shipping-map-content">
           <div className="shipping-map-visual-wrap">
-            <div className="shipping-map-legend"><span>Đơn theo khu vực</span><i/><i/><i/><i/><span>Nhiều hơn</span><small>Chấm xanh đậm là vị trí giao chính xác đã xác nhận</small></div>
+            <div className="shipping-map-legend"><span>Xếp hạng khu vực</span><i/><i/><i/><i/><span>Nhiều đơn hơn · màu đậm hơn</span><small>Chấm nhỏ là đơn giao có tọa độ đã xác nhận</small></div>
             <VietMapDeliveryMap districts={deliveryMap.districts} deliveryPoints={deliveryMap.deliveryPoints} selectedKey={selectedDistrictKey} onSelect={setSelectedDistrictKey}/>
-            <small className="shipping-map-footnote">Đang hiển thị {deliveryMap.summary.coordinateConfirmedOrders.toLocaleString("vi-VN")} điểm giao đã xác nhận trong số đơn đã thanh toán đủ và giao thành công. Các đơn cũ chưa có tọa độ tiếp tục được tổng hợp theo quận/phường; Q.2/Q.9 cũ được gộp vào TP. Thủ Đức.{deliveryMap.deliveryPointsLimited ? " Bản đồ đang giới hạn 1.500 điểm mới nhất; hãy lọc theo khu vực để xem thống kê đầy đủ." : ""}</small>
+            <small className="shipping-map-footnote">Đang hiển thị {deliveryMap.summary.coordinateConfirmedOrders.toLocaleString("vi-VN")} đơn giao tại các tỉnh/thành trong Việt Nam có tọa độ đã xác nhận. Chấm màu đậm hơn là khu vực có thứ hạng giao hàng cao hơn.</small>
           </div>
           <section className="shipping-ward-detail" aria-live="polite">
             {selectedDistrict ? <>
               <header><div><span className="eyebrow">CHI TIẾT KHU VỰC</span><h4>{selectedDistrict.name}</h4></div><strong>{selectedDistrict.orderCount.toLocaleString("vi-VN")} đơn</strong></header>
               <p className="shipping-ward-total">{money(selectedDistrict.paidAmount)} đã thu ròng</p>
-              {leadingWards.length > 0 && <div className="shipping-ward-leader"><span>Phường có nhiều đơn nhất</span><strong>{leadingWards.map((ward) => ward.name).join(", ")}</strong><small>{leadingWardCount.toLocaleString("vi-VN")} đơn đã thanh toán đủ và giao thành công</small></div>}
+              {leadingWards.length > 0 && <div className="shipping-ward-leader"><span>Phường có nhiều đơn nhất</span><strong>{leadingWards.map((ward) => ward.name).join(", ")}</strong><small>{leadingWardCount.toLocaleString("vi-VN")} đơn có vị trí giao đã xác nhận</small></div>}
               {selectedDistrict.wards.length ? <div className="shipping-ward-list" role="table" aria-label={`Đơn giao theo phường ${selectedDistrict.name}`}>
                 <div className="shipping-ward-row shipping-ward-head" role="row"><span role="columnheader">Phường</span><span role="columnheader">Đơn giao</span><span role="columnheader">Đã thu</span></div>
                 {selectedDistrict.wards.map((ward) => <div className="shipping-ward-row" role="row" key={ward.key}><strong role="cell">{ward.name}</strong><span role="cell">{ward.orderCount.toLocaleString("vi-VN")}</span><span role="cell">{money(ward.paidAmount)}</span></div>)}
@@ -128,7 +128,7 @@ export default function ShippingWorkspace({ orders, onOpenOrder, request }: Prop
             </> : <div className="shipping-ward-empty">Chọn một quận/huyện để xem số đơn theo phường.</div>}
           </section>
         </div>
-        {(deliveryMap.summary.unknownDistrictOrders > 0 || deliveryMap.summary.unknownWardOrders > 0 || deliveryMap.summary.outsideHcmcOrders > 0) && <footer className="shipping-map-unclassified">Toàn TP.HCM có {deliveryMap.summary.unknownDistrictOrders.toLocaleString("vi-VN")} đơn thiếu quận/huyện và {deliveryMap.summary.unknownWardOrders.toLocaleString("vi-VN")} đơn thiếu phường trong địa chỉ; {deliveryMap.summary.outsideHcmcOrders.toLocaleString("vi-VN")} đơn ngoài TP.HCM hoặc địa chỉ chưa đủ dữ liệu được tách riêng, không gán vào khu vực.</footer>}
+        {(deliveryMap.summary.unknownDistrictOrders > 0 || deliveryMap.summary.unknownWardOrders > 0) && <footer className="shipping-map-unclassified">Có {deliveryMap.summary.unknownDistrictOrders.toLocaleString("vi-VN")} đơn chưa nhận diện được quận/huyện và {deliveryMap.summary.unknownWardOrders.toLocaleString("vi-VN")} đơn chưa nhận diện được phường/xã từ địa chỉ; các đơn vẫn được đặt trên bản đồ theo tọa độ đã xác nhận.</footer>}
       </>}
     </section>
     <section className="shipping-list-panel">

@@ -5,6 +5,27 @@ import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
 const VN_TZ = "Asia/Ho_Chi_Minh";
 type EventInput = { title: string; description: string | null; location: string | null; startsAt: Date; endsAt: Date; allDay: boolean };
 
+const VIETNAM_HOLIDAYS: Array<{ title: string; date: string; description: string }> = [
+  { title: "Tết Dương lịch", date: "2026-01-01", description: "Ngày nghỉ lễ toàn quốc." },
+  { title: "Kỳ nghỉ Tết Nguyên đán Bính Ngọ", date: "2026-02-14", description: "Ngày đầu kỳ nghỉ Tết Nguyên đán 2026 theo lịch nghỉ chính thức." },
+  { title: "Mùng 1 Tết Bính Ngọ", date: "2026-02-17", description: "Ngày đầu năm âm lịch 2026." },
+  { title: "Giỗ Tổ Hùng Vương", date: "2026-04-26", description: "Ngày lễ quốc gia; nghỉ bù ngày 27/04/2026." },
+  { title: "Ngày Giải phóng miền Nam", date: "2026-04-30", description: "Ngày nghỉ lễ toàn quốc." },
+  { title: "Quốc tế Lao động", date: "2026-05-01", description: "Ngày nghỉ lễ toàn quốc." },
+  { title: "Quốc khánh", date: "2026-09-02", description: "Ngày nghỉ lễ toàn quốc; lịch nghỉ 2026 có ngày liền kề theo phương án đã công bố." },
+  { title: "Ngày Văn hóa Việt Nam", date: "2026-11-24", description: "Ngày nghỉ hưởng nguyên lương theo lịch nghỉ năm 2026 đã công bố." },
+  { title: "Tết Dương lịch", date: "2027-01-01", description: "Ngày nghỉ lễ toàn quốc." },
+  { title: "Kỳ nghỉ Tết Nguyên đán Đinh Mùi", date: "2027-02-04", description: "Bắt đầu kỳ nghỉ Tết Nguyên đán 2027; lịch nghỉ công bố từ 04/02 đến hết 10/02." },
+  { title: "Mùng 1 Tết Đinh Mùi", date: "2027-02-06", description: "Ngày đầu năm âm lịch 2027." },
+  { title: "Giỗ Tổ Hùng Vương", date: "2027-04-16", description: "Ngày nghỉ lễ toàn quốc; kỳ nghỉ liền mạch 16–18/04/2027." },
+  { title: "Ngày Giải phóng miền Nam", date: "2027-04-30", description: "Ngày nghỉ lễ toàn quốc." },
+  { title: "Quốc tế Lao động", date: "2027-05-01", description: "Ngày nghỉ lễ toàn quốc; kỳ nghỉ liền mạch 30/04–03/05/2027." },
+  { title: "Quốc khánh", date: "2027-09-02", description: "Ngày nghỉ lễ toàn quốc; lịch nghỉ công chức 2027 gồm 02–03/09." },
+  { title: "Ngày Văn hóa Việt Nam", date: "2027-11-24", description: "Ngày nghỉ hưởng nguyên lương theo lịch nghỉ năm 2027 đã công bố." },
+];
+
+const vnDayStart = (date: string) => new Date(`${date}T00:00:00+07:00`);
+
 function dateValue(value: unknown, field: string) {
   if (typeof value !== "string" || value.length > 40) throw new BadRequestException(`${field} chưa hợp lệ.`);
   const date = new Date(value);
@@ -36,18 +57,67 @@ function todayWindow(now = new Date()) {
 @Injectable()
 export class AdminCalendarService {
   constructor(private readonly prisma: PrismaService) {}
+  private holidaysReady = false;
+  private holidaySeedPromise?: Promise<void>;
+
+  private async ensureVietnamHolidays() {
+    if (this.holidaysReady) return;
+    if (!this.holidaySeedPromise) this.holidaySeedPromise = this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('geme-admin-calendar-vietnam-holidays'))`;
+        for (const holiday of VIETNAM_HOLIDAYS) {
+          const startsAt = vnDayStart(holiday.date);
+          const exists = await tx.adminCalendarEvent.findFirst({ where: { title: holiday.title, startsAt }, select: { id: true } });
+          if (exists) continue;
+          const endsAt = new Date(startsAt.getTime() + 86400000);
+          await tx.adminCalendarEvent.create({ data: { title: holiday.title, description: holiday.description, location: null, startsAt, endsAt, allDay: true } });
+        }
+      }).then(() => { this.holidaysReady = true; }).finally(() => { this.holidaySeedPromise = undefined; });
+    await this.holidaySeedPromise;
+  }
+
+  private async notifyEventOnce(event: { id: string; title: string; description: string | null; startsAt: Date }, phase: "DATE" | "TIME", date: string) {
+    const entityId = `${phase}:${event.id}:${date}`;
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`geme-calendar:${entityId}`}))`;
+      const existing = await tx.adminNotification.findFirst({ where: { type: "CALENDAR_EVENT", entityId }, select: { id: true } });
+      if (existing) return false;
+      await tx.adminNotification.create({ data: {
+        type: "CALENDAR_EVENT",
+        title: phase === "DATE" ? `Hôm nay: ${event.title}` : `Đến giờ: ${event.title}`,
+        message: event.description || (phase === "DATE" ? "Sự kiện diễn ra trong ngày hôm nay." : "Sự kiện đã đến thời gian bắt đầu."),
+        entityType: "CALENDAR_EVENT",
+        entityId,
+      } });
+      return true;
+    });
+  }
 
   async today() {
     const window = todayWindow();
+    await this.ensureVietnamHolidays();
     const events = await this.prisma.adminCalendarEvent.findMany({
       where: { startsAt: { lt: window.to }, endsAt: { gte: window.from } },
       orderBy: [{ startsAt: "asc" }, { title: "asc" }],
     });
+    for (const event of events) await this.notifyEventOnce(event, "DATE", window.date);
+    return { date: window.date, timeZone: VN_TZ, events };
+  }
+
+  async due() {
+    const window = todayWindow();
+    await this.ensureVietnamHolidays();
+    const now = new Date();
+    const events = await this.prisma.adminCalendarEvent.findMany({
+      where: { startsAt: { lte: now, gte: window.from, lt: window.to } },
+      orderBy: [{ startsAt: "asc" }, { title: "asc" }],
+    });
+    for (const event of events) await this.notifyEventOnce(event, "TIME", window.date);
     return { date: window.date, timeZone: VN_TZ, events };
   }
 
   async list(fromValue?: string, toValue?: string) {
     if (!fromValue || !toValue) throw new BadRequestException("Cần truyền khoảng thời gian from và to.");
+    await this.ensureVietnamHolidays();
     const from = dateValue(fromValue, "Ngày bắt đầu");
     const to = dateValue(toValue, "Ngày kết thúc");
     if (to <= from || to.getTime() - from.getTime() > 62 * 86400000) throw new BadRequestException("Khoảng xem lịch phải từ 1 đến 62 ngày.");

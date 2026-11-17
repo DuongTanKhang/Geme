@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-type DeliveryDistrict = { key: string; name: string; orderCount: number; paidAmount: number };
+type DeliveryDistrict = { key: string; name: string; orderCount: number; paidAmount: number; latitude: number; longitude: number };
 type DeliveryPoint = { code: string; latitude: number; longitude: number; districtKey: string };
 type GeoFeature = {
   type: "Feature";
@@ -43,18 +43,6 @@ const DELIVERY_CLUSTER_LAYER = "geme-exact-delivery-clusters";
 const DELIVERY_PIN_LAYER = "geme-exact-delivery-pins";
 const DELIVERY_CODE_LAYER = "geme-exact-delivery-codes";
 
-// Representative locations for legacy HCMC districts used by addresses/orders.
-// These markers are explicitly not order coordinates or cadastral boundaries.
-const CENTERS: Record<string, [number, number]> = {
-  "district-1": [106.7009, 10.7757], "district-3": [106.6842, 10.7821], "district-4": [106.7041, 10.7593],
-  "district-5": [106.6664, 10.754], "district-6": [106.6357, 10.746], "district-7": [106.7218, 10.735],
-  "district-8": [106.6288, 10.724], "district-10": [106.6677, 10.772], "district-11": [106.643, 10.763],
-  "district-12": [106.6504, 10.867], "binh-thanh": [106.7111, 10.803], "binh-tan": [106.603, 10.765],
-  "go-vap": [106.665, 10.838], "phu-nhuan": [106.678, 10.8], "tan-binh": [106.652, 10.801],
-  "tan-phu": [106.626, 10.79], "thu-duc": [106.753, 10.849], "binh-chanh": [106.55, 10.7],
-  "can-gio": [106.96, 10.41], "cu-chi": [106.49, 11.02], "hoc-mon": [106.59, 10.88], "nha-be": [106.73, 10.65],
-};
-
 let sdkPromise: Promise<VietMapSdk> | undefined;
 function loadVietMapSdk(): Promise<VietMapSdk> {
   if (window.vietmapgl) return Promise.resolve(window.vietmapgl);
@@ -88,16 +76,18 @@ function loadVietMapSdk(): Promise<VietMapSdk> {
 function makeFeatures(districts: DeliveryDistrict[], selectedKey: string): GeoCollection {
   return {
     type: "FeatureCollection",
-    features: districts.flatMap((district) => {
-      const coordinates = CENTERS[district.key];
-      if (!coordinates) return [];
+    features: districts.flatMap((district, index) => {
+      const latitude = Number(district.latitude);
+      const longitude = Number(district.longitude);
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return [];
       return [{
         type: "Feature" as const,
-        geometry: { type: "Point" as const, coordinates },
+        geometry: { type: "Point" as const, coordinates: [longitude, latitude] as [number, number] },
         properties: {
           key: district.key,
           name: district.name,
           orderCount: Math.max(0, Number(district.orderCount) || 0),
+          rank: index + 1,
           selected: district.key === selectedKey,
         },
       }];
@@ -161,9 +151,9 @@ export default function VietMapDeliveryMap({ districts, deliveryPoints, selected
         const map = new sdk.Map({
           container: containerRef.current,
           style: `https://maps.vietmap.vn/maps/styles/lm/style.json?apikey=${encodeURIComponent(key)}`,
-          center: [106.68, 10.77],
-          zoom: 9,
-          minZoom: 7.4,
+          center: [105.8, 17.5],
+          zoom: 4.5,
+          minZoom: 3.5,
           maxZoom: 16,
           attributionControl: true,
         });
@@ -212,8 +202,8 @@ export default function VietMapDeliveryMap({ districts, deliveryPoints, selected
             source: SOURCE_ID,
             filter: ["!", ["has", "point_count"]],
             paint: {
-              "circle-color": ["step", ["get", "orderCount"], "#dce9df", 1, "#9fc5aa", 5, "#5a976e", 15, "#276c45"],
-              "circle-radius": ["interpolate", ["linear"], ["get", "orderCount"], 0, 8, 1, 11, 5, 15, 20, 21, 60, 27],
+              "circle-color": ["step", ["get", "rank"], "#155c39", 2, "#276c45", 5, "#5a976e", 11, "#9fc5aa", 21, "#dce9df"],
+              "circle-radius": ["interpolate", ["linear"], ["get", "rank"], 1, 22, 5, 19, 10, 16, 20, 12, 40, 9],
               "circle-stroke-color": ["case", ["get", "selected"], "#073d26", "#ffffff"],
               "circle-stroke-width": ["case", ["get", "selected"], 4, 2],
               "circle-opacity": 0.92,
@@ -225,7 +215,7 @@ export default function VietMapDeliveryMap({ districts, deliveryPoints, selected
             source: SOURCE_ID,
             filter: ["!", ["has", "point_count"]],
             layout: { "text-field": ["to-string", ["get", "orderCount"]], "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"], "text-size": 11 },
-            paint: { "text-color": ["case", [">", ["get", "orderCount"], 4], "#ffffff", "#214d34"] },
+            paint: { "text-color": ["case", ["<", ["get", "rank"], 11], "#ffffff", "#214d34"] },
           });
           map.addLayer({
             id: "geme-delivery-district-name",
@@ -351,7 +341,7 @@ export default function VietMapDeliveryMap({ districts, deliveryPoints, selected
     <strong>Chưa cấu hình đủ key VietMap</strong>
     <span>Nhập <code>VIETMAP_TILEMAP_KEY</code> để tải nền bản đồ và <code>VIETMAP_API_KEY</code> cho các API Search/Route vào <code>.env.docker</code>. Tilemap key được dùng trên trình duyệt; API key chỉ giữ ở máy chủ. Sau đó tạo lại riêng container Admin.</span>
   </div>;
-  return <div className="shipping-vietmap-shell" aria-label="Bản đồ VietMap khu vực TP. Hồ Chí Minh">
+  return <div className="shipping-vietmap-shell" aria-label="Bản đồ VietMap giao hàng toàn quốc">
     <div ref={containerRef} className="shipping-vietmap-canvas" />
     {state.status === "loading" && <div className="shipping-vietmap-overlay" role="status">Đang tải bản đồ VietMap…</div>}
     {state.status === "error" && <div className="shipping-vietmap-overlay is-error" role="alert">{state.message || "Không tải được bản đồ VietMap."}</div>}

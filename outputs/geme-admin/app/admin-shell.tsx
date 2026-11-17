@@ -14,6 +14,7 @@ import type { AdminCalendarEvent } from "./calendar-workspace";
 import { apiBaseUrl } from "../lib/api";
 import { fromApiProduct, toApiProduct } from "./product-api-mapper";
 import { MAX_PRODUCT_IMAGES } from "./product-images";
+import { exportOrdersExcel } from "./order-excel-export";
 import OrderPaymentQrModal, { OrderQrButton } from "./order-payment-qr-modal";
 import type { OrderQrSnapshot } from "./order-payment-qr-state";
 
@@ -296,7 +297,7 @@ export default function AdminShell({initialPermissions,initialRole,initialAdminI
   useEffect(()=>{
     if(!initialAdminId||apiStatus!=="connected"||!adminPermissionsLoaded||!adminPermissions.includes("calendar.read")||todayEventsChecked.current)return;
     const date=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Ho_Chi_Minh",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
-    const storageKey=`geme-admin-calendar-reminder:${initialAdminId}:${date}`;
+    const storageKey=`geme-admin-calendar-reminder:v2:${initialAdminId}:${date}`;
     try{if(window.localStorage.getItem(storageKey)){todayEventsChecked.current=true;return;}}catch{}
     let alive=true;
     void apiRequest("admin/calendar/today").then((payload)=>{
@@ -309,6 +310,27 @@ export default function AdminShell({initialPermissions,initialRole,initialAdminI
       if(events.length)setTodayEvents(events);
     }).catch(()=>{if(alive)todayEventsChecked.current=false;});
     return()=>{alive=false;};
+  },[initialAdminId,apiStatus,adminPermissionsLoaded,adminPermissions,apiRequest]);
+  useEffect(()=>{
+    if(!initialAdminId||apiStatus!=="connected"||!adminPermissionsLoaded||!adminPermissions.includes("calendar.read"))return;
+    let alive=true;
+    const checkDueEvents=async()=>{
+      try{
+        const payload=await apiRequest("admin/calendar/due") as Row;
+        if(!alive)return;
+        const events=Array.isArray(payload?.events)?payload.events as AdminCalendarEvent[]:[];
+        const date=String(payload?.date||new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Ho_Chi_Minh",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date()));
+        const due=events.filter(event=>{
+          const key=`geme-admin-calendar-time:${initialAdminId}:${event.id}:${date}`;
+          try{if(window.localStorage.getItem(key))return false;window.localStorage.setItem(key,"1");}catch{}
+          return true;
+        });
+        if(due.length){setTodayEventsDate(date);setTodayEvents(current=>[...current,...due.filter(event=>!current.some(existing=>existing.id===event.id))]);}
+      }catch{}
+    };
+    void checkDueEvents();
+    const timer=window.setInterval(()=>void checkDueEvents(),15000);
+    return()=>{alive=false;window.clearInterval(timer);};
   },[initialAdminId,apiStatus,adminPermissionsLoaded,adminPermissions,apiRequest]);
   const refreshNotifications=useCallback(async()=>{
     try{
@@ -348,6 +370,7 @@ export default function AdminShell({initialPermissions,initialRole,initialAdminI
     setNotificationOpen(false);
     if(item.entityType==='ORDER')go('orders');
     else if(item.entityType==='CUSTOMER')go('customers');
+    else if(item.entityType==='CALENDAR_EVENT')go('calendar');
   };
   const markAllNotificationsRead=async()=>{
     if(!unreadNotificationCount)return;
@@ -565,7 +588,27 @@ export default function AdminShell({initialPermissions,initialRole,initialAdminI
     if(pending)return pending;
     const request=apiRequest(`products/${encodeURIComponent(apiId)}`).then((record:Row)=>{
       const mapped=fromApiProduct(record as Row);
-      setData((old)=>({...old,products:old.products.map((product)=>product.apiId===apiId?mapped:product)}));
+      setData((old)=>({...old,products:old.products.map((product)=>product.apiId===apiId?{
+        // Detail GET hydrates the side panel only. Keep every field used by
+        // the catalog row, search, filters, and ordering from the list result;
+        // detail responses can omit or normalize these fields differently.
+        ...mapped,
+        id: product.id,
+        apiId: product.apiId,
+        name: product.name,
+        productType: product.productType,
+        category: product.category,
+        categoryId: product.categoryId,
+        subcategory: product.subcategory,
+        stoneFilterKey: product.stoneFilterKey,
+        status: product.status,
+        stock: product.stock,
+        price: product.price,
+        isNew: product.isNew,
+        newLabelActive: product.newLabelActive,
+        isPremiumGemstone: product.isPremiumGemstone,
+        image: product.image,
+      }:product)}));
       return mapped;
     }).finally(()=>productDetailsRequests.current.delete(apiId));
     productDetailsRequests.current.set(apiId,request);
@@ -701,7 +744,7 @@ export default function AdminShell({initialPermissions,initialRole,initialAdminI
    const loadBankQrSettings=async()=>{const settings=await apiRequest('settings/public') as Row;const bankQr=(settings.bankQr||{}) as Row;return {enabled:bankQr.enabled===true,bankCode:String(bankQr.bankCode||''),accountNumber:String(bankQr.accountNumber||''),accountName:String(bankQr.accountName||'')};};
    const createPosOrder=async(order:Record<string,unknown>):Promise<Row>=>{const payload=JSON.stringify(order);if(!posOrderIdempotency.current||posOrderIdempotency.current.payload!==payload)posOrderIdempotency.current={payload,key:crypto.randomUUID()};const saved=await apiRequest('admin/orders','POST',order,{'Idempotency-Key':posOrderIdempotency.current.key}) as Row;posOrderIdempotency.current=null;const mapped=fromApiOrder(saved);const qrPayment=order.qrPayment===true&&order.paymentMethod==='BANK_TRANSFER';loadedCollections.current.delete('orders');loadedCollections.current.delete('products');loadedCollections.current.delete('dashboard:orders');loadedCollections.current.delete('dashboard:products');setData(old=>({...old,orders:[mapped,...old.orders.filter(row=>row.apiId!==mapped.apiId)]}));setSelectedOrderId(mapped.id);setView('orders');setMenuOpen(false);if(qrPayment)setPaymentQrOrderId(String(saved.id));notify(qrPayment?`Đã tạo đơn ${mapped.id}. Chờ khách quét QR để SePay đối soát.`:saved.payments?.[0]?.status==='PAID'?`Đã hoàn tất đơn ${mapped.id} và cập nhật tồn kho.`:`Đã lưu đơn ${mapped.id} chờ thanh toán.`);return saved;};
    const togglePost=(name:string)=>{setData(old=>({...old,posts:old.posts.map(post=>post.name===name?{...post,status:post.status==='Đã xuất bản'?'Bản nháp':'Đã xuất bản'}:post)}));};
-  const exportOrders=()=>{const fields=['Mã đơn','Kênh bán','Khách hàng','Sản phẩm','Tổng tiền','Thanh toán','Trạng thái','Ngày'];const csv=[fields.join(','),...orderRows.map(order=>[order.id,salesChannelLabel(order.salesChannel),order.customer,order.product,order.total,order.payment,order.status,order.date].map(value=>`"${String(value).replaceAll('"','""')}"`).join(','))].join('\r\n');const url=URL.createObjectURL(new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}));const link=document.createElement('a');link.href=url;link.download='geme-don-hang.csv';link.click();URL.revokeObjectURL(url);};
+  const exportOrders=()=>exportOrdersExcel(orderRows,{dateFrom:orderDateFrom,dateTo:orderDateTo,channel:channelFilter?salesChannelLabel(channelFilter):"",status:statusFilter,payment:paymentFilter,shipping:shippingFilter,search});
 
   const renderOrders=(items:Row[],mini=false)=><div className="page-table-wrap"><table className="orders-table"><thead><tr><th>Mã đơn</th><th>Khách hàng</th><th>Tổng tiền</th><th>Trạng thái</th><th>Thời gian</th>{!mini&&<th></th>}</tr></thead><tbody>{items.length?items.map((row,index)=><tr key={String(row.id)}><td className="order-id">{String(row.id)}</td><td>{String(row.customer)}</td><td className="amount">{money(row.total as number)}</td><td>{mini?<Pill>{String(row.status)}</Pill>:<select className="table-status" value={String(row.status)} onChange={e=>changeOrder(String(row.id),e.target.value)}><option>Chờ xác nhận</option><option>Đang xử lý</option><option>Đang giao</option><option>Đã giao</option><option>Đã hủy</option></select>}</td><td>{String(row.time)}</td>{!mini&&<td><button className="row-action" onClick={()=>notify('Chi tiết đơn hàng sẽ hiển thị khi kết nối backend.')}>Chi tiết</button></td>}</tr>):<tr><td className="table-empty" colSpan={6}>Không có dữ liệu phù hợp.</td></tr>}</tbody></table></div>;
   const renderGeneralRows=()=>{
