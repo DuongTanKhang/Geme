@@ -1033,6 +1033,13 @@ img { display: block; max-width: 100%; }
 .catalog-pagination button:hover:not(:disabled) { background: #e8e5de; }
 .catalog-pagination button.is-current { background: #3e3b35; color: #fff; }
 .catalog-pagination button:disabled { color: #c3bfb7; cursor: default; }
+.store-product-pagination { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 30px auto; color: #625e57; }
+.store-product-pagination > span { display: contents; }
+.store-product-pagination a, .store-product-pagination button { min-width: 38px; height: 38px; display: inline-grid; place-items: center; padding: 0 9px; border: 1px solid transparent; border-radius: 2px; background: transparent; color: inherit; font: 400 14px/1 var(--sans); text-decoration: none; cursor: pointer; }
+.store-product-pagination a:hover, .store-product-pagination button:hover { border-color: #c9c2b7; }
+.store-product-pagination a.is-current, .store-product-pagination button.is-current { border-color: #123f36; background: #123f36; color: #fff; }
+.store-product-pagination .store-product-pagination-direction { font: 400 23px/1 var(--sans); }
+.store-product-pagination > span[aria-hidden="true"] { min-width: 18px; display: inline-grid; place-items: center; text-align: center; }
 .catalog-filter-toggle { display: none; }
 .catalog-promo { min-height: 155px; display: grid; place-items: center; padding: 24px; background: linear-gradient(90deg, rgb(243 239 232 / 86%), rgb(250 249 246 / 90%)), url('/assets/gemstone-collection-banner.png') center 52% / cover; text-align: center; }
 .catalog-promo h2 { margin: 5px 0; font: 400 25px/1.2 var(--serif); }
@@ -1132,6 +1139,8 @@ img { display: block; max-width: 100%; }
   .catalog-product-name { font-size: 13px; }
   .catalog-product-meta p { font-size: 11px; }
   .catalog-pagination { margin-block: 22px 10px; }
+  .store-product-pagination { gap: 2px; margin-block: 22px; }
+  .store-product-pagination a, .store-product-pagination button { min-width: 34px; height: 36px; padding-inline: 6px; }
   .catalog-promo { min-height: 138px; }
   .catalog-promo h2 { font-size: 22px; }
   .arrivals-hero { height: 225px; }

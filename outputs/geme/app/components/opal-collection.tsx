@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CatalogEditorialGrid } from "./catalog-editorial-grid";
+import { ProductPagination } from "./product-pagination";
 import { useProductListReturnState } from "./use-product-list-return-state";
 import type { StoreCatalogEditorialPromo, StoreCategory, StoreMaterial, StoreProduct, StorePromotion } from "../lib/store-api";
 
@@ -21,14 +22,14 @@ type CollectionProps = {
   bestSellerOrder?: string[];
 };
 
-const PRODUCT_BATCH_SIZE = 40;
+const PRODUCTS_PER_PAGE = 40;
 type CollectionReturnState = {
   selectedTypes: string[];
   selectedStones: string[];
   selectedSizes: string[];
   priceRange: string;
   sort: string;
-  visibleCount: number;
+  page: number;
   search?: string;
 };
 
@@ -87,14 +88,14 @@ export function OpalCollection({ products, categories, materials, connected, pro
   const [draftPriceRange, setDraftPriceRange] = useState("");
   const [stoneSearch, setStoneSearch] = useState("");
   const [sort, setSort] = useState(initialSort);
-  const [visibleCount, setVisibleCount] = useState(PRODUCT_BATCH_SIZE);
+  const [page, setPage] = useState(1);
   const [search, setSearch] = useState(initialSearch);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const filterPanelRef = useRef<HTMLDivElement>(null);
-  const returnState = useMemo<CollectionReturnState>(() => ({ selectedTypes, selectedStones, selectedSizes, priceRange, sort, visibleCount, search }), [selectedTypes, selectedStones, selectedSizes, priceRange, sort, visibleCount, search]);
+  const returnState = useMemo<CollectionReturnState>(() => ({ selectedTypes, selectedStones, selectedSizes, priceRange, sort, page, search }), [selectedTypes, selectedStones, selectedSizes, priceRange, sort, page, search]);
   const restoreCollectionState = useCallback((saved: CollectionReturnState) => {
-    if (!saved || !Array.isArray(saved.selectedTypes) || !Array.isArray(saved.selectedStones) || !Array.isArray(saved.selectedSizes) || !Number.isFinite(saved.visibleCount)) return;
+    if (!saved || !Array.isArray(saved.selectedTypes) || !Array.isArray(saved.selectedStones) || !Array.isArray(saved.selectedSizes) || !Number.isFinite(saved.page)) return;
     setSelectedTypes(saved.selectedTypes);
     setSelectedStones(saved.selectedStones);
     setSelectedSizes(saved.selectedSizes);
@@ -104,10 +105,10 @@ export function OpalCollection({ products, categories, materials, connected, pro
     setPriceRange(typeof saved.priceRange === "string" ? saved.priceRange : "");
     setDraftPriceRange(typeof saved.priceRange === "string" ? saved.priceRange : "");
     setSort(typeof saved.sort === "string" ? saved.sort : initialSort);
-    setVisibleCount(Math.max(PRODUCT_BATCH_SIZE, Math.floor(saved.visibleCount)));
+    setPage(Math.max(1, Math.floor(saved.page)));
     setSearch(typeof saved.search === "string" ? saved.search : initialSearch);
   }, [initialSearch, initialSort]);
-  const restoringListRef = useProductListReturnState({ listId: `jewelry-catalog:${initialSearch.trim().toLocaleLowerCase("vi")}`, state: returnState, onRestore: restoreCollectionState, readyKey: visibleCount });
+  const restoringListRef = useProductListReturnState({ listId: `jewelry-catalog:${initialSearch.trim().toLocaleLowerCase("vi")}`, state: returnState, onRestore: restoreCollectionState, readyKey: page });
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 767px)");
@@ -284,7 +285,9 @@ export function OpalCollection({ products, categories, materials, connected, pro
     });
     return filtered.sort((a, b) => sort === "price-asc" ? Number(a.isPremiumGemstone) - Number(b.isPremiumGemstone) || a.price - b.price : sort === "price-desc" ? Number(a.isPremiumGemstone) - Number(b.isPremiumGemstone) || b.price - a.price : sort === "best-selling" ? (bestSellerRanks.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (bestSellerRanks.get(b.id) ?? Number.MAX_SAFE_INTEGER) : compareNewestByGemstone(a, b));
   }, [products, categoryDescendants, selectedTypes, selectedStones, appliedSizes, priceRange, sort, bestSellerRanks, search]);
-  const visibleProducts = useMemo(() => filteredProducts.slice(0, visibleCount), [filteredProducts, visibleCount]);
+  const pageCount = Math.max(1, Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE));
+  const currentPage = Math.min(page, pageCount);
+  const visibleProducts = useMemo(() => filteredProducts.slice((currentPage - 1) * PRODUCTS_PER_PAGE, currentPage * PRODUCTS_PER_PAGE), [filteredProducts, currentPage]);
 
   const filterStateKey = JSON.stringify([selectedTypes, selectedStones, appliedSizes, priceRange, sort, search]);
   const previousFilterStateKey = useRef(filterStateKey);
@@ -292,7 +295,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
     if (previousFilterStateKey.current === filterStateKey) return;
     previousFilterStateKey.current = filterStateKey;
     if (restoringListRef.current) return;
-    setVisibleCount(PRODUCT_BATCH_SIZE);
+    setPage(1);
   }, [filterStateKey, restoringListRef]);
 
   const toggle = (value: string, current: string[], update: (next: string[]) => void) => update(current.includes(value) ? current.filter((item) => item !== value) : [...current, value]);
@@ -324,7 +327,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
     const validSizes = new Set(sizeOptions.map(({ size }) => size));
     setSelectedSizes(draftTypes.length ? draftSizes.filter((size) => validSizes.has(size)) : []);
     setPriceRange(draftPriceRange);
-    setVisibleCount(PRODUCT_BATCH_SIZE);
+    setPage(1);
     setFiltersOpen(false);
   };
   const reset = () => {
@@ -335,7 +338,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
     const url = new URL(window.location.href);
     url.searchParams.delete("search");
     window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
-    setVisibleCount(PRODUCT_BATCH_SIZE);
+    setPage(1);
   };
   const activeFilterCount = selectedTypes.length + selectedStones.length + appliedSizes.length + Number(Boolean(priceRange)) + Number(Boolean(search));
   const selectedCategoryName = selectedTypes.length === 1 ? categories.find((category) => category.id === selectedTypes[0])?.name || initialCategory : undefined;
@@ -355,7 +358,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
           setSelectedStones([]); setDraftStones([]);
           setSelectedSizes([]); setDraftSizes([]);
           setPriceRange(""); setDraftPriceRange("");
-          setVisibleCount(PRODUCT_BATCH_SIZE);
+          setPage(1);
         }}>{categoryContext ? "Tất cả sản phẩm" : "Tất cả"}</button>
         {tabs.map(({ category }) => {
           const selected = selectedTypes.includes(category.id) || selectedTypes.some((id) => categoryDescendants.get(category.id)?.has(id));
@@ -367,7 +370,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
             setSelectedStones([]); setDraftStones([]);
             setSelectedSizes([]); setDraftSizes([]);
             setPriceRange(""); setDraftPriceRange("");
-            setVisibleCount(PRODUCT_BATCH_SIZE);
+            setPage(1);
           }}>{category.name}</button>;
         })}
       </div>
@@ -375,7 +378,7 @@ export function OpalCollection({ products, categories, materials, connected, pro
         <button type="button" className="new-arrivals-filter-toggle" aria-expanded={filtersOpen} aria-controls="catalog-filter-panel" onClick={openFilters}>
           Bộ lọc{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}<span aria-hidden="true">{filtersOpen ? "−" : "+"}</span>
         </button>
-        <label className="new-arrivals-sort"><span>Sắp xếp</span><select value={sort} onChange={(event) => { setSort(event.target.value); setVisibleCount(PRODUCT_BATCH_SIZE); }}>
+        <label className="new-arrivals-sort"><span>Sắp xếp</span><select value={sort} onChange={(event) => { setSort(event.target.value); setPage(1); }}>
           <option value="newest">Mới nhất ↓</option><option value="best-selling">Bán chạy</option><option value="price-asc">Giá tăng dần</option><option value="price-desc">Giá giảm dần</option>
         </select></label>
       </div>
@@ -429,11 +432,12 @@ export function OpalCollection({ products, categories, materials, connected, pro
 
     <div className="catalog-results">
       {filteredProducts.length === 0 && products.length > 0 && activeFilterCount > 0
-        ? <CatalogEditorialGrid products={[]} promotions={promotions} connected={connected} editorialPromos={editorialPromos} activeFilters catalogProductCount={products.length} />
-        : <CatalogEditorialGrid products={visibleProducts} promotions={promotions} connected={connected} editorialPromos={editorialPromos} activeFilters={activeFilterCount > 0} catalogProductCount={products.length} />}
+        ? <CatalogEditorialGrid products={[]} promotions={promotions} connected={connected} editorialPromos={editorialPromos} activeFilters catalogProductCount={products.length} showEditorialPromos={currentPage === 1} />
+        : <CatalogEditorialGrid products={visibleProducts} promotions={promotions} connected={connected} editorialPromos={editorialPromos} activeFilters={activeFilterCount > 0} catalogProductCount={products.length} showEditorialPromos={currentPage === 1} />}
     </div>
-    {visibleProducts.length < filteredProducts.length && <button type="button" className="new-arrivals-load-more" onClick={() => setVisibleCount((count) => Math.min(count + PRODUCT_BATCH_SIZE, filteredProducts.length))}>
-      Xem thêm sản phẩm ({visibleProducts.length}/{filteredProducts.length}) <span aria-hidden="true">→</span>
-    </button>}
+    <ProductPagination page={currentPage} pageCount={pageCount} onPageChange={(nextPage) => {
+      setPage(nextPage);
+      document.getElementById("san-pham")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }} />
   </section>;
 }

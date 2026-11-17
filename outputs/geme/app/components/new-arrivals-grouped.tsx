@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import { StoreProductCard } from "./store-product-grid";
 import { NewArrivalEditorial, NewArrivalsVideo } from "./new-arrivals";
+import { ProductPagination } from "./product-pagination";
 import { useProductListReturnState } from "./use-product-list-return-state";
 import type { StoreCategory, StoreJewelryStoneGroup, StoreNewArrivalsFacets, StoreNewArrivalsGroup, StoreNewArrivalsGroupProductsResponse, StoreNewArrivalsMedia, StorePromotion, StoreProduct } from "../lib/store-api";
 
@@ -244,11 +245,13 @@ export function NewArrivalsGrouped({ groups, selectedGroup, categories, stoneGro
     const query = params.toString(); return `${pathname}${query ? `?${query}` : ""}`;
   };
 
+  const showFirstPageEditorial = filters.page === 1 && filters.groupPage === 1;
+
   return <main className="new-arrivals-page" id="top">
-    <section className="new-arrivals-hero" aria-labelledby="arrivals-title">
+    {showFirstPageEditorial && <section className="new-arrivals-hero" aria-labelledby="arrivals-title">
       <div className="new-arrivals-hero-copy"><span className="new-arrivals-eyebrow">GEME / NEW ARRIVALS</span><h1 id="arrivals-title">Mới tại GEME</h1><p className="new-arrivals-subtitle">Trang sức đang mang nhãn “Mới”, được tuyển chọn theo từng nhóm đá.</p><a className="new-arrivals-cta" href="#arrivals-products">Khám phá ngay <span aria-hidden="true">→</span></a></div>
       <div className="new-arrivals-hero-media"><Image className="new-arrivals-hero-image" src={heroImage} alt="Trang sức trong bộ sưu tập mới của GEME" fill sizes="(max-width: 767px) 100vw, (max-width: 1279px) 54vw, 690px" priority /></div>
-    </section>
+    </section>}
 
     <section className="new-arrivals-products" id="arrivals-products" aria-labelledby="new-arrivals-heading">
       <div className="new-arrivals-container">
@@ -286,7 +289,7 @@ export function NewArrivalsGrouped({ groups, selectedGroup, categories, stoneGro
             : !connected ? <div className="new-arrivals-message is-error" role="alert"><p>{errorMessage || "Chưa tải được danh sách sản phẩm. Lỗi kết nối không được xem là danh sách rỗng."}</p><button type="button" onClick={() => router.refresh()}>Thử lại</button></div>
               : shownGroups.length === 0 ? <div className="new-arrivals-message" role="status"><p>{activeFilters ? "Không có sản phẩm phù hợp với bộ lọc này." : "Hiện chưa có sản phẩm đang mang nhãn Mới."}</p>{activeFilters && <button type="button" onClick={clearFilters}>Xóa bộ lọc</button>}</div>
                 : shownGroups.map((group, groupIndex) => {
-                  const featureGroup = groupIndex === 0 && !activeFilters && !selectedGroup;
+                  const featureGroup = groupIndex === 0 && !activeFilters && !selectedGroup && showFirstPageEditorial;
                   return <section className="new-arrivals-stone-section" key={group.id || group.slug} aria-labelledby={`stone-${group.slug}`}>
                     <header><div><h3 id={`stone-${group.slug}`}>{group.name}</h3><span>{group.total} sản phẩm</span></div>{!selectedGroup && group.hasMore && <a href={groupUrl(group)}>Xem tất cả {group.name} <span aria-hidden="true">→</span></a>}</header>
                     <div className={`new-arrivals-product-grid${featureGroup ? " new-arrivals-feature-grid" : ""}`}>
@@ -299,7 +302,11 @@ export function NewArrivalsGrouped({ groups, selectedGroup, categories, stoneGro
                   </section>;
                 })}
         </div>
-        {selectedGroup?.pageInfo.hasNextPage && <a className="new-arrivals-load-more" href={pageUrl("page", selectedGroup.pageInfo.nextPage || filters.page + 1)}>Xem thêm sản phẩm <span aria-hidden="true">→</span></a>}
+        {selectedGroup && <ProductPagination
+          page={selectedGroup.pageInfo.page}
+          pageCount={Math.max(1, Math.ceil(selectedGroup.total / selectedGroup.pageInfo.pageSize))}
+          hrefForPage={(nextPage) => pageUrl("page", nextPage)}
+        />}
         {!selectedGroup && groupPageInfo?.hasNextGroup && groupPageInfo.nextGroupPage && <a className="new-arrivals-load-more" href={pageUrl("groupPage", groupPageInfo.nextGroupPage)}>Xem thêm nhóm đá <span aria-hidden="true">→</span></a>}
         {selectedGroup && <a className="new-arrivals-back-link" href={backToGroupsUrl()}>← Quay lại tất cả nhóm</a>}
       </div>

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { StoreProductGrid } from "./store-product-grid";
+import { ProductPagination } from "./product-pagination";
 import { useProductListReturnState } from "./use-product-list-return-state";
 import type { StoreProduct, StorePromotion, StoreSalesProduct } from "../lib/store-api";
 
@@ -15,6 +16,7 @@ const priceOptions = [
   ["5to10", "5.000.000 – 10.000.000 ₫"],
   ["over10", "Trên 10.000.000 ₫"],
 ] as const;
+const PRODUCTS_PER_PAGE = 40;
 
 type FilterState = { stone?: string; cut?: string; price?: string; sort?: string; page?: number };
 
@@ -196,14 +198,10 @@ export function GemstoneFaceCollection({ activeStone = "", activeCut = "", stone
     setPage(1);
   };
 
-  const showMore = () => {
-    const nextPage = page + 1;
-    setPage(nextPage);
-    writeQuery({ page: nextPage });
-  };
-
   const filteredCount = Number(Boolean(selectedStone)) + Number(Boolean(selectedCut)) + Number(Boolean(priceRange));
-  const displayProducts = filteredProducts.slice(0, page * 12);
+  const pageCount = Math.max(1, Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE));
+  const currentPage = Math.min(page, pageCount);
+  const displayProducts = filteredProducts.slice((currentPage - 1) * PRODUCTS_PER_PAGE, currentPage * PRODUCTS_PER_PAGE);
   const stoneHref = (slug: string) => "/da-quy?loai=" + encodeURIComponent(slug);
   const visibleCuts = selectedStone ? cuts.filter((cut) => cut.parentSlug === selectedStone) : [];
   const emerald = stones.find((stone) => stone.slug === "emerald");
@@ -279,7 +277,11 @@ export function GemstoneFaceCollection({ activeStone = "", activeCut = "", stone
         </div>
         <p className="gemstone-results-count" role="status" aria-live="polite">{filteredProducts.length} sản phẩm</p>
         <StoreProductGrid products={displayProducts} promotions={promotions} connected={connected} emptyMessage="Chưa có sản phẩm đá quý phù hợp với lựa chọn này." />
-        {displayProducts.length < filteredProducts.length && <button type="button" className="gemstone-load-more" onClick={showMore}>Khám phá thêm <span aria-hidden="true">→</span></button>}
+        <ProductPagination page={currentPage} pageCount={pageCount} onPageChange={(nextPage) => {
+          setPage(nextPage);
+          writeQuery({ page: nextPage });
+          document.getElementById("gemstone-products")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }} />
       </section>
     </div>
 

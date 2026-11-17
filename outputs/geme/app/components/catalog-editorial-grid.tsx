@@ -67,13 +67,14 @@ function CatalogPromoCard({ promo }: { promo: StoreCatalogEditorialPromo }) {
   </article>;
 }
 
-export function CatalogEditorialGrid({ products, promotions = [], connected, editorialPromos, activeFilters, catalogProductCount = products.length }: {
+export function CatalogEditorialGrid({ products, promotions = [], connected, editorialPromos, activeFilters, catalogProductCount = products.length, showEditorialPromos = true }: {
   products: StoreProduct[];
   promotions?: StorePromotion[];
   connected: boolean;
   editorialPromos: StoreCatalogEditorialPromo[];
   activeFilters: boolean;
   catalogProductCount?: number;
+  showEditorialPromos?: boolean;
 }) {
   const promoByPlacement = useMemo(() => {
     const byPlacement = new Map<string, StoreCatalogEditorialPromo>();
@@ -83,7 +84,7 @@ export function CatalogEditorialGrid({ products, promotions = [], connected, edi
     return byPlacement;
   }, [editorialPromos]);
   const segments = useMemo(() => activeFilters ? [] : planCatalogEditorialLayout(products.length, new Set(promoByPlacement.keys())), [products.length, promoByPlacement, activeFilters]);
-  if (activeFilters) {
+  if (activeFilters || !showEditorialPromos) {
     return <StoreProductGrid
       products={products}
       promotions={promotions}
