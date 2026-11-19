@@ -6,6 +6,7 @@ type Pos365Status = {
   storeConfigured: boolean;
   credentialsConfigured: boolean;
   syncEnabled: boolean;
+  orderSyncEnabled: boolean;
   branchIdConfigured: boolean;
   mediaPublicUrlConfigured: boolean;
 };
@@ -150,6 +151,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
       storeConfigured: Boolean(config.rawBaseUrl),
       credentialsConfigured: Boolean(config.username && config.password),
       syncEnabled: this.isSyncEnabled(),
+      orderSyncEnabled: this.isOrderSyncEnabled(),
       branchIdConfigured: config.branchId !== null,
       mediaPublicUrlConfigured: Boolean(process.env.MEDIA_PUBLIC_BASE_URL?.trim()),
     };
@@ -158,6 +160,10 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
   isSyncEnabled() {
     const config = this.readConfiguration();
     return Boolean(config.enabled && config.baseUrl && config.username && config.password && config.branchId);
+  }
+
+  isOrderSyncEnabled() {
+    return this.isSyncEnabled() && process.env.POS365_ORDER_SYNC_ENABLED?.trim().toLowerCase() !== "false";
   }
 
   async testConnection(): Promise<Pos365Result> {
@@ -676,7 +682,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
   }
 
   async queueUnsentOrders() {
-    if (!this.isSyncEnabled()) throw new Error("POS365 chưa bật đồng bộ hoặc chưa chọn chi nhánh.");
+    if (!this.isOrderSyncEnabled()) return { queued: 0, disabled: true };
     const queued = await this.prisma.order.updateMany({
       where: {
         status: { not: "CANCELLED" },
@@ -692,7 +698,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
   }
 
   async queueOrderSync(orderId: string) {
-    if (!this.isSyncEnabled()) return;
+    if (!this.isOrderSyncEnabled()) return;
     await this.prisma.order.update({
       where: { id: orderId },
       data: { pos365SyncStatus: "PENDING", pos365SyncNextAttemptAt: new Date(), pos365SyncError: null },
@@ -719,7 +725,7 @@ export class Pos365Service implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processPendingOrders(onlyOrderId?: string) {
-    if (this.processingOrderQueue || !this.isSyncEnabled()) return;
+    if (this.processingOrderQueue || !this.isOrderSyncEnabled()) return;
     this.processingOrderQueue = true;
     try {
       const now = new Date();

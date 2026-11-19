@@ -50,6 +50,7 @@ export const ADMIN_PAGE_ACCESS_CATALOG = [
   { id: "shopee", label: "Shopee", permissions: ["integrations.read", "integrations.manage"] },
   { id: "inventory", label: "Quản lý tồn kho", permissions: ["inventory.read", "inventory.write"] },
   { id: "banners", label: "Banner & Footer", permissions: ["settings.manage"] },
+  { id: "policies", label: "Chính sách", permissions: ["settings.manage"] },
   { id: "reports", label: "Báo cáo", permissions: ["dashboard.read", "finance.read", "marketing.read", "customers.read"] },
   { id: "profit", label: "Lợi nhuận sau giá nhập", permissions: ["finance.read"] },
   { id: "calendar", label: "Lịch sự kiện", permissions: ["calendar.read", "calendar.manage"] },

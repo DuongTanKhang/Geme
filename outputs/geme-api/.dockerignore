@@ -8,6 +8,9 @@ dist
 src/generated
 import-data
 scripts
+!scripts/
+scripts/*
+!scripts/product-only-cutover.mjs
 *.log
 api-local.*
 api.*

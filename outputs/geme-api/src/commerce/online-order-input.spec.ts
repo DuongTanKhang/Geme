@@ -8,6 +8,8 @@ const valid = {
   phone: "+84 912 345 678",
   email: "buyer@example.vn",
   shippingAddress: "12 Nguyễn Huệ, Quận 1, TP HCM",
+  shippingLatitude: 10.7769,
+  shippingLongitude: 106.7009,
   paymentMethod: "COD",
   items: [{ productId: "product-1", sku: "SKU-1", quantity: 1 }],
 };

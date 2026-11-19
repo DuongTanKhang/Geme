@@ -5,6 +5,7 @@ import { StoreProductCard } from "./store-product-grid";
 import { useWishlist } from "./wishlist-provider";
 import { getVietQrImageUrl, getVietQrTransferInfo, type BankQrSettings } from "../lib/bank-qr";
 import { normalizeApiBaseUrl } from "../lib/api-base";
+import { canRegisterWithPrivacyPolicy, type RegistrationPrivacyPolicy } from "../lib/registration-policy";
 import { PaymentCountdown } from "./payment-countdown";
 
 type AccountMode = "login" | "register";
@@ -157,9 +158,10 @@ function EyeIcon({ hidden }: { hidden: boolean }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{hidden ? <><path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8" /><path d="M9.9 5.2A10.8 10.8 0 0 1 12 5c5 0 8.7 4.5 9.5 6-.4.8-1.3 2.1-2.7 3.3M6.2 6.2C4.1 7.5 2.8 9.7 2.5 11c.8 1.5 4.5 6 9.5 6 1 0 2-.2 2.8-.5" /></> : <><path d="M2.5 12s3.2-6 9.5-6 9.5 6 9.5 6-3.2 6-9.5 6-9.5-6-9.5-6Z" /><circle cx="12" cy="12" r="2.6" /></>}</svg>;
 }
 
-export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage: string }) {
+export function AuthPage({ mode, bannerImage, privacyPolicy }: { mode: AccountMode; bannerImage: string; privacyPolicy?: RegistrationPrivacyPolicy | null }) {
   const isRegister = mode === "register";
   const [showPassword, setShowPassword] = useState(false);
+  const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
   const [message, setMessage] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -184,6 +186,18 @@ export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage
   }, [isRegister]);
 
   useEffect(() => {
+    if (!showPrivacyPolicy) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setShowPrivacyPolicy(false); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [showPrivacyPolicy]);
+
+  useEffect(() => {
     if (resendCountdown <= 0) return;
     const timer = window.setTimeout(() => setResendCountdown((remaining) => Math.max(0, remaining - 1)), 1000);
     return () => window.clearTimeout(timer);
@@ -194,6 +208,17 @@ export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage
     const values = new FormData(event.currentTarget);
     const submittedEmail = email.trim().toLowerCase();
     const password = String(values.get("password") || "");
+
+    if (isRegister && values.get("privacy-consent") !== "on") {
+      setMessage("Vui lòng đồng ý với Chính sách bảo mật để tiếp tục.");
+      setSubmitted(false);
+      return;
+    }
+    if (isRegister && !canRegisterWithPrivacyPolicy(privacyPolicy)) {
+      setMessage("Chính sách bảo mật chưa được công bố hoặc chưa tải được. Vui lòng thử lại sau.");
+      setSubmitted(false);
+      return;
+    }
 
     if (isRegister && password.length < 10) {
       setMessage("Mật khẩu cần tối thiểu 10 ký tự.");
@@ -228,6 +253,7 @@ export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage
           email: submittedEmail,
           phone: isRegister ? String(values.get("phone") || "").trim() : undefined,
           password,
+          privacyConsent: isRegister ? values.get("privacy-consent") === "on" : undefined,
         }),
       });
       const result = await response.json();
@@ -496,7 +522,8 @@ export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage
           <label>Mật khẩu<span className="account-password-field"><input name="password" autoComplete={isRegister ? "new-password" : "current-password"} type={showPassword ? "text" : "password"} placeholder="Nhập mật khẩu" minLength={isRegister ? 10 : 8} maxLength={isRegister ? 128 : undefined} required /><button type="button" aria-label={showPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"} onClick={() => setShowPassword((value) => !value)}><EyeIcon hidden={!showPassword} /></button></span>{isRegister && <small className="auth-field-help">Tối thiểu 10 ký tự, gồm chữ hoa, chữ thường, số và ký tự đặc biệt.</small>}</label>
           {isRegister && <label>Xác nhận mật khẩu<input name="confirm-password" autoComplete="new-password" type={showPassword ? "text" : "password"} placeholder="Nhập lại mật khẩu" minLength={10} maxLength={128} required /></label>}
           {!isRegister && <div className="auth-form-options"><label className="auth-checkbox"><input type="checkbox" name="remember" /> Ghi nhớ đăng nhập</label><button type="button" className="text-button" onClick={startPasswordReset}>Quên mật khẩu?</button></div>}
-          {isRegister && <label className="auth-checkbox auth-terms"><input type="checkbox" required /> Tôi đồng ý với điều khoản sử dụng và chính sách bảo mật của GEME.</label>}
+          {isRegister && <div className="auth-consent-row"><input id="privacy-consent" name="privacy-consent" type="checkbox" required disabled={!canRegisterWithPrivacyPolicy(privacyPolicy)} /><label htmlFor="privacy-consent">Tôi đã đọc và đồng ý với</label><button className="auth-policy-link" type="button" onClick={() => setShowPrivacyPolicy(true)} disabled={!canRegisterWithPrivacyPolicy(privacyPolicy)}>{privacyPolicy?.title || "Chính sách bảo mật"}</button><span>.</span></div>}
+          {isRegister && !canRegisterWithPrivacyPolicy(privacyPolicy) && <p className="auth-policy-unavailable">Chính sách bảo mật đang được GEME hoàn thiện hoặc chưa tải được. Đăng ký sẽ mở lại khi chính sách được công bố.</p>}
           <button className="auth-submit" type="submit" disabled={busy}>{busy ? "ĐANG XỬ LÝ..." : isRegister ? "TẠO TÀI KHOẢN" : "ĐĂNG NHẬP"}</button>
           {message && <div className={`auth-feedback${submitted ? " is-success" : ""}`} role="status">{message}{submitted && <a href="/dang-nhap">Đến trang đăng nhập →</a>}</div>}
         </form>}
@@ -505,6 +532,20 @@ export function AuthPage({ mode, bannerImage }: { mode: AccountMode; bannerImage
       </div>
       </section>
     </section>
+    {isRegister && showPrivacyPolicy && privacyPolicy?.content && <div className="auth-policy-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowPrivacyPolicy(false); }}>
+      <section className="auth-policy-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-policy-title">
+        <header className="auth-policy-header"><div><span className="auth-policy-eyebrow">GEME · CHÍNH SÁCH</span><h2 id="auth-policy-title">{privacyPolicy.title}</h2></div><button autoFocus className="auth-policy-close" type="button" aria-label="Đóng chính sách bảo mật" onClick={() => setShowPrivacyPolicy(false)}>×</button></header>
+        {privacyPolicy.status === "DRAFT" && <p className="auth-policy-draft-note">Bản nháp đang được GEME rà soát.</p>}
+        <div className="auth-policy-content">{privacyPolicy.content.split(/\n\s*\n/).filter((block) => block.trim()).map((block, index) => {
+          const text = block.trim();
+          if (text.startsWith("### ")) return <h3 key={index}>{text.slice(4)}</h3>;
+          if (text.startsWith("## ")) return <h3 key={index}>{text.slice(3)}</h3>;
+          if (text.startsWith("# ")) return <h3 key={index}>{text.slice(2)}</h3>;
+          return <p key={index}>{text}</p>;
+        })}</div>
+        <footer className="auth-policy-footer"><button type="button" className="auth-policy-done" onClick={() => setShowPrivacyPolicy(false)}>Đóng</button></footer>
+      </section>
+    </div>}
   </main>;
 }
 

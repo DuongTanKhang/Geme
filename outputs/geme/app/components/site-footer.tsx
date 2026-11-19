@@ -10,14 +10,14 @@ const defaults = {
   openingHours: "08:00 - 22:00 (Tất cả các ngày)",
   aboutLinks: [
     { label: "Câu chuyện thương hiệu", href: "/ve-geme" },
-    { label: "Chính sách bảo mật", href: "/ve-geme" },
-    { label: "Điều khoản sử dụng", href: "/ve-geme" },
+    { label: "Chính sách bảo mật", href: "/chinh-sach/bao-mat" },
     { label: "Liên hệ", href: "/lien-he" },
   ],
   supportLinks: [
-    { label: "Hướng dẫn mua hàng", href: "/san-pham" },
-    { label: "Chính sách đổi trả", href: "/san-pham" },
-    { label: "Bảo hành & chăm sóc", href: "/san-pham" },
+    { label: "Chính sách mua hàng", href: "/chinh-sach/mua-hang" },
+    { label: "Chính sách đổi trả", href: "/chinh-sach/doi-tra" },
+    { label: "Chính sách bảo hành", href: "/chinh-sach/bao-hanh" },
+    { label: "Quy trình xử lý khiếu nại", href: "/chinh-sach/khieu-nai" },
     { label: "Câu hỏi thường gặp", href: "/san-pham" },
   ],
   socialLinks: [
@@ -48,11 +48,17 @@ export async function SiteFooter({ variant = "default" }: { variant?: "default" 
   const { settings } = await getStoreSiteSettings();
   const saved: Record<string, unknown> = settings.footerContent && typeof settings.footerContent === "object" ? settings.footerContent : {};
   const footer = { ...defaults, ...saved } as typeof defaults & Record<string, unknown>;
-  const aboutLinks = links(saved.aboutLinks, defaults.aboutLinks).filter((item) =>
+  const aboutLinks = [...links(saved.aboutLinks, defaults.aboutLinks).filter((item) =>
     !item.label.toLocaleLowerCase("vi").includes("cẩm nang đá quý") &&
-    !item.href.toLocaleLowerCase("vi").startsWith("/cam-nang-da-quy"),
-  );
-  const supportLinks = links(saved.supportLinks, defaults.supportLinks);
+    !item.href.toLocaleLowerCase("vi").startsWith("/cam-nang-da-quy") &&
+    !/chính sách|điều khoản|bảo mật/i.test(item.label)),
+    { label: "Chính sách bảo mật", href: "/chinh-sach/bao-mat" },
+  ];
+  const supportLinks = [
+    ...links(saved.supportLinks, defaults.supportLinks).filter((item) => !/mua hàng|đổi\s*trả|bảo hành|bảo mật|khiếu nại|chính sách|điều khoản/i.test(item.label)),
+    ...defaults.supportLinks.filter((item) => item.label !== "Câu hỏi thường gặp"),
+    ...links(saved.supportLinks, defaults.supportLinks).filter((item) => item.label === "Câu hỏi thường gặp"),
+  ];
   const socialLinks = variant === "contact"
     ? links(saved.socialLinks, []).filter((item) => /^https?:\/\//i.test(item.href))
     : links(saved.socialLinks, defaults.socialLinks);

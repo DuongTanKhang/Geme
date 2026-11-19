@@ -318,6 +318,20 @@ export async function getStoreSiteSettings() {
   return { settings: result.data ?? {}, connected: result.connected };
 }
 
+export type StorePolicy = { slug: string; title: string; status: "DRAFT" | "PUBLISHED"; content: string };
+
+export async function getStorePolicy(slug: string) {
+  const allowedSlugs = new Set(["mua-hang", "doi-tra", "bao-hanh", "bao-mat", "khieu-nai"]);
+  if (!allowedSlugs.has(slug)) return { policy: null, connected: true };
+  const result = await readApi<StorePolicy>(`/policies/public/${encodeURIComponent(slug)}`);
+  return { policy: result.data, connected: result.connected };
+}
+
+export async function getStoreRegistrationPrivacyPolicy() {
+  const result = await readApi<StorePolicy>("/policies/public/registration-consent");
+  return { policy: result.data, connected: result.connected };
+}
+
 function canonicalBannerPosition(position: string) {
   const normalized = position.normalize("NFC").trim().replace(/[·–—]/g, "-").replace(/\s*-\s*/g, " - ").replace(/\s+/g, " ");
   const aliases: Record<string, string> = {

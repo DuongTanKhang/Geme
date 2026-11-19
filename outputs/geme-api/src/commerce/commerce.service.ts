@@ -15,6 +15,8 @@ import { adminOrderQrSnapshot } from "./admin-order-qr.js";
 import { getInventoryReservationExpiry, getQrPaymentWindow } from "./reservation-expiry.js";
 import { assertBangleQualityImages, normalizeBangleQuality, synchronizeBangleVariantMedia } from "./bangle-variant-media.js";
 import { isNewLabelActive } from "./new-arrivals.rules.js";
+import { CustomerPoliciesService } from "./customer-policies.service.js";
+import { findInventoryStockIssues, physicalSphereInventoryMatches, sumSphereWeights, weightedProductPublicationIssue } from "./stock-reconciliation.js";
 import { parseVietnamDeliveryArea } from "./delivery-geography.js";
 import { LoyaltyService } from "../loyalty/loyalty.service.js";
 import type { AegisCustomerIdentity } from "../auth/aegis-customer.guard.js";
@@ -129,30 +131,6 @@ const normalizeSphereHierarchy = (value: unknown) => {
 const hasSphereHierarchy = (value: { groupName?: string; typeName?: string; quality?: string }) => Boolean(value.groupName && value.typeName && value.quality);
 // Keep the existing storage contract; Quả cầu and Trụ share this hierarchy.
 const isSphereInventoryProduct = usesPhysicalItemInventory;
-const sumSphereWeights = (items: Array<{ weightKg: number }>) => Math.round(items.reduce((sum, item) => sum + item.weightKg, 0) * inventoryKgScale) / inventoryKgScale;
-const availableSphereWeight = (items: Array<{ weightKg: unknown }>) => Math.round(items.reduce((sum, item) => sum + (Number(item.weightKg) || 0), 0) * inventoryKgScale) / inventoryKgScale;
-const physicalSphereInventoryMatches = (product: { stock?: unknown; stockKg?: unknown; sphereItems?: Array<{ weightKg: unknown }> }) =>
-  Number(product.stock) === (product.sphereItems || []).length
-  && Math.abs((Number(product.stockKg) || 0) - availableSphereWeight(product.sphereItems || [])) < 0.0005;
-const weightedProductPublicationIssue = (product: {
-  stock?: unknown;
-  stockKg?: unknown;
-  sphereItems?: Array<{ label?: string | null; weightKg: unknown; price: unknown; imageUrls?: string[]; status?: unknown }>;
-}) => {
-  const available = (product.sphereItems || []).filter((item) => String(item.status || "AVAILABLE") === "AVAILABLE");
-  if (!available.length) return "chưa có món nào còn hàng.";
-  const inventoryKg = availableSphereWeight(available);
-  if (Number(product.stock) !== available.length || Math.abs((Number(product.stockKg) || 0) - inventoryKg) >= 0.0005) {
-    return "tồn số lượng hoặc tổng kg chưa khớp danh sách từng món.";
-  }
-  const missingWeight = available.filter((item) => !(Number(item.weightKg) > 0));
-  if (missingWeight.length) return `${missingWeight.length} món chưa có khối lượng hợp lệ.`;
-  const missingPrice = available.filter((item) => !(Number(item.price) > 0));
-  if (missingPrice.length) return `${missingPrice.length} món chưa có giá bán.`;
-  const missingImage = available.filter((item) => !Array.isArray(item.imageUrls) || item.imageUrls.length === 0);
-  if (missingImage.length) return `${missingImage.length} món chưa có ảnh.`;
-  return null;
-};
 const normalizeSphereItems = (value: unknown) => {
   if (value == null) return [] as Array<{ label: string | null; weightKg: number }>;
   if (!Array.isArray(value)) throw new BadRequestException("Danh sách món không hợp lệ.");
@@ -372,7 +350,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   private readonly productReadLoads = new Map<string, Promise<any[]>>();
   private productReadGeneration = 0;
 
-  constructor(private readonly prisma: PrismaService, private readonly pos365: Pos365Service, private readonly mediaStore: MediaAssetsService, private readonly loyalty: LoyaltyService) {}
+  constructor(private readonly prisma: PrismaService, private readonly pos365: Pos365Service, private readonly mediaStore: MediaAssetsService, private readonly loyalty: LoyaltyService, private readonly customerPolicyStore: CustomerPoliciesService = new CustomerPoliciesService(prisma)) {}
 
   private async queueProductStockSync(client: any, productIds: Iterable<string>) {
     const ids = [...new Set(productIds)].filter(Boolean);
@@ -1760,7 +1738,13 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
         reservedKgByVariant.set(reservation.variantId, quantityKg);
       }
     }
+    const stockConsistencyIssues = findInventoryStockIssues(products as any);
     return {
+      stockConsistency: {
+        checkedProducts: products.length,
+        issueCount: stockConsistencyIssues.length,
+        issues: stockConsistencyIssues.slice(0, 100),
+      },
       products: products.map((product) => ({
         ...product,
         stock: product.variants.length ? product.variants.reduce((sum, variant) => sum + variant.stock, 0) : product.stock,
@@ -4963,6 +4947,24 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
   async settings() {
     const rows = await this.prisma.siteSetting.findMany();
     return Object.fromEntries(rows.filter((row) => row.key !== "bankQr").map((row) => [row.key, row.value]));
+  }
+
+  async customerPolicies() {
+    return this.customerPolicyStore.list();
+  }
+
+  async saveCustomerPolicies(input: unknown) {
+    await this.customerPolicyStore.save(input);
+    this.publishCatalogChange("settings", "updated");
+    return this.customerPolicies();
+  }
+
+  async publicCustomerPolicy(slug: string) {
+    return this.customerPolicyStore.publicPolicy(slug);
+  }
+
+  async registrationPrivacyPolicy() {
+    return this.customerPolicyStore.registrationPrivacyPolicy();
   }
 
   async publicSettings() {

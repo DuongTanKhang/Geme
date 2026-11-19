@@ -21,6 +21,14 @@ type InventoryProduct = {
   images?: Array<{ url: string; alt?: string | null }>;
   variants: Variant[];
 };
+type InventoryStockConsistency = {
+  checkedProducts: number;
+  issueCount: number;
+  issues: Array<{
+    productId: string; sku: string; name: string; category: string; stoneGroup: string; stoneType: string; quality: string;
+    problems: string[]; expectedCount: number | null; actualCount: number; expectedKg: number | null; actualKg: number;
+  }>;
+};
 type Movement = {
   id: string; productId?: string | null; productName: string; productSku: string; variantLabel?: string | null;
   type: "IN" | "OUT"; quantity: number; stockBefore: number; stockAfter: number;
@@ -381,6 +389,7 @@ function csvMoney(value: string | undefined) {
 export default function InventoryWorkspace({ categories, materials, initialTab, onNavigate, onNotify, onCategoryCreated }: Props) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [products, setProducts] = useState<InventoryProduct[]>([]);
+  const [stockConsistency, setStockConsistency] = useState<InventoryStockConsistency | null>(null);
   const [movements, setMovements] = useState<Movement[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -412,9 +421,10 @@ export default function InventoryWorkspace({ categories, materials, initialTab, 
     setLoading(true);
     setError("");
     try {
-      const data = await request<{ products: InventoryProduct[]; recentMovements: Movement[] }>("inventory");
+      const data = await request<{ products: InventoryProduct[]; recentMovements: Movement[]; stockConsistency?: InventoryStockConsistency }>("inventory");
       setProducts(data.products || []);
       setMovements(data.recentMovements || []);
+      setStockConsistency(data.stockConsistency || null);
       setSelectedId((current) => current && data.products.some((product) => product.id === current) ? current : data.products[0]?.id || "");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Không tải được tồn kho.");
@@ -551,6 +561,8 @@ export default function InventoryWorkspace({ categories, materials, initialTab, 
     {error && <div className="inventory-error" role="alert">{error}<button onClick={() => void reload()}>Thử tải lại</button></div>}
     {tab === "history" ? <section className="inventory-history-panel"><div className="inventory-panel-title"><div><h2>Lịch sử nhập / xuất kho</h2><p>Các điều chỉnh đã được ghi trong database.</p></div><button className="button button-quiet" onClick={() => void reload()}>Làm mới</button></div><MovementTable movements={movements} empty={loading ? "Đang tải lịch sử…" : "Chưa có lượt nhập hoặc xuất kho."}/></section> : tab === "receipts" ? <InventoryReceiptsWorkspace /> : tab === "inbound" ? <InboundReceiptPage products={products} categories={categories} materials={materials} onCategoryCreated={onCategoryCreated} onCancel={() => { setTab("stock"); onNavigate("stock"); }} onComplete={async () => { await reload(); setTab("stock"); onNavigate("stock"); }} onNotify={onNotify}/> : tab === "outbound" ? <OutboundIssuePage products={products} onCancel={() => { setTab("stock"); onNavigate("stock"); }} onComplete={async () => { await reload(); }} onNotify={onNotify}/> : <>
       <div className="inventory-toolbar"><label className="inventory-search"><span>⌕</span><input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Tìm theo tên sản phẩm, mã SKU, mã vạch..."/></label><label className="inventory-filter">Nhóm sản phẩm<select value={kindFilter} onChange={(event) => { setKindFilter(event.target.value); setCategoryFilter(""); setStoneFilter(""); setPage(1); setSelectedRows([]); }}><option value="">Tất cả nhóm hàng</option><option value="JEWELRY">Trang sức</option><option value="GEMSTONE">Đá quý</option><option value="OTHER">Vật phẩm</option></select></label><label className="inventory-filter">Danh mục<select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setStoneFilter(""); setPage(1); setSelectedRows([]); }}><option value="">Tất cả</option>{categories.filter((category) => !kindFilter || products.some((product) => product.kind === kindFilter && product.category?.id === category.id)).map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label><label className="inventory-filter">Loại đá<select value={stoneFilter} onChange={(event) => { setStoneFilter(event.target.value); setPage(1); setSelectedRows([]); }}><option value="">Tất cả loại đá</option>{stoneOptions.filter((stone) => products.some((product) => (!kindFilter || product.kind === kindFilter) && (!categoryFilter || product.category?.id === categoryFilter) && stoneNameOf(product) === stone)).map((stone) => <option value={stone} key={stone}>{stone}</option>)}</select></label><label className="inventory-filter">Trạng thái tồn kho<select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value); setPage(1); setSelectedRows([]); }}><option value="">Tất cả trạng thái</option><option>Còn hàng</option><option>Sắp hết</option><option>Hết hàng</option></select></label><label className="inventory-filter">Kho<select defaultValue="main"><option value="main">Kho chính</option></select></label><div className="inventory-toolbar-actions"><button className="button button-danger" onClick={openReset}>↺ Reset kho</button><button className="button button-quiet" onClick={() => { setTab("inbound"); onNavigate("inbound"); }}>＋ Nhập kho</button><button className="button button-primary" onClick={() => { setTab("outbound"); onNavigate("outbound"); }}>⇧ Xuất kho</button></div></div>
+
+      {stockConsistency?.issueCount ? <details className="inventory-stock-health"><summary>Đối soát tồn: phát hiện {money(stockConsistency.issueCount)} sản phẩm lệch trong {money(stockConsistency.checkedProducts)} sản phẩm đã kiểm tra</summary><div className="inventory-stock-health-list">{stockConsistency.issues.map((issue) => <article key={issue.productId}><strong>{issue.name} <small>SKU {issue.sku}</small></strong><span>{[issue.category, issue.stoneGroup, issue.stoneType, issue.quality].filter(Boolean).join(" · ")}</span><p>{issue.problems.join(" ")}</p><small>Số lượng: {issue.expectedCount === null ? "—" : `${issue.actualCount} / ${issue.expectedCount}`} · Kg: {kg(issue.actualKg)} / {issue.expectedKg === null ? "—" : `${kg(issue.expectedKg)} kg`}</small></article>)}</div>{stockConsistency.issueCount > stockConsistency.issues.length && <small>Đang hiển thị {stockConsistency.issues.length} mục đầu tiên. Hãy xuất báo cáo hoặc lọc kho để rà tiếp.</small>}</details> : null}
 
       <WeightInventoryHierarchy products={filtered} onSelectProduct={(product) => { setSelectedId(product.id); setEditingMinimum(false); }} />
 

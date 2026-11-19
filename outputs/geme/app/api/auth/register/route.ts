@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callAegis, callGemePublicApi, upstreamError } from "../../../lib/customer-session";
+import { canRegisterWithPrivacyPolicy } from "../../../lib/registration-policy";
 
 type CustomerRecord = {
   id: string;
@@ -42,6 +43,17 @@ export async function POST(request: NextRequest) {
   let previousEmail: string | null = null;
   try {
     const body = await request.json();
+    if (body.privacyConsent !== true) {
+      return NextResponse.json({ message: "Vui lòng đồng ý với Chính sách bảo mật để đăng ký tài khoản." }, { status: 400 });
+    }
+    const policyResponse = await callGemePublicApi("/policies/public/registration-consent");
+    if (!policyResponse.ok) {
+      return NextResponse.json({ message: "Chưa kiểm tra được Chính sách bảo mật. Vui lòng thử lại sau." }, { status: 503 });
+    }
+    const policy = await policyResponse.json().catch(() => null);
+    if (!canRegisterWithPrivacyPolicy(policy)) {
+      return NextResponse.json({ message: "Chính sách bảo mật chưa được công bố. GEME tạm thời chưa nhận đăng ký." }, { status: 409 });
+    }
     const name = String(body.name ?? "").trim();
     const email = String(body.email ?? "").trim().toLowerCase();
     const password = String(body.password ?? "");

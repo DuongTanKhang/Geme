@@ -288,6 +288,10 @@ export class CommerceController {
     if (bankQr) settings.bankQr = bankQr;
     return settings;
   }
+  @Get("policies/public/registration-consent") @Header("Cache-Control", "no-store") registrationPrivacyPolicy() { return this.commerce.registrationPrivacyPolicy(); }
+  @Get("policies/public/:slug") @Header("Cache-Control", "no-store") publicCustomerPolicy(@Param("slug") slug: string) { return this.commerce.publicCustomerPolicy(slug); }
+  @Get("policies") @admin("settings.manage") customerPolicies() { return this.commerce.customerPolicies(); }
+  @Patch("policies") @admin("settings.manage") saveCustomerPolicies(@Body() body: { policies?: unknown }) { return this.commerce.saveCustomerPolicies(body?.policies); }
   @Get("settings") @admin("settings.manage") settings() { return this.commerce.settings(); }
   @Patch("settings") @admin("settings.manage") saveSettings(@Body() body: Record<string, unknown>) { return this.commerce.saveSettings(body); }
   @Get("reports/storefront") storefrontReport() { return this.commerce.storefrontSalesOverview(); }

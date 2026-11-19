@@ -1,6 +1,6 @@
 # GEME API
 
-Backend riêng cho storefront (`outputs/geme`) và admin (`outputs/geme-admin`): NestJS, PostgreSQL 18+ và Prisma ORM 7. API dùng prefix `/api/v1`; tài liệu OpenAPI ở `/api/v1/docs`.
+Backend riêng cho storefront (`outputs/geme`) và admin (`outputs/geme-admin`): NestJS, PostgreSQL 17+ và Prisma ORM 7. API dùng prefix `/api/v1`; tài liệu OpenAPI ở `/api/v1/docs`.
 
 ## Phạm vi schema
 

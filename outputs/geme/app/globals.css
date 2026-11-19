@@ -710,6 +710,26 @@ img { display: block; max-width: 100%; }
 .auth-page .auth-code-destination { margin: 0; color: #666762; font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
 .auth-page input[name="otp"] { text-align: center; font-size: 23px !important; font-variant-numeric: tabular-nums; letter-spacing: .28em; }
 .auth-page .auth-terms { align-items: flex-start; }
+.auth-consent-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; color: #666762; font-size: 14px; line-height: 1.55; }
+.auth-consent-row input { width: 17px; height: 17px; flex: none; align-self: flex-start; margin: 2px 5px 0 0; accent-color: var(--auth-green); }
+.auth-consent-row label { cursor: pointer; }
+.auth-policy-link { padding: 0; border: 0; color: var(--auth-green); background: transparent; font: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.auth-policy-link:disabled { color: #92948e; cursor: not-allowed; }
+.auth-policy-unavailable { margin: -14px 0 0; color: #a35b50; font-size: 13px; line-height: 1.5; }
+.auth-policy-backdrop { position: fixed; z-index: 120; inset: 0; display: grid; place-items: center; padding: 24px; background: rgb(23 31 27 / 48%); backdrop-filter: blur(3px); }
+.auth-policy-dialog { width: min(620px, 100%); max-height: min(740px, calc(100dvh - 48px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #e7e1d8; border-radius: 10px; background: #fbfaf7; box-shadow: 0 24px 80px rgb(25 34 29 / 28%); }
+.auth-policy-header { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 20px 23px 16px; border-bottom: 1px solid #e9e5de; }
+.auth-policy-eyebrow { color: #7b8f82; font-size: 11px; letter-spacing: .16em; }
+.auth-policy-header h2 { margin: 6px 0 0; color: #163f35; font: 400 26px/1.25 var(--serif); }
+.auth-policy-close { width: 34px; height: 34px; flex: none; display: grid; place-items: center; padding: 0 0 3px; border: 1px solid #e6e2dc; border-radius: 50%; color: #5e645e; background: #fff; font-size: 25px; line-height: 1; cursor: pointer; }
+.auth-policy-close:hover { color: #17483c; border-color: #b6c8be; }
+.auth-policy-draft-note { flex: none; margin: 12px 22px 0; padding: 8px 10px; border: 1px solid #e9dfc9; border-radius: 5px; color: #806d45; background: #fffaf0; font-size: 12px; }
+.auth-policy-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 16px 23px 22px; color: #5e625d; font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
+.auth-policy-content h3 { margin: 20px 0 8px; color: #315846; font-size: 16px; font-weight: 600; line-height: 1.4; }
+.auth-policy-content p { margin: 0 0 12px; }
+.auth-policy-footer { flex: none; display: flex; justify-content: flex-end; padding: 12px 20px; border-top: 1px solid #e9e5de; background: #fbfaf7; }
+.auth-policy-done { min-width: 94px; min-height: 38px; padding: 0 17px; border: 0; border-radius: 3px; color: #fff; background: var(--auth-green); font-size: 14px; cursor: pointer; }
+.auth-policy-done:hover { background: #0b332b; }
 .auth-page .auth-submit { min-height: 52px; border: 0; border-radius: 2px; background: var(--auth-green); color: #fff; font-size: 16px; font-weight: 600; letter-spacing: .07em; cursor: pointer; transition: background .2s ease, opacity .2s ease; }
 .auth-page .auth-submit:hover { background: #0b332b; }
 .auth-page .auth-submit:disabled { opacity: .65; cursor: wait; }
@@ -3955,6 +3975,15 @@ body > main.home-page#top > #danh-muc { width: min(1400px, calc(100% - clamp(64p
   .auth-panel { padding: 34px 20px 39px; }
   .auth-form-options { font-size: 14px; }
   .auth-page .auth-checkbox, .auth-page .text-button { font-size: 14px; }
+  .auth-consent-row { font-size: 13px; }
+  .auth-policy-backdrop { padding: 12px; }
+  .auth-policy-dialog { width: 100%; max-height: calc(100dvh - 24px); border-radius: 8px; }
+  .auth-policy-header { padding: 16px 16px 13px; }
+  .auth-policy-header h2 { font-size: 22px; }
+  .auth-policy-draft-note { margin: 10px 15px 0; }
+  .auth-policy-content { padding: 13px 16px 18px; font-size: 13px; line-height: 1.65; }
+  .auth-policy-content h3 { font-size: 15px; }
+  .auth-policy-footer { padding: 10px 15px; }
 }
 
 .detail-variant-video{display:block;width:100%;height:100%;min-height:360px;aspect-ratio:1/1;object-fit:contain;background:#f6f3ed}.detail-video-thumbnail{width:100%;height:100%;display:grid;place-items:center;color:#315b4d;background:linear-gradient(135deg,#f0eee7,#e6ebe5);font-size:25px}
