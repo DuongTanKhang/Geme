@@ -12,6 +12,7 @@ test("product API mapper preserves bangle variant identity, options, price, stoc
     status: "ACTIVE",
     fullDescription: "Chi tiết đầy đủ",
     technicalImageUrl: null,
+    technicalVideoUrl: null,
     price: 2_000_000,
     stock: 6,
     category: { id: "bangle-category", name: "Vòng Kiềng", slug: "vong-kieng", pricingMode: "QUALITY_AND_BEAD_SIZE" },
