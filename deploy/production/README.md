@@ -35,6 +35,14 @@ Never paste the output of `docker compose config` into a public log; its unquiet
 
 ## First deployment
 
+On the reviewed source checkout (Node.js 22 and Git required), before building production images or running the product-only cutover, verify that the commit contains matching, patched Next.js versions for Storefront and Admin:
+
+```sh
+node scripts/verify-production-release.mjs
+```
+
+The guard checks each app manifest against its frozen pnpm lockfile, requires the same stable version in both apps, and rejects versions earlier than the patched `16.4.5` baseline. The current release uses `16.4.6`. The database transfer utility below moves product data only; it does not package or deploy application code. Build the production images from the reviewed Git commit reported by the guard.
+
 Build all images from the reviewed Git commit on the production host (or from a registry build made from that same commit), then start only the database services first:
 
 ```sh
