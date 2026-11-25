@@ -33,7 +33,7 @@ namespace Aegis.Domain.Entities
 
         private RefreshToken() { }
 
-        public RefreshToken(Guid userId, Guid sessionId,byte[] tokenHash, DateTime expireAt, DateTime absoluteExpiresAt, string? createdByIp)
+        public RefreshToken(Guid userId, Guid sessionId, byte[] tokenHash, DateTime expireAt, DateTime absoluteExpiresAt, string? createdByIp)
         {
             Id = Guid.NewGuid();
             UserId = userId;

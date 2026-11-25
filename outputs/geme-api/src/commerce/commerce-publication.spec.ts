@@ -27,7 +27,7 @@ function publicationFixture(overrides: Record<string, unknown> = {}) {
       beadSize: "54",
       price: 2_000_000,
       stock: 5,
-      imageUrls: [],
+      imageUrls: ["https://cdn.example.test/quality-2a.webp"],
       videoUrl: null,
       orderItems: [{ id: "order-item-1" }],
     }],
@@ -87,7 +87,7 @@ test("publishing a complete bangle succeeds, while invalid legacy variants repor
 
   const incomplete = publicationFixture({
     status: "HIDDEN",
-    variants: [{ id: "legacy-variant", sku: "NSBAMQ01OLD", shape: null, quality: "Standard", beadSize: null, price: 2_000_000, stock: 5 }],
+    variants: [{ id: "legacy-variant", sku: "NSBAMQ01OLD", shape: null, quality: "Standard", beadSize: null, price: 2_000_000, stock: 5, imageUrls: ["https://cdn.example.test/legacy-quality.webp"] }],
   });
   await assert.rejects(
     () => incomplete.service.updateProductPublication("product-1", "ACTIVE", { id: "admin-1" }, "Kiểm tra dữ liệu cũ"),
@@ -95,7 +95,7 @@ test("publishing a complete bangle succeeds, while invalid legacy variants repor
   );
   assert.deepEqual(incomplete.updatePayloads, []);
 
-  const missingPrice = publicationFixture({ status: "HIDDEN", variants: [{ id: "variant-no-price", sku: "NSBAMQ01R02S54", shape: "ROUND", quality: "2A", beadSize: "54", price: 0, stock: 5 }] });
+  const missingPrice = publicationFixture({ status: "HIDDEN", variants: [{ id: "variant-no-price", sku: "NSBAMQ01R02S54", shape: "ROUND", quality: "2A", beadSize: "54", price: 0, stock: 5, imageUrls: ["https://cdn.example.test/quality-2a.webp"] }] });
   await assert.rejects(
     () => missingPrice.service.updateProductPublication("product-1", "ACTIVE", { id: "admin-1" }, "Kiểm tra giá bán"),
     (error: unknown) => error instanceof BadRequestException && /NSBAMQ01R02S54/.test(error.message) && /giá bán/.test(error.message),

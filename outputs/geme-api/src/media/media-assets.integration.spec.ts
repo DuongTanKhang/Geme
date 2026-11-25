@@ -61,7 +61,7 @@ after(async () => {
   await db.$disconnect();
 });
 
-async function saveAsset(sourceKey = sourcePrefix + randomUUID(), bytes = new Uint8Array([1, 2, 3, 4])) {
+async function saveAsset(sourceKey = sourcePrefix + randomUUID(), bytes = Buffer.from(randomUUID())) {
   const asset = await media.save({ filename: "ci.webp", sourceKey, mimeType: "image/webp", bytes });
   assetIds.push(asset.id);
   return asset;
@@ -78,8 +78,9 @@ test("R2 cleanup protects shared objects, Social and legacy product URLs, retrie
   if (!prisma) throw new Error("Dedicated PostgreSQL test database is not connected.");
 
   await t.test("two MediaAsset rows with identical bytes share object ownership", async () => {
-    const first = await saveAsset();
-    const second = await saveAsset();
+    const sharedBytes = new Uint8Array([1, 2, 3, 4]);
+    const first = await saveAsset(undefined, sharedBytes);
+    const second = await saveAsset(undefined, sharedBytes);
     assert.equal(first.objectKey, second.objectKey);
     assert.equal(storage.objects.has(first.objectKey!), true);
     assert.equal(await media.removeUnreferencedAsset(first.id), true);
@@ -136,7 +137,8 @@ test("R2 cleanup protects shared objects, Social and legacy product URLs, retrie
   });
 
   await t.test("save and final cleanup serialize by object key so a new owner never points to a deleted object", async () => {
-    const oldAsset = await saveAsset();
+    const sharedBytes = new Uint8Array([1, 2, 3, 4]);
+    const oldAsset = await saveAsset(undefined, sharedBytes);
     let enteredDelete!: () => void;
     const deleteEntered = new Promise<void>((resolve) => { enteredDelete = resolve; });
     let releaseDelete!: () => void;

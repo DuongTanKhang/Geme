@@ -1,30 +1,38 @@
 import pg from "pg";
 import { randomUUID } from "node:crypto";
+import { hash } from "bcryptjs";
 
 const { Client } = pg;
 
 // This is intentionally a narrow data allowlist. Never add customer, order,
 // payment, return, reservation, review, favorite, or loyalty tables here.
 const TABLES = [
+  { name: "admin_users" },
+  { name: "admin_permission_grants" },
   { name: "jewelry_stone_groups" },
   { name: "sphere_stone_groups" },
   { name: "categories", orderBy: "level ASC, id ASC" },
   { name: "material_options" },
   { name: "sphere_stone_types" },
-  // Carry only customer-facing policy copy. Do not migrate the rest of the
-  // general site settings, which may contain environment-specific values.
-  { name: "site_settings", where: "key = 'customerPolicies'", orderBy: "key ASC" },
+  // Copy only reviewed, portable site/product content. Runtime secrets and
+  // environment-specific configuration belong in the host's protected .env.
+  { name: "site_settings", where: "key IN ('customerPolicies', 'inventory.skuRules', 'inventory.materialCategoryApplicability', 'banners', 'footerContent', 'catalogEditorialPromos', 'newArrivalsMedia', 'shopMenuEditorial', 'blogCategories', 'bankQr', 'address', 'addressNote', 'phone', 'supportEmail', 'openingHours', 'socialLinks')", orderBy: "key ASC" },
   { name: "products" },
   { name: "product_images" },
   { name: "product_price_variants" },
   { name: "inventory_receipts" },
-  { name: "media_assets", where: "id IN (SELECT DISTINCT media_asset_id FROM public.product_media_assets)" },
+  // Media assets back product, blog, banner/footer, and Admin media-library
+  // content. The referenced R2 objects are verified/copied separately.
+  { name: "media_assets", where: "id IN (SELECT DISTINCT media_asset_id FROM public.product_media_assets) OR source_key LIKE 'assets/%' OR source_key LIKE 'blog/%'" },
   { name: "product_sphere_items" },
   { name: "product_media_assets" },
   { name: "inventory_movements", where: "reference IS NULL OR reference NOT IN (SELECT code FROM public.orders)" },
   { name: "inventory_receipt_items" },
   { name: "inventory_issues" },
   { name: "inventory_issue_items" },
+  { name: "blog_posts" },
+  { name: "blog_post_images" },
+  { name: "admin_calendar_events" },
 ];
 const EMPTY_TARGET_TABLES = [
   "customers", "product_reviews", "customer_favorites", "orders", "order_items", "payments", "payment_refunds",
@@ -35,6 +43,8 @@ const EMPTY_TARGET_TABLES = [
 
 const sourceUrl = process.env.PRODUCT_MIGRATION_SOURCE_DATABASE_URL;
 const targetUrl = process.env.PRODUCT_MIGRATION_TARGET_DATABASE_URL;
+const resetAdminEmail = process.env.PRODUCT_MIGRATION_ADMIN_EMAIL;
+const resetAdminPassword = process.env.PRODUCT_MIGRATION_ADMIN_PASSWORD;
 const apply = process.argv.includes("--apply");
 const pageSize = 100;
 
@@ -44,6 +54,9 @@ if (!sourceUrl || !targetUrl) {
 if (sourceUrl === targetUrl) throw new Error("Source and target database URLs must be different.");
 if (apply && process.env.CONFIRM_PRODUCT_ONLY_IMPORT !== "YES") {
   throw new Error("Import blocked. Set CONFIRM_PRODUCT_ONLY_IMPORT=YES and pass --apply after verifying a production backup.");
+}
+if (apply && (!resetAdminEmail || !resetAdminPassword || resetAdminPassword.length < 12 || resetAdminPassword.length > 256)) {
+  throw new Error("Import blocked. Set PRODUCT_MIGRATION_ADMIN_EMAIL and PRODUCT_MIGRATION_ADMIN_PASSWORD (12–256 characters) to reset one imported Admin account; values are never printed.");
 }
 
 const quote = (identifier) => `"${identifier.replaceAll('"', '""')}"`;
@@ -198,6 +211,12 @@ try {
   }
 
   const activeReservations = await readActiveReservations();
+  const adminResetTargetCount = resetAdminEmail
+    ? Number((await source.query("SELECT count(*)::bigint AS count FROM public.admin_users WHERE lower(email) = lower($1)", [resetAdminEmail])).rows[0].count)
+    : 0;
+  if (apply && adminResetTargetCount !== 1) {
+    throw new Error("Import blocked. The selected Admin email must match exactly one source admin_users record.");
+  }
   const orphanReservedItems = await tableCount(
     source,
     "product_sphere_items",
@@ -205,7 +224,7 @@ try {
   );
   if (orphanReservedItems) throw new Error(`Found ${orphanReservedItems} RESERVED sphere items without an ACTIVE reservation; reconcile these in test before cutover.`);
 
-  console.log(JSON.stringify({ mode: apply ? "IMPORT" : "PLAN ONLY", tables: plan, activeReservationsNotCopied: activeReservations.length, orphanReservedSphereItems: orphanReservedItems, customerOrderTablesIncluded: false }, null, 2));
+  console.log(JSON.stringify({ mode: apply ? "IMPORT" : "PLAN ONLY", tables: plan, activeReservationsNotCopied: activeReservations.length, orphanReservedSphereItems: orphanReservedItems, adminPasswordResetTargetCount, customerOrderTablesIncluded: false }, null, 2));
   if (!apply) {
     console.log("No rows changed. Add --apply only after checking the counts, R2 accessibility, and verified production backups.");
   } else {
@@ -239,6 +258,14 @@ try {
       }
     }
     for (const reservation of activeReservations) await restoreActiveReservation(target, reservation);
+    const adminPasswordHash = await hash(resetAdminPassword, 12);
+    const resetAdmin = await target.query(
+      `UPDATE public.admin_users SET password_hash = $1, auth_version = auth_version + 1,
+       failed_login_attempts = 0, locked_until = NULL, updated_at = now()
+       WHERE lower(email) = lower($2)`,
+      [adminPasswordHash, resetAdminEmail],
+    );
+    if (resetAdmin.rowCount !== 1) throw new Error("Admin password reset did not update exactly one imported account; transaction rolled back.");
     await assertStockConsistency(target);
     await target.query("COMMIT");
 

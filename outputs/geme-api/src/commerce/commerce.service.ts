@@ -1040,8 +1040,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
           }) : current.variants.map((variant) => ({ ...variant, ...(updatesById.get(variant.id) || {}) }));
           if (current.status === "ACTIVE" && changedBangleMediaKeys.size) {
             const touchedQualities = new Set(current.variants.filter((variant) => changedBangleMediaKeys.has(variant.id)).map((variant) => normalizeBangleQuality(variant.quality)));
-            const fallbackImageUrls = gallery === undefined ? current.images.map((image) => image.url) : gallery;
-            assertBangleQualityImages(current.sku, synchronized, touchedQualities, fallbackImageUrls);
+            assertBangleQualityImages(current.sku, synchronized, touchedQualities);
           }
           const synchronizedUpdates = new Map(variantUpdates.map((row) => [row.id, { ...row.data }]));
           for (const variant of synchronized) {
@@ -1153,7 +1152,7 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
             if (!current.variants.length) throw new BadRequestException(`Kiềng SKU ${current.sku} chưa có biến thể. Tạo biến thể trong Quản lý tồn kho trước khi đăng bán.`);
             const invalidVariants = current.variants.map((variant) => bangleVariantIssue(current.sku, variant)).filter(Boolean);
             if (invalidVariants.length) throw new BadRequestException(`Không thể đăng bán Kiềng: ${invalidVariants.join(" ")}`);
-            assertBangleQualityImages(current.sku, current.variants, undefined, current.images.map((image) => image.url));
+            assertBangleQualityImages(current.sku, current.variants);
           }
           if (isWeightBasedProduct(current)) {
             const issue = weightedProductPublicationIssue(current);
@@ -1431,12 +1430,9 @@ export class CommerceService implements OnModuleInit, OnModuleDestroy {
       };
     }));
     if (isBangleProduct) {
-      const fallbackImageUrls = Object.hasOwn(input, "gallery") || Object.hasOwn(input, "image")
-        ? images
-        : existingProduct?.images.map((image) => image.url) || [];
-      if (publishingBangle) assertBangleQualityImages(data.sku, variantCreate, undefined, fallbackImageUrls);
+      if (publishingBangle) assertBangleQualityImages(data.sku, variantCreate);
       else if (existingProduct?.status === "ACTIVE" && touchedBangleQualities.size) {
-        assertBangleQualityImages(data.sku, variantCreate, touchedBangleQualities, fallbackImageUrls);
+        assertBangleQualityImages(data.sku, variantCreate, touchedBangleQualities);
       }
     }
     if (data.kind === "GEMSTONE") {

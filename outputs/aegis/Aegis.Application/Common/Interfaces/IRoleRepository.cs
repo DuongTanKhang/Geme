@@ -7,7 +7,7 @@ namespace Aegis.Application.Common.Interfaces
     {
         Task AddAsync(Role role);
         Task<IReadOnlyList<Role>> GetAllAsync();
-        Task <Role?> GetByNameAsync(string name);
+        Task<Role?> GetByNameAsync(string name);
         Task DeleteAsync(Role role);
         Task UpdateAsync(Role role);
         Task<Role?> GetByIdAsync(Guid id);

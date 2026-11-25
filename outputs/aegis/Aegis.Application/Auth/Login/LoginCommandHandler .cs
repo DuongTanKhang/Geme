@@ -13,7 +13,7 @@ namespace Aegis.Application.Auth.Login
 
         public LoginCommandHandler(LoginHandle loginHandle)
         {
-             _handle = loginHandle;
+            _handle = loginHandle;
         }
         public async Task<LoginResult> Handle(LoginCommand request, CancellationToken cancellationToken)
         {

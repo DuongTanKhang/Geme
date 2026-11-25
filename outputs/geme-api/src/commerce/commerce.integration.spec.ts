@@ -9,6 +9,7 @@ import type { AdminIdentity } from "../admin-auth/admin-auth.service.js";
 import { CommerceController } from "./commerce.controller.js";
 import { CommerceService } from "./commerce.service.js";
 import { OperationsService } from "../operations/operations.service.js";
+import { LoyaltyService } from "../loyalty/loyalty.service.js";
 import { ContactService } from "../contact/contact.service.js";
 
 function isDedicatedLocalTestDatabase(value: string | undefined) {
@@ -125,7 +126,7 @@ async function createOrder(options: {
 
 test("PostgreSQL services protect COD, refunds, inventory races, permissions, reports and contact idempotency", { skip: !enabled }, async (t) => {
   if (!prisma) throw new Error("PostgreSQL test service did not initialize.");
-  const operations = new OperationsService(prisma);
+  const operations = new OperationsService(prisma, new LoyaltyService(prisma));
   const financeActor = await createAdmin();
 
   await t.test("unpaid QR orders wait for payment and POS confirmation moves them to admin review", { skip: !shouldRunIntegrationCase("qr-payment") }, async () => {
@@ -141,7 +142,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
       isSyncEnabled: () => false,
       verifyOrderPayment: async (_code: string, expectedAmount: number) => ({ receivedAmount: expectedAmount, remoteOrderId: "CI-POS-QR-1" }),
     };
-    const commerce = new CommerceService(prisma!, pos365 as any, {} as any);
+    const commerce = new CommerceService(prisma!, pos365 as any, {} as any, new LoyaltyService(prisma!));
     const unpaid = await commerce.createOrder({
       customerName: "QR payment fixture", phone, shippingAddress: "PostgreSQL integration fixture",
       paymentMethod: "BANK_TRANSFER", expectedTotalAmount: 1_000, items: [{ productId, quantity: 1 }],
@@ -193,7 +194,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
   });
 
   await t.test("manual inventory movements atomically add and subtract stock and require a variant when variants exist", { skip: !shouldRunIntegrationCase("inventory") }, async () => {
-    const commerce = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any);
+    const commerce = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any, new LoyaltyService(prisma!));
     const productId = randomUUID();
     const sku = `CI${productId.replaceAll("-", "").slice(0, 12)}`;
     await prisma!.product.create({ data: {
@@ -318,7 +319,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
       kind: "JEWELRY", status: "ACTIVE", price: 10_000, stock: 1,
     } });
     productIds.push(product.id);
-    const commerce = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any);
+    const commerce = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any, new LoyaltyService(prisma!));
     const makeCheckout = () => commerce.createOrder({
       customerName: "Race Customer", phone: `09${String(Date.now() + Math.random()).replace(/\D/g, "").slice(-8)}`,
       shippingAddress: "CI local only", paymentMethod: "BANK_TRANSFER", expectedTotalAmount: 10_000,
@@ -358,7 +359,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
   });
 
   await t.test("payment and cancellation behavior is deterministic in both orders and payment replay is idempotent", { skip: !shouldRunIntegrationCase("payment-cancel") }, async () => {
-    const commerce = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any);
+    const commerce = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any, new LoyaltyService(prisma!));
     const makeReservedOrder = async (label: string) => {
       const productId = randomUUID();
       await prisma!.product.create({ data: { id: productId, sku: `CI-${productId.slice(0, 10)}`, name: label, slug: `ci-${label.toLocaleLowerCase().replaceAll(" ", "-")}-${productId}`, kind: "JEWELRY", status: "ACTIVE", price: 10_000, stock: 1 } });
@@ -453,7 +454,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
       isSyncEnabled: () => false,
       queueProductImageSync: async () => undefined,
       syncProductPricesNow: async () => undefined,
-    } as any, {} as any);
+    } as any, {} as any, new LoyaltyService(prisma!));
 
     const saved = await commerce.saveProduct({
       sku, name: "Kiềng Aquamarine đã sửa", kind: "JEWELRY", categoryId: category.id, status: "HIDDEN",
@@ -538,7 +539,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
   await t.test("report separates pending orders, collections, refunds, returned goods and unverified COD", { skip: !shouldRunIntegrationCase("report") }, async () => {
     const reportAt = new Date(Date.UTC(2250, 5, 15, 12));
     const day = reportAt.toISOString().slice(0, 10);
-    const reporting = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any);
+    const reporting = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any, new LoyaltyService(prisma!));
     const before = await reporting.report({ from: day, to: day });
     await createOrder({ status: "PENDING_CONFIRMATION", total: 1_000, placedAt: reportAt, payment: [{ method: "BANK_TRANSFER", amount: 1_000, status: "PENDING" }] });
     await createOrder({ status: "PROCESSING", total: 10_000, placedAt: reportAt, payment: [{ method: "BANK_TRANSFER", amount: 10_000, status: "PAID", paidAt: reportAt }] });
@@ -568,7 +569,7 @@ test("PostgreSQL services protect COD, refunds, inventory races, permissions, re
     const reportAt = new Date(Date.UTC(2250, 6, 15, 12));
     const day = reportAt.toISOString().slice(0, 10);
     const beforePeriod = new Date(Date.UTC(2250, 6, 1, 12));
-    const reporting = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any);
+    const reporting = new CommerceService(prisma!, { isSyncEnabled: () => false } as any, {} as any, new LoyaltyService(prisma!));
 
     // Registered member who previously bought in person. Different phone formats must resolve to one buyer.
     const memberId = randomUUID();

@@ -134,7 +134,7 @@ test("New Arrivals catalog filters, resolves one canonical group, sorts, and pag
   const published = await service.list({ mode: "published" });
   assert.equal(published.totalProducts, 42, "legacy published mode cannot include products without a current New tag");
   const publishedProduct = published.groups.flatMap((item) => item.products).find((item: any) => String(item.name).startsWith("Recent published"));
-  assert.equal(publishedProduct?.newLabelActive, false, "recent publication does not invent the New badge");
+  assert.equal(publishedProduct, undefined, "recent publication without a current New tag is excluded");
 
   const firstPage = await service.groupProducts(emerald.slug, { mode: "all", sort: "price_asc", page: 1 });
   const secondPage = await service.groupProducts(emerald.slug, { mode: "all", sort: "price_asc", page: 2 });

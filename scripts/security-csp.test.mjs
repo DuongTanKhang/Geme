@@ -25,7 +25,7 @@ for (const [name, policy] of [['storefront', storefront], ['admin', admin]]) {
     assert.ok(csp.includes("style-src 'self' 'unsafe-inline'"));
     assert.ok(csp.includes('https://www.google.com'));
     const connections = csp.split('; ').find(s => s.startsWith('connect-src'));
-    assert.equal(connections, "connect-src 'self' blob: https://media.example.test");
+    assert.equal(connections, "connect-src 'self' blob: https://media.example.test https://maps.vietmap.vn");
     assert.ok(!connections.includes('http:'));
   });
   test(`${name}: policy configuration rejects untrusted schemes, embedded credentials and malformed nonces`, () => {
